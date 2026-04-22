@@ -24,7 +24,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from etfpulse.config import settings
+from etfpulse.config import normalize_database_url, settings
 from etfpulse.models import Base
 
 # Alembic Config object — gives us access to alembic.ini values + CLI args.
@@ -39,26 +39,17 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def _normalize_url(url: str) -> str:
-    """Coerce common URL shapes into `postgresql+asyncpg://`.
-
-    Handles:
-    - `postgres://...` (Heroku/Coolify style) → `postgresql+asyncpg://...`
-    - `postgresql://...` (no driver) → `postgresql+asyncpg://...`
-    - `postgresql+asyncpg://...` → passthrough
-    - Anything else → passthrough (caller's problem if SQLAlchemy can't load it)
-    """
-    if url.startswith("postgres://"):
-        return "postgresql+asyncpg://" + url[len("postgres://") :]
-    if url.startswith("postgresql://"):
-        return "postgresql+asyncpg://" + url[len("postgresql://") :]
-    return url
-
-
 def _get_url() -> str:
-    """Resolve the DB URL. Override via `-x db=...` for ad-hoc target DBs."""
+    """Resolve the DB URL. Override via `-x db=...` for ad-hoc target DBs.
+
+    `settings.database_url` is already normalised by config.py's validator;
+    CLI overrides skip that path so we normalise them here via the shared
+    helper.
+    """
     cli_override = context.get_x_argument(as_dictionary=True).get("db")
-    return _normalize_url(cli_override or settings.database_url)
+    if cli_override:
+        return normalize_database_url(cli_override)
+    return settings.database_url
 
 
 def run_migrations_offline() -> None:

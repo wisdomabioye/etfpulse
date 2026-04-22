@@ -1,4 +1,23 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_database_url(url: str) -> str:
+    """Coerce common Postgres URL shapes into `postgresql+asyncpg://`.
+
+    Coolify, Heroku, and other managed platforms inject `DATABASE_URL` with a
+    `postgres://` prefix (the historical Heroku alias) or a plain `postgresql://`
+    with no driver. SQLAlchemy 1.4+ rejects `postgres://` outright and can't
+    use the async `asyncpg` driver without the explicit `+asyncpg` suffix.
+    This normaliser is the single source of truth — config.py applies it to
+    database URLs at load time, and Alembic's env.py reuses it for the `-x db=`
+    CLI override path.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://") :]
+    return url
 
 
 class Settings(BaseSettings):
@@ -23,6 +42,11 @@ class Settings(BaseSettings):
     # on a dev machine: `etfpulse` for the app, `etfpulse_test` for pytest.
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/etfpulse"
     database_url_test: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/etfpulse_test"
+
+    @field_validator("database_url", "database_url_test", mode="before")
+    @classmethod
+    def _normalize_db_urls(cls, v: str) -> str:
+        return normalize_database_url(v)
 
     # SoSoValue
     sosovalue_api_key: str = ""
