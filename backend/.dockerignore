@@ -1,0 +1,45 @@
+# Keep the build context small AND prevent host-side artifacts from
+# contaminating the container image. Anything not listed here gets
+# COPY-ed by `COPY . .` in the Dockerfile.
+
+# Virtualenvs + build artifacts — the container builds its own .venv
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Tool caches (dev-only, large, no runtime value)
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Tests — prod image has no pytest installed anyway, so they'd fail to
+# run even if kept. Drop to shrink image.
+tests/
+
+# Version control
+.git/
+.gitignore
+.dockerignore
+
+# Local env files — Coolify injects real env vars at runtime
+.env
+.env.local
+.env.*.local
+
+# IDE / OS artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docs inside backend/ are dev-only
+*.md
