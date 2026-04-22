@@ -30,12 +30,22 @@ router = APIRouter(tags=["health"])
 _DB_PING_TIMEOUT_SECONDS = 2.0
 
 
-@router.get("/health")
+@router.api_route(
+    "/health",
+    methods=["GET", "HEAD"],
+    include_in_schema=False,  # infrastructure probe, not part of product API
+)
 async def liveness() -> dict[str, str]:
+    """Accepts HEAD too — some orchestrators (Coolify with certain probes,
+    kube-proxy health checks) use HEAD to avoid a response body."""
     return {"status": "ok"}
 
 
-@router.get("/health/ready")
+@router.api_route(
+    "/health/ready",
+    methods=["GET", "HEAD"],
+    include_in_schema=False,
+)
 async def readiness(
     response: Response,
     engine: AsyncEngine = Depends(get_db_engine),
