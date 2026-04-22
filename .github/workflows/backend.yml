@@ -2,9 +2,13 @@ name: Backend CI
 
 on:
   push:
-    paths: ["backend/**"]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
   pull_request:
-    paths: ["backend/**"]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
 
 jobs:
   check:
@@ -12,6 +16,7 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -23,18 +28,41 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
+      # Both URLs point at the same DB on CI — only one Postgres is provisioned.
+      # `DATABASE_URL` is what `etfpulse.db.engine` binds to at import time;
+      # `DATABASE_URL_TEST` is what the conftest swaps to during the test session.
+      # Pointing both at the test DB avoids any test code path needing a separate
+      # dev DB that doesn't exist on the runner.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/etfpulse_test
       DATABASE_URL_TEST: postgresql+asyncpg://postgres:postgres@localhost:5432/etfpulse_test
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-      - run: uv sync --dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run mypy etfpulse/
-      - run: uv run pytest
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # `--extra dev` includes our `[project.optional-dependencies].dev` group.
+      # `--dev` would only match `[dependency-groups].dev` which we don't use.
+      - name: Install deps
+        run: uv sync --extra dev --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy etfpulse/
+
+      - name: Test
+        run: uv run pytest
