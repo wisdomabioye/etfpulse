@@ -1,0 +1,99 @@
+[project]
+name = "etfpulse"
+version = "0.1.0"
+description = "ETF flow signal intelligence — SoSoValue Buildathon"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "httpx>=0.28.0",
+    "python-telegram-bot>=21.9",
+    "apscheduler>=3.10.0",
+    "structlog>=24.4.0",
+    "cachetools>=5.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-httpx>=0.34.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "poethepoet>=0.32.0",
+    "types-cachetools>=5.5.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic autogen produces long string literals (CHECK SQL, op.drop_index with
+# postgresql_where) that ruff format can't safely split. Ignore line-length in
+# generated migrations only — keep all other lints (imports, naming, etc.).
+"migrations/versions/*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+# ---------------------------------------------------------------------------
+# Task shortcuts — run with `uv run poe <task>` (see `uv run poe` for list).
+# Extra CLI args pass through: e.g. `uv run poe test -v tests/test_foo.py`.
+# ---------------------------------------------------------------------------
+[tool.poe.tasks.dev]
+cmd = "uvicorn etfpulse.app:app --host 0.0.0.0 --port 8000 --reload"
+help = "Run FastAPI dev server with hot reload"
+
+[tool.poe.tasks.lint]
+cmd = "ruff check ."
+help = "Lint with ruff"
+
+[tool.poe.tasks.format]
+cmd = "ruff format --check ."
+help = "Check formatting (CI mode — read-only)"
+
+[tool.poe.tasks.format-fix]
+cmd = "ruff format ."
+help = "Apply ruff formatting"
+
+[tool.poe.tasks.typecheck]
+cmd = "mypy etfpulse/"
+help = "Run mypy"
+
+[tool.poe.tasks.test]
+cmd = "pytest"
+help = "Run pytest"
+
+[tool.poe.tasks.migrate]
+cmd = "alembic upgrade head"
+help = "Apply pending Alembic migrations"
+
+[tool.poe.tasks.revision]
+shell = """alembic revision --autogenerate -m "$message" \
+    && ruff format --quiet migrations/ \
+    && ruff check --fix --quiet migrations/"""
+help = "Autogenerate + format + auto-fix a migration (usage: uv run poe revision 'message')"
+args = [{ name = "message", positional = true, required = true }]
+
+[tool.poe.tasks.check]
+help = "Run the full CI check suite — lint, format, typecheck, test"
+sequence = ["lint", "format", "typecheck", "test"]
+default_item_type = "ref"

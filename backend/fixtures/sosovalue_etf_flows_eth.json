@@ -1,0 +1,42 @@
+{
+    "code": 0,
+    "message": "success",
+    "data": [
+        {
+            "date": "2026-04-17",
+            "total_net_inflow": 127485084.77,
+            "total_value_traded": 1080543793.8,
+            "total_net_assets": 14262948835.636,
+            "cum_net_inflow": 11943573505.011
+        },
+        {
+            "date": "2026-04-17",
+            "total_net_inflow": 275826178.84,
+            "total_value_traded": 4526318002.32,
+            "total_net_assets": 14262948835.636,
+            "cum_net_inflow": 11943573505.011
+        },
+        {
+            "date": "2026-04-17",
+            "total_net_inflow": 384625335.27,
+            "total_value_traded": 11184454394.92,
+            "total_net_assets": 14262948835.636,
+            "cum_net_inflow": 11943573505.011
+        },
+        {
+            "date": "2026-04-16",
+            "total_net_inflow": 18020861.07,
+            "total_value_traded": 701504332.32,
+            "total_net_assets": 13694908054.275,
+            "cum_net_inflow": 11816088420.241
+        },
+        {
+            "date": "2026-04-15",
+            "total_net_inflow": 67847011.22,
+            "total_value_traded": 705808911.0,
+            "total_net_assets": 13793731208.68,
+            "cum_net_inflow": 11798067559.171
+        }
+    ],
+    "details": null
+}

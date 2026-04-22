@@ -1,0 +1,35 @@
+{
+    "code": 0,
+    "message": "success",
+    "data": [
+        {
+            "date": "2026-04-20",
+            "events": [
+                "Retail Sales (MoM)"
+            ]
+        },
+        {
+            "date": "2026-04-22",
+            "events": [
+                "S&P Global Services PMI",
+                "S&P Global US Manufacturing PMI"
+            ]
+        },
+        {
+            "date": "2026-04-29",
+            "events": [
+                "GDP (QoQ) ",
+                "Core PCE Price Index (YoY) ",
+                "Core PCE Price Index (MoM)"
+            ]
+        },
+        {
+            "date": "2026-04-30",
+            "events": [
+                "S&P Global US Manufacturing PMI",
+                "ISM Manufacturing PMI"
+            ]
+        }
+    ],
+    "details": null
+}

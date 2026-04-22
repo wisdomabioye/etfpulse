@@ -1,0 +1,132 @@
+{
+    "code": 0,
+    "message": "success",
+    "data": {
+        "page": 1,
+        "page_size": 3,
+        "total": "661",
+        "list": [
+            {
+                "id": "2046243439358468096",
+                "source_link": "https://sosovalue.com/research/2046243439358468096?from=888001",
+                "original_link": "https://twitter.com/solana_daily/status/2046242283331428816",
+                "release_time": "1776697152000",
+                "title": null,
+                "content": "\u26a1\ufe0fSolana has added an extra 1.5M daily active users in each of the past 3 months <br><img src=\"https://static.sosovalue.com/2026/04/20/45d0b27b-c4ca-46b1-8988-49b4f4164457.jpg\"/>",
+                "author": "solana_daily",
+                "author_description": null,
+                "author_avatar_url": "https://static.sosovalue.com/2026/04/20/f9abfa4a-759f-4f7e-8e1f-c89af4861270.jpg",
+                "impression_count": "80",
+                "like_count": "0",
+                "reply_count": "0",
+                "retweet_count": "0",
+                "category": 3,
+                "feature_image": null,
+                "nick_name": "Solana Daily",
+                "is_blue_verified": true,
+                "verified_type": "",
+                "matched_currencies": [
+                    {
+                        "currency_id": "1871600836616355842",
+                        "symbol": "MAG7.SSI",
+                        "name": "MAG7.SSI"
+                    },
+                    {
+                        "currency_id": "1673723677362319875",
+                        "symbol": "SOL",
+                        "name": "SOLANA"
+                    }
+                ],
+                "tags": [
+                    "Solana"
+                ],
+                "media_info": [
+                    {
+                        "soso_url": "https://static.sosovalue.com/2026/04/20/0cc73e26-1a08-439b-a891-dd10c8e55e9a.jpg",
+                        "original_url": "https://pbs.twimg.com/media/HGW1mQDb0AEMzob.jpg",
+                        "short_url": "https://t.co/jA4uTNuPt1",
+                        "type": "photo"
+                    }
+                ],
+                "quote_info": {
+                    "content": "\u26a1\ufe0fSolana stablecoin volume is exploding\nCo-Founder @rajgokal said last year\u2019s volume reached $1T, while last month alone was nearly $1T.\nThat\u2019s ~12x YoY growth, highlighting Solana\u2019s accelerating role in payments.",
+                    "impression_count": "1096",
+                    "like_count": "30",
+                    "reply_count": "1096",
+                    "retweet_count": "3",
+                    "created_at": "1776692915000",
+                    "media_info": null,
+                    "original_url": "https://twitter.com/solana_daily/status/2046224512941994118",
+                    "author_avatar_url": "https://static.sosovalue.com/2026/04/20/894b29b8-dfb6-49c5-b1bc-77a62f986963.jpg",
+                    "author": "solana_daily",
+                    "nick_name": "Solana Daily",
+                    "is_blue_verified": true,
+                    "verified_type": ""
+                }
+            },
+            {
+                "id": "2046250314150514688",
+                "source_link": "https://sosovalue.com/research/2046250314150514688?from=888001",
+                "original_link": "https://twitter.com/SECGov/status/2046241049329426768",
+                "release_time": "1776696858000",
+                "title": null,
+                "content": "TODAY \ud83d\udea8: SEC and CFTC Jointly Propose Amendments to Reduce Private Fund Reporting Burdens<br><br>Read more: <br><img src=\"https://static.sosovalue.com/2026/04/20/511cc1f8-aa40-4cf9-a4d1-98a36107fdc5.jpg\"/>",
+                "author": "SECGov",
+                "author_description": "U.S. Securities and Exchange Commission",
+                "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/04/28/cbc4e01c-bff6-4cb5-b0cf-33988e9c0e8b.jpg",
+                "impression_count": "14670",
+                "like_count": "86",
+                "reply_count": "20",
+                "retweet_count": "33",
+                "category": 3,
+                "feature_image": null,
+                "nick_name": "U.S. Securities and Exchange Commission",
+                "is_blue_verified": false,
+                "verified_type": "Government",
+                "matched_currencies": null,
+                "tags": [
+                    "SEC",
+                    "CFTC"
+                ],
+                "media_info": [
+                    {
+                        "soso_url": "https://static.sosovalue.com/2026/04/20/511cc1f8-aa40-4cf9-a4d1-98a36107fdc5.jpg",
+                        "original_url": "https://pbs.twimg.com/media/HGW1S_kaEAAXhfc.jpg",
+                        "short_url": "https://t.co/s9PfEsr2TR",
+                        "type": "photo"
+                    }
+                ],
+                "quote_info": null
+            },
+            {
+                "id": "2046250317703090176",
+                "source_link": "https://sosovalue.com/research/2046250317703090176?from=888001",
+                "original_link": "https://twitter.com/mayan/status/2046240576555880619",
+                "release_time": "1776696745000",
+                "title": null,
+                "content": "Mayan is not affected by the rsETH/Aave/LayerZero incident. All routes are fully operational.\n\nCross-chain transfers on Mayan are powered by Wormhole message-passing, secured by 19 independent Guardians with a 13-of-19 supermajority requirement on every message.",
+                "author": "mayan",
+                "author_description": null,
+                "author_avatar_url": "https://static.sosovalue.com/2026/04/20/098d2188-1dba-4ce7-ad9d-0b2d27732a98.png",
+                "impression_count": "136",
+                "like_count": "5",
+                "reply_count": "2",
+                "retweet_count": "2",
+                "category": 3,
+                "feature_image": null,
+                "nick_name": "Mayan | 2.0 Now Live",
+                "is_blue_verified": false,
+                "verified_type": "Business",
+                "matched_currencies": null,
+                "tags": [
+                    "Mayan",
+                    "Wormhole",
+                    "Guardians"
+                ],
+                "media_info": null,
+                "quote_info": null
+            }
+        ]
+    },
+    "details": null
+}

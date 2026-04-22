@@ -1,0 +1,64 @@
+from datetime import datetime
+from decimal import Decimal
+from enum import StrEnum
+
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+from etfpulse.models.base import Base
+from etfpulse.models.order import Venue  # shared enum — positions and orders use the same venue
+
+
+class PositionStatus(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+    CANCELLED = "cancelled"
+
+
+class PositionSide(StrEnum):
+    LONG = "long"
+    SHORT = "short"
+
+
+__all__ = ["Position", "PositionStatus", "PositionSide", "Venue"]
+
+
+class Position(Base):
+    __tablename__ = "positions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    signal_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("signals.id"), nullable=True
+    )
+    order_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("orders.id"), nullable=True)
+    venue: Mapped[str] = mapped_column(String(20), nullable=False)
+    asset: Mapped[str] = mapped_column(String(10), nullable=False)
+    side: Mapped[str] = mapped_column(String(10), nullable=False)
+    size: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default=PositionStatus.OPEN, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    close_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_positions_user", "user_id"),
+        Index("ix_positions_status", "status"),
+        Index("ix_positions_signal", "signal_id"),
+        Index("ix_positions_order", "order_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Position id={self.id} asset={self.asset} side={self.side} "
+            f"status={self.status} venue={self.venue}>"
+        )
