@@ -46,19 +46,23 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.config import settings
 from etfpulse.db import async_session
-from etfpulse.models import ETFFlow
+from etfpulse.models import ETFFlow, Signal, SignalStatus
+from etfpulse.pipeline.delivery import fan_out_signal, send_pending_deliveries
 from etfpulse.pipeline.signal_builder import run_daily_cycle
 
 log = structlog.get_logger()
 
 _DAILY_JOB_ID = "daily_cycle"
 _CATCHUP_JOB_ID = "catchup"
+_DELIVERY_SEND_JOB_ID = "delivery_send"
+_FAN_OUT_PENDING_JOB_ID = "fan_out_pending"
 _CATCHUP_DELAY_SECONDS = 1  # tiny delay so the scheduler picks it up cleanly
 
 
@@ -115,6 +119,100 @@ async def _run_cycle_with_session() -> dict[str, Any] | None:
             return None
 
 
+async def _fan_out_pending_with_session() -> dict[str, int] | None:
+    """Fan-out worker — materializes SignalDelivery rows for PENDING signals.
+
+    Decoupled from `build_signal` per Decision D2 — signal_builder stays
+    single-purpose (detect + AI + persist), and this separate scheduler job
+    turns persisted signals into per-recipient delivery rows. Runs every
+    `settings.delivery_worker_interval_seconds`.
+
+    Query pre-filters out expired signals at the SELECT so we don't log
+    thousands of "skip_expired" messages per tick. Per-signal SAVEPOINT
+    around `fan_out_signal` means one misbehaving row doesn't roll back
+    the whole batch (D13-style resilience).
+
+    Does NOT commit per signal — outer commit at end covers everything
+    that succeeded. Same transaction-boundary contract (D14/D18) as the
+    other wrappers.
+    """
+    summary = {"processed": 0, "fanned_out": 0, "failed": 0}
+    async with async_session() as session:
+        try:
+            stmt = select(Signal.id).where(
+                Signal.status == SignalStatus.PENDING.value,
+                or_(
+                    Signal.expires_at.is_(None),
+                    Signal.expires_at > datetime.now(UTC),
+                ),
+            )
+            signal_ids = list((await session.execute(stmt)).scalars().all())
+
+            for sid in signal_ids:
+                try:
+                    async with session.begin_nested():
+                        count = await fan_out_signal(session, sid)
+                    summary["processed"] += 1
+                    summary["fanned_out"] += count
+                except Exception as exc:
+                    # Per-signal rollback via savepoint; batch continues.
+                    log.warning(
+                        "fan_out_pending_signal_failed",
+                        signal_id=sid,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    summary["failed"] += 1
+
+            await session.commit()
+            if summary["processed"] > 0 or summary["failed"] > 0:
+                log.info("fan_out_pending_committed", **summary)
+            return summary
+        except Exception as exc:
+            await session.rollback()
+            log.error(
+                "fan_out_pending_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            return None
+
+
+async def _send_with_session() -> dict[str, int] | None:
+    """Delivery-send wrapper — drains PENDING SignalDelivery rows via Telegram.
+
+    Same transaction-boundary contract as `_run_cycle_with_session` (D14,
+    D18): `send_pending_deliveries` doesn't commit; this wrapper does. Also
+    mirrors the returns-None-on-rollback pattern so exceptions don't kill
+    the APScheduler job (which would then stop firing entirely).
+
+    Runs every `settings.delivery_worker_interval_seconds` (default 30s).
+    Per-delivery error handling (blocked user, chat-not-found, generic
+    TelegramError) is entirely inside `send_pending_deliveries` — this
+    wrapper only catches catastrophic failures (DB unreachable, bug in
+    the worker itself).
+    """
+    async with async_session() as session:
+        try:
+            summary = await send_pending_deliveries(session)
+            await session.commit()
+            # Most ticks have nothing to send (total=0). Don't spam info logs
+            # in that case; only log when at least one delivery was processed.
+            if summary.get("total", 0) > 0:
+                log.info("delivery_send_committed", **summary)
+            return summary
+        except Exception as exc:
+            await session.rollback()
+            log.error(
+                "delivery_send_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            return None
+
+
 @asynccontextmanager
 async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
     """StartupTask — wire APScheduler around `run_daily_cycle`.
@@ -155,6 +253,31 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
             max_instances=1,
         )
         log.info("scheduler_catchup_scheduled", delay_seconds=_CATCHUP_DELAY_SECONDS)
+
+    # Delivery pipeline — two jobs gated on `is_bot_enabled`:
+    #   `fan_out_pending`: turns PENDING Signals → SignalDelivery rows
+    #   `delivery_send`:   drains PENDING SignalDelivery rows via Telegram
+    # Both run every `delivery_worker_interval_seconds`. They're decoupled
+    # (Decision D2) so signal_builder stays single-purpose; end-to-end
+    # latency is 2× the interval in the worst case (fan-out tick + send tick).
+    if settings.is_bot_enabled:
+        scheduler.add_job(
+            _fan_out_pending_with_session,
+            trigger=IntervalTrigger(seconds=settings.delivery_worker_interval_seconds),
+            id=_FAN_OUT_PENDING_JOB_ID,
+            max_instances=1,
+        )
+        scheduler.add_job(
+            _send_with_session,
+            trigger=IntervalTrigger(seconds=settings.delivery_worker_interval_seconds),
+            id=_DELIVERY_SEND_JOB_ID,
+            max_instances=1,
+        )
+        log.info(
+            "scheduler_delivery_jobs_registered",
+            interval_seconds=settings.delivery_worker_interval_seconds,
+            jobs=[_FAN_OUT_PENDING_JOB_ID, _DELIVERY_SEND_JOB_ID],
+        )
 
     scheduler.start()
     app.state.scheduler = scheduler
