@@ -188,9 +188,18 @@ class TestCursor:
     def test_format_and_parse_round_trip(self):
         ts = datetime(2026, 4, 22, 4, 32, 15, tzinfo=UTC)
         encoded = format_cursor(ts, 42)
-        assert encoded == "2026-04-22T04:32:15+00:00|42"
+        # `Z` suffix (not `+00:00`) — URL-safe when round-tripping through
+        # a query string; `+` would decode back to a space.
+        assert encoded == "2026-04-22T04:32:15Z|42"
         parsed = parse_cursor(encoded)
         assert parsed == (ts, 42)
+
+    def test_cursor_is_url_safe(self):
+        """No raw `+` or space characters — both break query-string round-trips."""
+        ts = datetime(2026, 4, 22, 4, 32, 15, tzinfo=UTC)
+        encoded = format_cursor(ts, 42)
+        assert "+" not in encoded
+        assert " " not in encoded
 
     def test_malformed_cursor_returns_none(self):
         """Bad cursor → None, let the route 422 instead of 500."""

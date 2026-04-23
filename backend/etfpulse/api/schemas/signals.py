@@ -13,7 +13,7 @@ the frontend simple and avoiding a backend enum change.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -220,10 +220,14 @@ def _derive_display_status(
 
 
 def format_cursor(created_at: datetime, id: int) -> str:
-    """Composite cursor string: `"iso_timestamp|id"`. The ID component
-    breaks ties when two signals share the same `created_at` (possible on
-    same-millisecond bulk fan-outs)."""
-    return f"{created_at.isoformat()}|{id}"
+    """Composite cursor string: `"iso_timestamp|id"` with UTC as `Z`
+    (NOT `+00:00`) — `+` is reserved in URL form-encoding and gets decoded
+    back to a space, breaking round-trip through the query string. The
+    ID component breaks ties when two signals share the same `created_at`
+    (possible on same-millisecond bulk fan-outs).
+    """
+    iso = created_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return f"{iso}|{id}"
 
 
 def parse_cursor(raw: str) -> tuple[datetime, int] | None:
@@ -231,6 +235,7 @@ def parse_cursor(raw: str) -> tuple[datetime, int] | None:
     endpoint can 422 cleanly instead of 500-ing on malformed input."""
     try:
         ts_str, id_str = raw.rsplit("|", 1)
+        # fromisoformat in Python 3.11+ accepts the `Z` suffix natively.
         return datetime.fromisoformat(ts_str), int(id_str)
     except (ValueError, AttributeError):
         return None
