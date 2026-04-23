@@ -76,8 +76,28 @@ class Settings(BaseSettings):
     scheduler_cron_hour: int = Field(default=4, ge=0, le=23)
     scheduler_cron_minute: int = Field(default=30, ge=0, le=59)
 
-    # Telegram
+    # Telegram bot
     telegram_bot_token: str = ""
+    # Webhook security: random URL suffix is the primary defense (unguessable
+    # path); secret token is defense-in-depth against URL leakage from logs/
+    # ops accidents. Telegram sends the secret in `X-Telegram-Bot-Api-Secret-
+    # Token` on every webhook POST when we register it via setWebhook.
+    # Generate: `openssl rand -hex 32` for secret, `openssl rand -base64 24` for suffix.
+    telegram_webhook_secret: str = ""
+    telegram_webhook_url_suffix: str = ""
+    # Public base URL (e.g. https://app.example.com) Telegram POSTs to.
+    # We assemble {public_url}/api/telegram/webhook/{suffix} and pass to
+    # setWebhook. Required by Telegram to be HTTPS.
+    telegram_public_url: str = ""
+
+    # Delivery worker — drains queued SignalDelivery rows on this interval.
+    # 30s is well under any signal's swing/scalp half-life and keeps Telegram
+    # latency invisible to users.
+    delivery_worker_interval_seconds: int = Field(default=30, ge=5)
+    # Default user preferences applied on /start registration. Comma-separated
+    # asset list parsed via `delivery_default_assets_list` property.
+    delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)
+    delivery_default_assets: str = "BTC,ETH"
 
     # CORS
     cors_origins: str = "http://localhost:5173"
@@ -92,6 +112,29 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def delivery_default_assets_list(self) -> list[str]:
+        """Same shape as `cors_origin_list` — comma-separated string in env,
+        list in code. Used as default `User.preferences.assets` on /start."""
+        return [a.strip().upper() for a in self.delivery_default_assets.split(",") if a.strip()]
+
+    @property
+    def is_bot_enabled(self) -> bool:
+        """True iff all required telegram fields are non-empty AND run_bot is on.
+
+        Centralised here so the bot StartupTask, the webhook receiver route,
+        and any future delivery code all gate on the same condition without
+        drifting. Missing any of the four fields → bot is fully disabled
+        (no webhook registered, no route accepts traffic — R12 + W12).
+        """
+        return bool(
+            self.run_bot
+            and self.telegram_bot_token
+            and self.telegram_public_url
+            and self.telegram_webhook_secret
+            and self.telegram_webhook_url_suffix
+        )
 
 
 settings = Settings()
