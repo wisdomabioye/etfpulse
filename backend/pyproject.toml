@@ -55,6 +55,12 @@ strict = false
 warn_return_any = true
 warn_unused_configs = true
 
+# APScheduler ships no py.typed marker — silence the import-untyped error
+# without sprinkling per-line ignores across the scheduler module.
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
