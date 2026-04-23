@@ -1,0 +1,106 @@
+"""Detector framework — `compute_fingerprint` invariants and registry shape.
+
+Fingerprint determinism is load-bearing: if it ever changes for the same
+inputs, every existing signal becomes orphaned and detectors start
+double-firing. These tests pin the exact behaviour.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from etfpulse.pipeline.detectors import ALL_DETECTORS, Detector, DetectorHit, compute_fingerprint
+
+
+class TestComputeFingerprint:
+    def test_is_deterministic(self):
+        assert compute_fingerprint("btc", "flow_anomaly", "long") == compute_fingerprint(
+            "btc", "flow_anomaly", "long"
+        )
+
+    def test_length_is_32_hex(self):
+        fp = compute_fingerprint("anything")
+        assert len(fp) == 32
+        assert all(c in "0123456789abcdef" for c in fp)
+
+    def test_different_inputs_produce_different_fingerprints(self):
+        assert compute_fingerprint("btc", "long") != compute_fingerprint("eth", "long")
+        assert compute_fingerprint("btc", "long") != compute_fingerprint("btc", "short")
+
+    def test_nul_join_disambiguates_concatenation(self):
+        # The NUL separator is the only thing preventing these from colliding.
+        # If anyone "optimises" by removing the join character, this test fires.
+        assert compute_fingerprint("btc", "long") != compute_fingerprint("btcl", "ong")
+        assert compute_fingerprint("a", "bc") != compute_fingerprint("ab", "c")
+
+    def test_whitespace_is_stripped(self):
+        assert compute_fingerprint("btc", "long") == compute_fingerprint("  btc  ", "\tlong\n")
+
+    def test_order_matters(self):
+        assert compute_fingerprint("btc", "long") != compute_fingerprint("long", "btc")
+
+    def test_no_parts_raises(self):
+        with pytest.raises(ValueError, match="at least one part"):
+            compute_fingerprint()
+
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError, match="empty after strip"):
+            compute_fingerprint("btc", "")
+
+    def test_whitespace_only_raises(self):
+        with pytest.raises(ValueError, match="empty after strip"):
+            compute_fingerprint("btc", "   ")
+
+    def test_non_string_raises(self):
+        # Floats are the dangerous case — banning them at the type guard is
+        # the whole point.
+        with pytest.raises(TypeError, match="must be str, got float"):
+            compute_fingerprint("btc", 2.0)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="must be str, got int"):
+            compute_fingerprint("btc", 2)  # type: ignore[arg-type]
+
+
+class TestDetectorHit:
+    def test_construct(self):
+        hit = DetectorHit(
+            signal_type="flow_anomaly",
+            asset="btc",
+            signal_date=date(2026, 4, 23),
+            trigger_data={"zscore_bucket": "2sigma"},
+            fingerprint=compute_fingerprint("flow_anomaly", "btc", "2sigma_long"),
+        )
+        assert hit.asset == "btc"
+        assert len(hit.fingerprint) == 32
+
+    def test_is_frozen(self):
+        hit = DetectorHit(
+            signal_type="flow_anomaly",
+            asset="btc",
+            signal_date=date(2026, 4, 23),
+            trigger_data={},
+            fingerprint="x" * 32,
+        )
+        with pytest.raises(AttributeError):
+            hit.asset = "eth"  # type: ignore[misc]
+
+
+class TestRegistry:
+    def test_starts_empty(self):
+        # ALL_DETECTORS is mutated only by detector modules at import time.
+        # Until #40 lands FlowAnomalyDetector, the list is empty.
+        assert ALL_DETECTORS == []
+
+    def test_protocol_is_structurally_satisfiable(self):
+        # Smoke-test that a minimal detector matches the Protocol shape —
+        # this is what `signal_builder` will rely on.
+        class _StubDetector:
+            name = "stub"
+            signal_type = "flow_anomaly"
+
+            async def detect(self, session):  # type: ignore[no-untyped-def]
+                return []
+
+        detector: Detector = _StubDetector()
+        assert detector.name == "stub"
