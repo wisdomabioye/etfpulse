@@ -87,10 +87,17 @@ class TestDetectorHit:
 
 
 class TestRegistry:
-    def test_starts_empty(self):
-        # ALL_DETECTORS is mutated only by detector modules at import time.
-        # Until #40 lands FlowAnomalyDetector, the list is empty.
-        assert ALL_DETECTORS == []
+    def test_contains_flow_anomaly(self):
+        # If you add a detector to `pipeline/detectors/` and forget the
+        # `ALL_DETECTORS.append(...)` line in `__init__.py`, this test fires.
+        names = {d.name for d in ALL_DETECTORS}
+        assert "flow_anomaly" in names
+
+    def test_names_are_unique(self):
+        # Two detectors with the same name would make logs ambiguous and
+        # break per-detector metrics.
+        names = [d.name for d in ALL_DETECTORS]
+        assert len(names) == len(set(names))
 
     def test_protocol_is_structurally_satisfiable(self):
         # Smoke-test that a minimal detector matches the Protocol shape —

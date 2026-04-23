@@ -45,4 +45,16 @@ class Detector(Protocol):
 ALL_DETECTORS: list[Detector] = []
 
 
+# Concrete detectors registered explicitly here so the registry has a single,
+# greppable composition point — same pattern as `ALL_ROUTERS` / `STARTUP_TASKS`.
+# Detector modules MUST NOT self-register at import time; that would tie the
+# registry to import-order surprises.
+#
+# Imports placed at module bottom so `ALL_DETECTORS` and `Detector` are defined
+# before detector modules (which import them via the package) are loaded.
+from etfpulse.pipeline.detectors.flow_anomaly import FlowAnomalyDetector  # noqa: E402
+
+ALL_DETECTORS.append(FlowAnomalyDetector())
+
+
 __all__ = ["ALL_DETECTORS", "Detector", "DetectorHit", "compute_fingerprint"]
