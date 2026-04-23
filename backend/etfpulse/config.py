@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,6 +63,18 @@ class Settings(BaseSettings):
 
     # OpenRouter (AI)
     openrouter_api_key: str = ""
+    # Verified-present slug on openrouter.ai/api/v1/models (Decision R17).
+    openrouter_model: str = "anthropic/claude-sonnet-4.6"
+    # Soft daily cap on OpenRouter calls — enforced by signal_builder before
+    # invoking the adapter. Issue #12. 0 disables the cap entirely.
+    openrouter_daily_call_cap: int = Field(default=100, ge=0)
+
+    # Signal scheduler — fires once daily at HH:MM **UTC**. Timezone is pinned
+    # to UTC inside the scheduler module (Issue #31), so these are always UTC
+    # regardless of host clock. Decision R-cron defaults to 04:30 UTC, ~30 min
+    # after SoSoValue's nightly settlement window.
+    scheduler_cron_hour: int = Field(default=4, ge=0, le=23)
+    scheduler_cron_minute: int = Field(default=30, ge=0, le=59)
 
     # Telegram
     telegram_bot_token: str = ""
