@@ -148,6 +148,29 @@ async def test_set_webhook_failure_does_not_block_startup(
         assert app.state.bot_application is mock_application
 
 
+async def test_initialize_failure_does_not_block_startup(
+    enable_bot, mock_application, mock_set_webhook
+):
+    """Discovered during Stage 5e smoke — PTB's `Application.initialize()`
+    calls `getMe` against Telegram. With an invalid token or an API outage
+    during deploy, this raises a PTBTelegramError and previously propagated
+    through the lifespan, preventing app boot.
+
+    New contract: log + yield + return WITHOUT attaching `app.state.bot_application`,
+    so the webhook route returns 404 until the next container restart retries.
+    """
+    from telegram.error import InvalidToken
+
+    mock_application.initialize.side_effect = InvalidToken("fake token")
+
+    app = FastAPI()
+    async with start_bot(app):
+        # Bot is "disabled at runtime" — webhook route would 404.
+        assert not hasattr(app.state, "bot_application")
+        # set_webhook must NOT have been called (would fail the same way).
+        mock_set_webhook.assert_not_awaited()
+
+
 # ---- Timing --------------------------------------------------------------
 
 

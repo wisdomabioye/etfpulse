@@ -81,7 +81,23 @@ async def start_bot(app: FastAPI) -> AsyncIterator[None]:
     application = Application.builder().token(settings.telegram_bot_token).build()
     register_handlers(application)
 
-    await application.initialize()
+    # `initialize()` calls Telegram's `getMe` internally — can fail on invalid
+    # token, network blip, or Telegram outage. If it fails, we can't safely
+    # `process_update` (PTB's handler chain assumes initialize completed), so
+    # we do NOT attach the Application to app.state. Result: webhook route
+    # returns 404 ("bot disabled"), app boots otherwise-healthy, next container
+    # restart retries. Aligns with set_webhook's log-and-proceed contract.
+    try:
+        await application.initialize()
+    except PTBTelegramError as exc:
+        log.warning(
+            "bot_initialize_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        # Skip set_webhook too (would also fail) and yield without attaching.
+        yield
+        return
     log.info("bot_application_initialized")
 
     webhook_url = _webhook_url()
