@@ -102,3 +102,21 @@ def _scheduler_off_by_default(monkeypatch):
     inner monkeypatch overrides this autouse fixture cleanly.
     """
     monkeypatch.setattr(settings, "run_scheduler", False)
+
+
+@pytest.fixture(autouse=True)
+def _bot_off_by_default(monkeypatch):
+    """Disable the Telegram bot in every test by default.
+
+    The bot was added to `STARTUP_TASKS` in #54. Any test booting the full
+    app would otherwise try to construct a PTB `Application`, initialize it
+    (which hits Telegram's API), and register a webhook. Tests that
+    specifically exercise bot behaviour opt back in by setting `run_bot=True`
+    and the other required telegram fields — inner monkeypatch overrides
+    cleanly.
+
+    Explicit `run_bot=False` instead of relying on empty telegram fields:
+    defends against tests that set individual fields for OTHER reasons (e.g.
+    testing the config property) from accidentally booting the bot.
+    """
+    monkeypatch.setattr(settings, "run_bot", False)
