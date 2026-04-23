@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from etfpulse.api.exceptions import register_exception_handlers
 from etfpulse.api.lifespan import lifespan
@@ -40,11 +41,18 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         redirect_slashes=False,
     )
 
-    # Middleware is added LIFO (last added = outermost). CORS must wrap
-    # everything so preflight OPTIONS responds before routing, and
-    # RequestIDMiddleware sits inside so the request_id is bound before any
-    # downstream handler logs.
-    app.add_middleware(RequestIDMiddleware)
+    # Middleware is added LIFO (last added = outermost). Final stack from
+    # outermost → innermost: RequestID → CORS → Gzip → handler. Reasoning:
+    # - Gzip innermost: it needs to see the raw non-streaming handler
+    #   response so `minimum_size=500` works. If BaseHTTPMiddleware wraps
+    #   the response (which RequestID does), Gzip sees a streaming response
+    #   and compresses every chunk regardless of size — the 500-byte
+    #   threshold becomes a no-op and every tiny response gets compressed.
+    # - CORS wraps next: Access-Control-* headers don't care about body.
+    # - RequestID outermost: binds request_id into structlog contextvars
+    #   before ANY downstream middleware runs (including CORS preflight).
+    #   The X-Request-ID header gets added on the way out, after compression.
+    app.add_middleware(GZipMiddleware, minimum_size=500)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origin_list,
@@ -52,6 +60,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
 
