@@ -5,25 +5,39 @@ wired into the PTB `Application` exclusively via `register_handlers()` below.
 Never call `application.add_handler()` from outside this module — keeps the
 registration surface greppable and auditable.
 
-Stage 05 fills this in. Current state: placeholder that registers nothing,
-so the bot boots cleanly and the webhook receiver route can call
-`application.process_update(update)` without error (it just won't dispatch
-to anything yet).
+Each handler module exports one or two `cmd_*` functions. This module's job
+is the composition: listing every command name + handler pair.
 """
 
 from __future__ import annotations
 
-from telegram.ext import Application
+from telegram.ext import Application, CommandHandler
+
+from etfpulse.bot.handlers.help import cmd_help, cmd_track_record
+from etfpulse.bot.handlers.prefs import cmd_prefs
+from etfpulse.bot.handlers.start import cmd_start
+from etfpulse.bot.handlers.subscribe import cmd_subscribe, cmd_unsubscribe
+
+# Single source of truth — command name → handler. Ordering doesn't matter
+# (PTB matches by exact command name), but alphabetical keeps diffs readable.
+_COMMANDS: list[tuple[str, object]] = [
+    ("help", cmd_help),
+    ("prefs", cmd_prefs),
+    ("start", cmd_start),
+    ("subscribe", cmd_subscribe),
+    ("track_record", cmd_track_record),  # slash-command names can't have dashes
+    ("unsubscribe", cmd_unsubscribe),
+]
 
 
 def register_handlers(application: Application) -> None:
     """Wire every bot handler onto the PTB Application.
 
     Called once from `bot/lifespan.py:start_bot` after `Application.builder()`
-    and before `application.initialize()`. Stage 05b (#55) adds the concrete
-    /start, /subscribe, /unsubscribe, /prefs, /help handlers.
+    and before `application.initialize()`.
     """
-    # Stage 05b appends `application.add_handler(CommandHandler("start", ...))`
-    # etc. here. For now, intentionally empty — the wiring path itself is
-    # what gets tested in Stage 05a.
-    return None
+    for name, handler in _COMMANDS:
+        application.add_handler(CommandHandler(name, handler))  # type: ignore[arg-type]
+
+
+__all__ = ["register_handlers"]
