@@ -17,8 +17,10 @@ from fastapi import APIRouter
 
 from etfpulse.api.routes.admin import router as admin_router
 from etfpulse.api.routes.health import router as health_router
+from etfpulse.api.routes.telegram import router as telegram_router
 
 ALL_ROUTERS: list[APIRouter] = [
     health_router,
     admin_router,
+    telegram_router,
 ]
