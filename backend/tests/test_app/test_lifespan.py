@@ -28,6 +28,15 @@ def clean_startup_tasks():
     lifespan_mod.STARTUP_TASKS.extend(original)
 
 
+def test_scheduler_registered_at_import():
+    """D14 guardrail — `start_scheduler` must be in STARTUP_TASKS after
+    importing the module. If a future refactor breaks the registration,
+    Coolify would silently boot without a scheduler — this catches that."""
+    from etfpulse.pipeline.scheduler import start_scheduler
+
+    assert start_scheduler in lifespan_mod.STARTUP_TASKS
+
+
 def test_empty_task_list_starts_and_stops_cleanly(clean_startup_tasks):
     """With no tasks registered, lifespan must complete both enter and exit."""
     app = create_app()

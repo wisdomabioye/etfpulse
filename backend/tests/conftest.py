@@ -86,3 +86,19 @@ def _clear_sosovalue_caches() -> None:
     sosovalue_client._flows_cache.clear()
     sosovalue_client._news_cache.clear()
     sosovalue_client._macro_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _scheduler_off_by_default(monkeypatch):
+    """Disable APScheduler in every test by default.
+
+    The scheduler was added to `STARTUP_TASKS` in #46, so any test that boots
+    the full app via `create_app()` / `TestClient` would otherwise race the
+    scheduler's catch-up DB reads against the test's own operations, yielding
+    'another operation is in progress' asyncpg errors.
+
+    Tests that specifically exercise the scheduler (test_scheduler.py) opt
+    back in via `monkeypatch.setattr(settings, 'run_scheduler', True)` —
+    inner monkeypatch overrides this autouse fixture cleanly.
+    """
+    monkeypatch.setattr(settings, "run_scheduler", False)

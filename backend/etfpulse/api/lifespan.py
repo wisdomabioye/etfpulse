@@ -35,6 +35,14 @@ type StartupTask = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 STARTUP_TASKS: list[StartupTask] = []
 
 
+# Stage 04 — register the signal-cycle scheduler. Adding a StartupTask does
+# NOT require editing `app.py` (anti-drift D14); this module is the one place
+# the composition lives. Stage 05 will append the Telegram bot task below.
+from etfpulse.pipeline.scheduler import start_scheduler  # noqa: E402
+
+STARTUP_TASKS.append(start_scheduler)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan — drives startup and shutdown for the app.
