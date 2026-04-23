@@ -1,0 +1,45 @@
+{
+  "flow_anomaly": {
+    "headline": "BTC inflows snap 4-day streak — institutional rotation likely",
+    "reasoning": [
+      "Four consecutive days of net inflows suddenly reversed by a $50M outflow.",
+      "Magnitude of the break is consistent with a single-fund de-risking move, not panic.",
+      "Streak length of 4 days falls in the upper quartile for 2026 to-date."
+    ],
+    "confidence": 7,
+    "risks": [
+      "Single-day reversal could be noise from quarter-end rebalancing.",
+      "ETH flows remain positive — divergence may resolve by ETH weakening, not BTC strengthening short."
+    ],
+    "suggested_action": "consider short",
+    "time_horizon": "swing"
+  },
+  "magnitude": {
+    "headline": "BTC ETF inflows cross $500M threshold for the first time this quarter",
+    "reasoning": [
+      "Single-day net inflow of $512M is 3.2 standard deviations above the 30-day mean.",
+      "Inflow concentrated in IBIT and FBTC, suggesting mainstream broker demand rather than basis-trade activity.",
+      "Comparable spikes in 2024 Q1 preceded multi-week BTC rallies."
+    ],
+    "confidence": 8,
+    "risks": [
+      "Spikes can mark local tops if they coincide with retail FOMO peaks.",
+      "Macro calendar shows CPI in 48h — outsized flow may be front-running known event."
+    ],
+    "suggested_action": "consider long",
+    "time_horizon": "position"
+  },
+  "acceleration": {
+    "headline": "Flow acceleration ambiguous — wait for confirmation",
+    "reasoning": [
+      "3-day rate of change is positive but within the historical noise band.",
+      "Underlying spot price action lags the flow signal — divergence reduces conviction."
+    ],
+    "confidence": 4,
+    "risks": [
+      "Acting on weak acceleration signals historically underperforms net of fees."
+    ],
+    "suggested_action": "wait",
+    "time_horizon": "scalp"
+  }
+}

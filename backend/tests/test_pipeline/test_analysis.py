@@ -135,3 +135,29 @@ class TestComputeExpiresAt:
     def test_unknown_horizon_raises(self):
         with pytest.raises(ValueError, match="unknown time_horizon"):
             compute_expires_at("forever")
+
+
+class TestFixtureFile:
+    """Sanity-check the canned analyses ship as valid AISignalAnalysis.
+
+    Demo mode (`sosovalue_use_fixtures=True`) reads this file straight into the
+    schema. If the fixture drifts (added field, typo in literal value, count
+    over the cap), demo mode silently returns None — this test fails loudly
+    instead.
+    """
+
+    def test_every_entry_validates(self):
+        import json
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).resolve().parent.parent.parent / "fixtures" / "openrouter_analysis.json"
+        )
+        data = json.loads(fixture.read_text())
+
+        # Three Stage 4a/4b detector signal_types must each have an entry.
+        assert set(data.keys()) >= {"flow_anomaly", "magnitude", "acceleration"}
+
+        for signal_type, payload in data.items():
+            analysis = AISignalAnalysis.model_validate(payload)
+            assert analysis.headline, f"{signal_type} has empty headline after validation"
