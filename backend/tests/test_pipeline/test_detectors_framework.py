@@ -87,11 +87,11 @@ class TestDetectorHit:
 
 
 class TestRegistry:
-    def test_contains_flow_anomaly(self):
+    def test_contains_stage4_detectors(self):
         # If you add a detector to `pipeline/detectors/` and forget the
         # `ALL_DETECTORS.append(...)` line in `__init__.py`, this test fires.
         names = {d.name for d in ALL_DETECTORS}
-        assert "flow_anomaly" in names
+        assert {"flow_anomaly", "magnitude", "acceleration"}.issubset(names)
 
     def test_names_are_unique(self):
         # Two detectors with the same name would make logs ambiguous and

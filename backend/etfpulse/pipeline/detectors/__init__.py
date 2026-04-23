@@ -52,9 +52,17 @@ ALL_DETECTORS: list[Detector] = []
 #
 # Imports placed at module bottom so `ALL_DETECTORS` and `Detector` are defined
 # before detector modules (which import them via the package) are loaded.
+from etfpulse.pipeline.detectors.acceleration import AccelerationDetector  # noqa: E402
 from etfpulse.pipeline.detectors.flow_anomaly import FlowAnomalyDetector  # noqa: E402
+from etfpulse.pipeline.detectors.magnitude import MagnitudeDetector  # noqa: E402
 
-ALL_DETECTORS.append(FlowAnomalyDetector())
+ALL_DETECTORS.extend(
+    [
+        FlowAnomalyDetector(),
+        MagnitudeDetector(),
+        AccelerationDetector(),
+    ]
+)
 
 
 __all__ = ["ALL_DETECTORS", "Detector", "DetectorHit", "compute_fingerprint"]
