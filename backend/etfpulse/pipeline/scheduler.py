@@ -40,6 +40,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -85,17 +86,24 @@ async def _needs_catchup(session: AsyncSession) -> bool:
     return needed
 
 
-async def _run_cycle_with_session() -> None:
+async def _run_cycle_with_session() -> dict[str, Any] | None:
     """Production cycle wrapper — opens a session, commits on success.
 
-    Called by APScheduler (cron job and catch-up job). Owns the transaction
-    boundary; `run_daily_cycle` itself does not commit (D14).
+    Called by APScheduler (cron + catch-up) AND by the admin trigger route
+    (`api/routes/admin.py`). Owns the transaction boundary; `run_daily_cycle`
+    itself does not commit (D14).
+
+    Returns the summary dict on success, None on rollback. The scheduler
+    discards the return value (logs only); the admin route surfaces it as
+    JSON. Both share this function so the "demo works = scheduler works"
+    invariant (D15) is literal, not aspirational.
     """
     async with async_session() as session:
         try:
             summary = await run_daily_cycle(session)
             await session.commit()
             log.info("scheduled_cycle_committed", **summary)
+            return summary
         except Exception as exc:
             await session.rollback()
             log.error(
@@ -104,6 +112,7 @@ async def _run_cycle_with_session() -> None:
                 error=str(exc),
                 exc_info=exc,
             )
+            return None
 
 
 @asynccontextmanager
