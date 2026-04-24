@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Environment — .env.example is the tracked template; bare .env holds
+# user-local config (API URL, etc.) and must not be committed.
+.env
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
