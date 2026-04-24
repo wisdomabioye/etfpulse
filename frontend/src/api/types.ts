@@ -1,0 +1,130 @@
+/**
+ * TypeScript mirrors of the backend Pydantic DTOs.
+ *
+ * Source of truth: etfpulse/backend/etfpulse/api/schemas/{signals,dashboard}.py
+ * Update both when the API contract changes. Auto-generation from OpenAPI is
+ * a future improvement; for ~4 endpoints with stable shapes the manual mirror
+ * is faster to read in code review than a generated blob.
+ */
+
+// ---------------------------------------------------------------------------
+// Enums (Literal in Pydantic, union types here)
+// ---------------------------------------------------------------------------
+
+export type AssetSymbol = 'BTC' | 'ETH';
+
+export type SignalType =
+  | 'flow_anomaly'
+  | 'magnitude'
+  | 'acceleration'
+  | 'divergence'
+  | 'regime_shift';
+
+/** Display status — derived backend-side; never the raw DB enum value.
+ * - 'evaluated' = Stage 8 outcome row exists
+ * - 'expired'   = past expires_at (overrides raw 'alerted')
+ * - 'alerted'   = fan-out completed, awaiting outcome
+ * - 'pending'   = signal built, fan-out not yet run
+ */
+export type DisplayStatus = 'pending' | 'alerted' | 'evaluated' | 'expired';
+
+export type SuggestedAction = 'consider long' | 'consider short' | 'wait';
+
+export type TimeHorizon = 'scalp' | 'swing' | 'position';
+
+// ---------------------------------------------------------------------------
+// Signal shapes
+// ---------------------------------------------------------------------------
+
+export interface SignalListItem {
+  id: number;
+  asset: AssetSymbol;
+  signal_type: SignalType;
+  status: DisplayStatus;
+  confidence: number | null;
+
+  /** Flattened from ai_analysis; null when AI failed at signal-build time. */
+  headline: string | null;
+  suggested_action: SuggestedAction | null;
+  time_horizon: TimeHorizon | null;
+
+  /** ISO date YYYY-MM-DD (no time component). */
+  signal_date: string;
+  /** ISO datetime with Z suffix. */
+  created_at: string;
+  expires_at: string | null;
+
+  /** Count of SignalDelivery rows — "attempted" semantics. */
+  alerted_to: number;
+}
+
+export interface AIAnalysis {
+  headline: string;
+  reasoning: string[];
+  confidence: number;
+  risks: string[];
+  suggested_action: SuggestedAction;
+  time_horizon: TimeHorizon;
+}
+
+export interface SignalOutcome {
+  entry_price: number | null;
+  stop_price: number | null;
+  target_price: number | null;
+  price_at_signal: number;
+  price_after_24h: number | null;
+  price_after_72h: number | null;
+  hit_target: boolean | null;
+  hit_stop: boolean | null;
+  max_favorable: number | null;
+  max_adverse: number | null;
+  evaluated_at: string | null;
+}
+
+export interface SignalDetail {
+  id: number;
+  asset: AssetSymbol;
+  signal_type: SignalType;
+  status: DisplayStatus;
+  confidence: number | null;
+  /** Full 32-char SHA-256 prefix; truncate client-side for display. */
+  fingerprint: string;
+  signal_date: string;
+  created_at: string;
+  expires_at: string | null;
+  alerted_to: number;
+
+  trigger_data: Record<string, unknown>;
+  ai_analysis: AIAnalysis | null;
+  outcome: SignalOutcome | null;
+}
+
+export interface PaginatedSignals {
+  items: SignalListItem[];
+  /** Pass back as `?cursor=` to fetch the next page. null = no more pages. */
+  next_cursor: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Filters (query params for /api/signals)
+// ---------------------------------------------------------------------------
+
+export interface SignalFilters {
+  asset?: AssetSymbol;
+  signal_type?: SignalType;
+  confidence_min?: number;
+  include_expired?: boolean;
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+export interface DashboardStats {
+  total_signals: number;
+  signals_today: number;
+  /** null when no confidence-bearing signals exist (empty DB or all AI-failed). */
+  avg_confidence: number | null;
+  last_signal_at: string | null;
+}

@@ -4,7 +4,21 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>eftpulse-landing</title>
+    <!-- Match body bg to suppress the white-flash on initial paint -->
+    <meta name="theme-color" content="#0a0a0b" />
+    <meta name="description" content="ETFPulse — crypto ETF flow signal intelligence." />
+
+    <!-- Inter (display + body) + JetBrains Mono (numeric/monospace).
+         Preconnect first so the TLS handshake is warm by the time the CSS
+         fetches the font URLs. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+
+    <title>ETFPulse</title>
   </head>
   <body>
     <div id="root"></div>

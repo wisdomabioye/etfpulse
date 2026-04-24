@@ -1,111 +1,161 @@
+/* ETFPulse — design tokens + global reset.
+ *
+ * Tokens lifted from the wireframe spec (UI-mock-preview), with the accent
+ * flipped to amber per the chosen design direction. Dark-mode-default —
+ * the entire product runs on the dark surface; no light-mode toggle for MVP.
+ *
+ * Surfaces are tiered (--bg-0 darkest → --bg-4 lightest) so cards-on-cards
+ * still have visual separation. Same with borders and text. Don't reach
+ * for a hex literal in a component — pick from the token set.
+ *
+ * Tailwind v4 integration: `@import "tailwindcss"` pulls in the framework;
+ * `@theme` exposes our tokens as Tailwind utilities so `bg-bg-2`,
+ * `text-accent`, `border-border-2` all "just work" — single source of truth.
+ */
+
+@import "tailwindcss";
+
+@theme {
+  /* Surfaces */
+  --color-bg-0: #09090a;
+  --color-bg-1: #0a0a0b;
+  --color-bg-2: #111113;
+  --color-bg-3: #17171a;
+  --color-bg-4: #1c1c1f;
+
+  /* Borders */
+  --color-border-1: #1f1f23;
+  --color-border-2: #27272a;
+  --color-border-3: #3f3f46;
+
+  /* Text */
+  --color-text-1: #fafafa;
+  --color-text-2: #a1a1aa;
+  --color-text-3: #71717a;
+  --color-text-4: #52525b;
+
+  /* Accent + semantic */
+  --color-accent: rgb(245, 158, 11);
+  --color-pos: #22c55e;
+  --color-neg: #ef4444;
+  --color-warn: #f59e0b;
+  --color-info: #64748b;
+
+  /* Asset brand */
+  --color-btc: #f7931a;
+  --color-eth: #627eea;
+
+  /* Type stacks */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  color-scheme: dark;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* Surfaces — darkest to lightest. Use --bg-1 as page background. */
+  --bg-0: #09090a;
+  --bg-1: #0a0a0b;
+  --bg-2: #111113;
+  --bg-3: #17171a;
+  --bg-4: #1c1c1f;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  /* Borders — same direction as surfaces. */
+  --border-1: #1f1f23;
+  --border-2: #27272a;
+  --border-3: #3f3f46;
+
+  /* Text — primary to muted. */
+  --text-1: #fafafa;
+  --text-2: #a1a1aa;
+  --text-3: #71717a;
+  --text-4: #52525b;
+
+  /* Accent — amber (chosen direction). Soft + line derived via color-mix. */
+  --accent: rgb(245, 158, 11);
+  --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 40%, transparent);
+
+  /* Semantic — confidence + signal direction. */
+  --pos: #22c55e;   /* hit / inflow / confidence ≥ 7 */
+  --neg: #ef4444;   /* miss / outflow / confidence < 4 */
+  --warn: #f59e0b;  /* mid confidence 4–6 */
+  --info: #64748b;  /* neutral metadata */
+
+  /* Asset brand colors — match BTC orange + ETH blue. */
+  --btc: #f7931a;
+  --eth: #627eea;
+
+  /* Type stacks. Inter loaded via Google Fonts in index.html. */
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* Global reset — minimal. Box-sizing on every element + zero default margin
+ * makes layout deterministic. Body scoped to the dark surface. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+  min-height: 100vh;
 }
 
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  min-height: 100vh;
 }
 
-body {
-  margin: 0;
+/* Anchor defaults — accent tint, no underline by default. Components that
+ * want underlined links override per-context. */
+a {
+  color: var(--accent);
+  text-decoration: none;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+a:hover {
+  text-decoration: underline;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
+/* Code + monospace defaults — inherit token. */
 code,
-.counter {
+kbd,
+samp,
+pre {
   font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+/* Form controls — inherit so dark surface doesn't get default light bg. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* Lists — strip default padding. Components own their list styling. */
+ul,
+ol {
+  list-style: none;
 }
