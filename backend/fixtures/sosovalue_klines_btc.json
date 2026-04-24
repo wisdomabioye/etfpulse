@@ -1,0 +1,10 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {"timestamp": 1745193600000, "open": 82100.00, "high": 83500.00, "low": 81800.00, "close": 83200.00, "volume": 19800},
+    {"timestamp": 1745280000000, "open": 83200.00, "high": 84100.00, "low": 82900.00, "close": 83850.00, "volume": 21400},
+    {"timestamp": 1745366400000, "open": 83850.00, "high": 84500.00, "low": 83100.00, "close": 84120.50, "volume": 18700}
+  ],
+  "details": null
+}

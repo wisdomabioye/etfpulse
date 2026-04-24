@@ -101,7 +101,9 @@ class TestBuildSignal:
         assert signal.ai_analysis is not None
         assert signal.ai_analysis["headline"] == "Test signal"
         assert signal.expires_at is not None
-        # price_at_creation is NULL until issue #34 lands.
+        # Default param — price fields stay NULL when the caller passes nothing.
+        # The real production path (`run_daily_cycle`) threads a price through
+        # via `pipeline.prices`; see `test_builds_with_price_and_source` below.
         assert signal.price_at_creation is None
 
     async def test_inserts_without_ai_when_analyze_returns_none(self, db_session, monkeypatch):
@@ -196,6 +198,43 @@ class TestBuildSignal:
         assert a.id != b.id
         rows = (await db_session.execute(select(Signal))).scalars().all()
         assert len(rows) == 2
+
+    async def test_builds_with_price_and_source(self, db_session, monkeypatch, stub_ai):
+        """Issue #34: caller passes price + source → row stores both.
+
+        Price lands on `Signal.price_at_creation` (typed Numeric, Decimal in
+        Python). Source is stuffed into `trigger_data` as a JSONB field so
+        Stage 08 outcome evaluation can pin +24h/+72h lookups to the same
+        provider without a schema migration.
+        """
+        from decimal import Decimal
+
+        hit = _make_hit()
+        signal = await build_signal(
+            db_session,
+            hit,
+            price_at_creation=Decimal("84120.50"),
+            price_source="sosovalue",
+        )
+        assert signal is not None
+        assert signal.price_at_creation == Decimal("84120.50")
+        assert signal.trigger_data["price_source"] == "sosovalue"
+        # Original trigger_data keys preserved — we don't stomp on them.
+        for key in hit.trigger_data:
+            assert signal.trigger_data[key] == hit.trigger_data[key]
+
+    async def test_builds_without_price_leaves_fields_null(
+        self, db_session, monkeypatch, stub_ai
+    ):
+        """When both price providers fail, the signal still persists — with
+        NULL `price_at_creation` and no `price_source` tag. The backfill
+        script (scripts/backfill_signal_prices.py) is responsible for
+        revisiting these rows later."""
+        hit = _make_hit()
+        signal = await build_signal(db_session, hit)  # both price args default None
+        assert signal is not None
+        assert signal.price_at_creation is None
+        assert "price_source" not in signal.trigger_data
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +338,8 @@ class TestRunDailyCycle:
         expected_keys = {
             "ingested",
             "ingest_errors",
+            "prices",
+            "price_errors",
             "detectors_run",
             "detector_errors",
             "signals_new",

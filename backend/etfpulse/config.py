@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # .env for offline work.
     sosovalue_use_fixtures: bool = False
 
+    # Binance (backup spot price / klines) — public market-data endpoints only.
+    # `api.binance.com` is geo-blocked in some environments; `data-api.binance.vision`
+    # is Binance's official market-data-only mirror (no auth, no trading).
+    # Issue #34: SoSoValue's monthly quota is the single biggest operational
+    # risk — Binance fallback removes the SPOF on spot-price lookups.
+    binance_base_url: str = "https://data-api.binance.vision"
+    binance_use_fixtures: bool = False
+
     # SoDEX (Wave 3 — demo wallet only)
     sodex_demo_wallet_address: str = ""
     sodex_demo_private_key: str = ""

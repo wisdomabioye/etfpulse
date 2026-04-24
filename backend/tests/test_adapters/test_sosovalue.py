@@ -147,3 +147,62 @@ async def test_non_json_response_wraps_in_sosovalue_error(httpx_mock, monkeypatc
     client = SoSoValueClient()
     with pytest.raises(SoSoValueError, match="invalid JSON"):
         await client.get_macro_events()
+
+
+# ---- Spot price + klines (issue #34) --------------------------------------
+
+
+async def test_spot_price_btc_parses_from_fixture():
+    """market-snapshot fixture mirrors the inferred `{data: {price: ...}}` envelope."""
+    from decimal import Decimal
+
+    client = SoSoValueClient()
+    price = await client.get_spot_price("BTC")
+    assert isinstance(price, Decimal)
+    # Fixture value
+    assert price == Decimal("84120.50")
+
+
+async def test_spot_price_eth_parses_from_fixture():
+    from decimal import Decimal
+
+    client = SoSoValueClient()
+    price = await client.get_spot_price("ETH")
+    assert price == Decimal("2480.50")
+
+
+async def test_spot_price_raises_on_missing_data_envelope(monkeypatch):
+    """If the inferred `{data: {...}}` shape is wrong (e.g. data is null or missing),
+    the adapter must raise rather than persist a wrong/missing price silently."""
+
+    def _broken_fixture(name: str):
+        return {"code": 0, "message": "ok", "data": None, "details": None}
+
+    monkeypatch.setattr(SoSoValueClient, "_load_fixture", staticmethod(_broken_fixture))
+    client = SoSoValueClient()
+    with pytest.raises(SoSoValueError, match="unexpected response envelope"):
+        await client.get_spot_price("BTC")
+
+
+async def test_klines_parses_from_fixture():
+    """klines fixture mirrors the inferred `{data: [{...}, ...]}` envelope."""
+    from decimal import Decimal
+
+    client = SoSoValueClient()
+    bars = await client.get_daily_klines("BTC", limit=3)
+    assert len(bars) == 3
+    assert bars[-1].close == Decimal("84120.50")
+    # bar_date is derived from the `timestamp` ms field — confirm it works
+    assert str(bars[-1].bar_date) == "2025-04-23"
+
+
+async def test_klines_raises_on_wrong_shape(monkeypatch):
+    """If data comes back as a dict instead of a list (schema drift), raise."""
+
+    def _broken_fixture(name: str):
+        return {"code": 0, "message": "ok", "data": {"not": "a list"}, "details": None}
+
+    monkeypatch.setattr(SoSoValueClient, "_load_fixture", staticmethod(_broken_fixture))
+    client = SoSoValueClient()
+    with pytest.raises(SoSoValueError, match="unexpected response envelope"):
+        await client.get_daily_klines("BTC")

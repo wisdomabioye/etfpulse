@@ -136,6 +136,50 @@ class MacroEvent(BaseModel):
     events: list[str]
 
 
+class MarketSnapshot(BaseModel):
+    """Live market snapshot (source: GET /currencies/{id}/market-snapshot).
+
+    Only `price` is load-bearing for Wave 1. Other fields (turnover, supply,
+    ATH, etc.) are intentionally ignored so schema drift doesn't break signal
+    building over a single field change.
+
+    Response-shape caveat: the SoSoValue docs show the payload flat, but every
+    other endpoint's real response is wrapped in `{code, message, data, ...}`.
+    The adapter parses `raw.get("data")` consistent with that pattern; if the
+    inference is wrong we'll see NULL prices + warnings rather than a crash.
+    Verified against fixtures for ETF flows and news; market-snapshot itself
+    was un-spikeable (monthly quota exhausted).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    price: Decimal
+
+
+class KlinePoint(BaseModel):
+    """One daily OHLC bar (source: GET /currencies/{id}/klines?interval=1d).
+
+    The adapter only requests `interval=1d` — the docs explicitly say this
+    is the only interval supported. History is capped at ~3 months.
+
+    `timestamp` is ms-epoch; `bar_date` converts to a UTC date for matching
+    against `Signal.signal_date` during backfill.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: int
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None = None
+
+    @property
+    def bar_date(self) -> date:
+        return datetime.fromtimestamp(self.timestamp / 1000, tz=UTC).date()
+
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -154,6 +198,11 @@ class SoSoValueClient:
         self._flows_cache: TTLCache[str, list[ETFFlowPoint]] = TTLCache(maxsize=50, ttl=6 * 3600)
         self._news_cache: TTLCache[str, list[NewsArticle]] = TTLCache(maxsize=50, ttl=600)
         self._macro_cache: TTLCache[str, list[MacroEvent]] = TTLCache(maxsize=10, ttl=86400)
+        # Price caches — small, short TTL. Spot price is queried at most once
+        # per asset per daily cycle; the TTL mostly protects against admin
+        # trigger spam during testing.
+        self._spot_cache: TTLCache[str, Decimal] = TTLCache(maxsize=5, ttl=60)
+        self._klines_cache: TTLCache[str, list[KlinePoint]] = TTLCache(maxsize=20, ttl=3600)
 
     @property
     def use_fixtures(self) -> bool:
@@ -343,6 +392,98 @@ class SoSoValueClient:
         self._macro_cache[cache_key] = events
         log.info("sosovalue_macro_events_fetched", count=len(events))
         return events
+
+    # --- Price data -----------------------------------------------------
+
+    @staticmethod
+    def _currency_id(asset: Literal["BTC", "ETH"]) -> str:
+        """Resolve an asset symbol to the SoSoValue currency_id.
+
+        Both IDs are verified in docs/API_REFERENCE.md (currency mapping
+        table); not guessed. The single source for both IDs is the module-
+        level constants at the top of this file.
+        """
+        return BTC_CURRENCY_ID if asset == "BTC" else ETH_CURRENCY_ID
+
+    async def get_spot_price(self, asset: Literal["BTC", "ETH"]) -> Decimal:
+        """Current USD spot price for BTC or ETH.
+
+        Raises `SoSoValueError` (or a subclass) on failure. Callers are
+        expected to catch and fall back — see `pipeline/prices.py` for the
+        primary→fallback composer.
+        """
+        cache_key = f"spot_{asset}"
+        if cache_key in self._spot_cache:
+            return self._spot_cache[cache_key]
+
+        if self.use_fixtures:
+            raw = self._load_fixture(f"sosovalue_market_snapshot_{asset.lower()}")
+        else:
+            raw = await self._request(
+                "GET",
+                f"/currencies/{self._currency_id(asset)}/market-snapshot",
+            )
+
+        # Response shape (inferred — un-spikeable due to quota exhaustion):
+        # `{"code": 0, "message": "...", "data": {"price": ..., ...}, "details": null}`.
+        # If the inference is wrong, `data` is None/empty → explicit error.
+        data = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(data, dict):
+            raise SoSoValueError(
+                f"market-snapshot for {asset}: unexpected response envelope"
+            )
+
+        snapshot = MarketSnapshot.model_validate(data)
+        self._spot_cache[cache_key] = snapshot.price
+        log.info("sosovalue_spot_price_fetched", asset=asset, price=str(snapshot.price))
+        return snapshot.price
+
+    async def get_daily_klines(
+        self,
+        asset: Literal["BTC", "ETH"],
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[KlinePoint]:
+        """Daily OHLC klines for BTC or ETH. Only 1d interval is supported.
+
+        Returns newest-first or oldest-first depending on the API (not
+        contractually specified in the docs); callers that need a specific
+        ordering should sort on `KlinePoint.timestamp` themselves.
+
+        Used by the one-shot historical backfill in
+        `scripts/backfill_signal_prices.py` — NOT called from the daily
+        cycle (which uses live spot prices via `get_spot_price`).
+        """
+        cache_key = f"klines_{asset}_{start_time_ms}_{end_time_ms}_{limit}"
+        if cache_key in self._klines_cache:
+            return self._klines_cache[cache_key]
+
+        if self.use_fixtures:
+            raw = self._load_fixture(f"sosovalue_klines_{asset.lower()}")
+        else:
+            params: dict[str, Any] = {"interval": "1d", "limit": limit}
+            if start_time_ms is not None:
+                params["start_time"] = start_time_ms
+            if end_time_ms is not None:
+                params["end_time"] = end_time_ms
+            raw = await self._request(
+                "GET",
+                f"/currencies/{self._currency_id(asset)}/klines",
+                params=params,
+            )
+
+        # Inferred envelope: `{"code": 0, "data": [{...}, ...], ...}`.
+        data = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(data, list):
+            raise SoSoValueError(
+                f"klines for {asset}: unexpected response envelope"
+            )
+
+        klines = [KlinePoint.model_validate(item) for item in data]
+        self._klines_cache[cache_key] = klines
+        log.info("sosovalue_klines_fetched", asset=asset, count=len(klines))
+        return klines
 
 
 # Module-level singleton. Tests that need isolation should instantiate

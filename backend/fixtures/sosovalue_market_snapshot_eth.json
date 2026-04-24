@@ -1,0 +1,13 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "price": 2480.50,
+    "change_pct_24h": 0.87,
+    "turnover_24h": 12400000000,
+    "marketcap": 298000000000,
+    "circulating_supply": "120300000",
+    "marketcap_rank": 2
+  },
+  "details": null
+}

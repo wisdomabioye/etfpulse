@@ -1,11 +1,13 @@
 """Signal builder — orchestrates one daily cycle.
 
 Two functions:
-    `build_signal(session, hit)` — converts a `DetectorHit` into a persisted
-        `Signal`. Idempotent via `(fingerprint, signal_date)` upsert.
-        Optionally enriches with AI analysis (Resolution R6 — never blocks).
-    `run_daily_cycle(session)` — full orchestration: ingest → detect →
-        build_signal per hit. Returns a summary dict for admin/logging.
+    `build_signal(session, hit, price_at_creation=, price_source=)` —
+        converts a `DetectorHit` into a persisted `Signal`. Idempotent via
+        `(fingerprint, signal_date)` upsert. Optionally enriches with AI
+        analysis (Resolution R6 — never blocks). Persists the spot price
+        from the price composer when provided.
+    `run_daily_cycle(session)` — full orchestration: ingest → fetch prices
+        → detect → build_signal per hit. Returns a summary dict.
 
 Anti-drift rules installed by this stage:
     D12 — `build_signal` calls AI OPTIONALLY: upsert first (so re-runs are
@@ -13,19 +15,23 @@ Anti-drift rules installed by this stage:
           newly-inserted rows. AI failure is non-fatal — Signal persists with
           NULL ai_analysis / confidence / expires_at.
     D13 — `run_daily_cycle` wraps every detector call in try/except. One bad
-          detector cannot kill the cycle — log + continue.
+          detector cannot kill the cycle — log + continue. Same pattern
+          extends to spot-price fetches (issue #34): a failed fetch persists
+          NULL `price_at_creation`, and the backfill script picks it up.
     D14 — `run_daily_cycle` does NOT commit. Caller (the scheduler in #45,
           or the admin route in #47) owns the transaction boundary, same
           contract as `pipeline/ingestor.py`.
 
-Open gaps acknowledged here:
-    - `Signal.price_at_creation` is NULL (issue #34) — SoSoValue spot/klines
-      adapter not yet wired. Wave 1 alerting doesn't need it; Wave 2
-      SignalOutcome does.
+Issue #34 (resolved 2026-04-24): spot price is fetched once per asset at
+the start of every cycle via `pipeline.prices.get_spot_price_with_source`,
+which tries SoSoValue primary then Binance fallback. The source tag is
+stuffed into `Signal.trigger_data["price_source"]` so Stage 08 outcome
+evaluation can pin the +24h / +72h lookup to the same provider.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Literal
 
 import structlog
@@ -38,13 +44,19 @@ from etfpulse.models import Signal
 from etfpulse.pipeline.analysis import compute_expires_at
 from etfpulse.pipeline.detectors import ALL_DETECTORS, DetectorHit
 from etfpulse.pipeline.ingestor import ingest_etf_flows
+from etfpulse.pipeline.prices import PriceSource, get_spot_price_with_source
 
 log = structlog.get_logger()
 
 _ASSETS: tuple[Literal["BTC", "ETH"], ...] = ("BTC", "ETH")
 
 
-async def build_signal(session: AsyncSession, hit: DetectorHit) -> Signal | None:
+async def build_signal(
+    session: AsyncSession,
+    hit: DetectorHit,
+    price_at_creation: Decimal | None = None,
+    price_source: PriceSource | None = None,
+) -> Signal | None:
     """Upsert a Signal from a detector hit; enrich with AI analysis if available.
 
     Returns the persisted Signal on a NEW insert, or None if a row with the
@@ -54,18 +66,32 @@ async def build_signal(session: AsyncSession, hit: DetectorHit) -> Signal | None
     returns None, the Signal stays in the DB with NULL ai_analysis. The
     caller should not retry the AI call here — that's the next daily cycle's
     problem (and a future enricher job's, if we add one).
+
+    `price_at_creation` + `price_source` (issue #34): the caller is expected
+    to fetch once per asset per cycle via `pipeline.prices` and pass the
+    matching price in here. If `price_at_creation` is None (both providers
+    failed), the Signal persists with NULL price — the backfill script
+    picks it up later. The source string, when present, is persisted into
+    `trigger_data["price_source"]` so Stage 08 can match the provider on
+    outcome evaluation.
     """
+    # Stuff price_source into trigger_data — JSONB column, no migration.
+    # Defensive copy so we don't mutate the DetectorHit's data.
+    trigger_data_with_source = dict(hit.trigger_data)
+    if price_source is not None:
+        trigger_data_with_source["price_source"] = price_source
+
     stmt = (
         insert(Signal)
         .values(
             signal_type=hit.signal_type,
             asset=hit.asset,
-            trigger_data=hit.trigger_data,
+            trigger_data=trigger_data_with_source,
             fingerprint=hit.fingerprint,
             signal_date=hit.signal_date,
-            # price_at_creation, ai_analysis, confidence, expires_at all NULL
-            # at insert. Updated below if AI succeeds. price stays NULL until
-            # issue #34 lands.
+            price_at_creation=price_at_creation,
+            # ai_analysis, confidence, expires_at NULL at insert; updated
+            # below if AI enrichment succeeds.
         )
         .on_conflict_do_nothing(index_elements=["fingerprint", "signal_date"])
         .returning(Signal.id)
@@ -128,6 +154,8 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "ingested": {},
         "ingest_errors": [],
+        "prices": {},
+        "price_errors": [],
         "detectors_run": 0,
         "detector_errors": [],
         "signals_new": 0,
@@ -150,6 +178,23 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             )
             summary["ingest_errors"].append((asset, type(exc).__name__))
 
+    # --- Spot prices (issue #34) --------------------------------------------
+    # One fetch per asset at the top of the cycle. Both failures are
+    # non-fatal: missing prices result in NULL price_at_creation, which the
+    # backfill script can reconcile later from kline history. We don't
+    # want a spot-price outage to silently degrade the whole pipeline.
+    prices: dict[str, tuple[Decimal, PriceSource]] = {}
+    for asset in _ASSETS:
+        result = await get_spot_price_with_source(asset)
+        if result is not None:
+            prices[asset] = result
+            summary["prices"][asset] = {
+                "source": result[1],
+                "price": str(result[0]),
+            }
+        else:
+            summary["price_errors"].append(asset)
+
     # --- Detection + signal build ------------------------------------------
     for detector in ALL_DETECTORS:
         summary["detectors_run"] += 1
@@ -169,7 +214,12 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             continue
 
         for hit in hits:
-            signal = await build_signal(session, hit)
+            price_tuple = prices.get(hit.asset)
+            price = price_tuple[0] if price_tuple else None
+            source = price_tuple[1] if price_tuple else None
+            signal = await build_signal(
+                session, hit, price_at_creation=price, price_source=source
+            )
             if signal is None:
                 summary["signals_duplicate"] += 1
             else:

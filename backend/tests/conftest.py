@@ -31,8 +31,13 @@ _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 
 @pytest.fixture(scope="session", autouse=True)
 def _force_fixture_mode() -> None:
-    """Make the SoSoValue adapter serve fixtures for every test."""
+    """Make the SoSoValue and Binance adapters serve fixtures for every test.
+
+    Issue #34 added the Binance fallback — same contract, same autouse flag,
+    so no test accidentally hits live HTTP during a run.
+    """
     settings.sosovalue_use_fixtures = True
+    settings.binance_use_fixtures = True
 
 
 @pytest.fixture(scope="session", autouse=True)
