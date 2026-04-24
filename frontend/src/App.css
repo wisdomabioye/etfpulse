@@ -1,7 +1,0 @@
-/* Intentionally empty.
- *
- * Stage 6c (#73-#74) builds layout + signal primitives in
- * src/components/. Stage 6d (#75-#77) replaces App.tsx with the router
- * + page tree. Component-level styles live next to their components
- * (CSS modules or styled JSX, decided at the component-build phase).
- */

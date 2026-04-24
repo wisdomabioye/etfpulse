@@ -4,13 +4,20 @@ No auth by design for Wave 1 (landing page is public). See open_issues.md #43.
 
 Query shape:
     GET /api/signals?asset=BTC&signal_type=flow_anomaly&confidence_min=7
-                    &include_expired=false&cursor=<iso>|<id>&limit=20
+                    &include_expired=false&sort=newest|oldest
+                    &cursor=<iso>|<id>&limit=20
     GET /api/signals/{id}
 
 Single SQL roundtrip for the list — signal + outcome_id (LEFT JOIN) +
 alerted_to (correlated scalar subquery). LIMIT limit+1 detects "has more"
 without a second COUNT query. Composite cursor `(created_at, id)` breaks
 ties on same-millisecond inserts.
+
+Cursor semantics are sort-direction dependent. For `newest` (DESC) the
+comparison is `(created_at, id) < cursor`; for `oldest` (ASC) it is `>`.
+Switching sort invalidates any existing cursor — clients must restart
+pagination from page 1 on sort change (TanStack's useInfiniteQuery does
+this automatically when the sort value enters the queryKey).
 """
 
 from __future__ import annotations
@@ -39,6 +46,7 @@ router = APIRouter(prefix="/signals", tags=["signals"])
 
 AssetQuery = Literal["BTC", "ETH"]
 SignalTypeQuery = Literal["flow_anomaly", "magnitude", "acceleration", "divergence", "regime_shift"]
+SortQuery = Literal["newest", "oldest"]
 
 
 @router.get("", response_model=PaginatedSignals)
@@ -47,11 +55,12 @@ async def list_signals(
     signal_type: SignalTypeQuery | None = Query(default=None),
     confidence_min: int | None = Query(default=None, ge=1, le=10),
     include_expired: bool = Query(default=False),
+    sort: SortQuery = Query(default="newest"),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
 ) -> PaginatedSignals:
-    """Reverse-chron cursor-paginated feed."""
+    """Cursor-paginated feed. `sort` flips ORDER BY + cursor comparison direction."""
     now = datetime.now(UTC)
 
     # Per-row `alerted_to` as a correlated scalar subquery — one query total.
@@ -63,10 +72,15 @@ async def list_signals(
         .label("alerted_to")
     )
 
+    asc_order = sort == "oldest"
+
     stmt = (
         select(Signal, SignalOutcome.id.label("outcome_id"), alerted_to_subq)
         .outerjoin(SignalOutcome, SignalOutcome.signal_id == Signal.id)
-        .order_by(Signal.created_at.desc(), Signal.id.desc())
+        .order_by(
+            Signal.created_at.asc() if asc_order else Signal.created_at.desc(),
+            Signal.id.asc() if asc_order else Signal.id.desc(),
+        )
         # +1 to detect has-more without a separate COUNT query.
         .limit(limit + 1)
     )
@@ -89,17 +103,26 @@ async def list_signals(
                 detail="invalid cursor",
             )
         cursor_ts, cursor_id = parsed
-        # Composite cursor — "(created_at, id) < (cursor_ts, cursor_id)"
-        # expanded as OR (... AND ...). Correct tie-break on created_at
-        # collisions from bulk fan-outs. Explicit form (not `tuple_`)
-        # because SQLAlchemy's row-value comparison complains about mixing
-        # raw Python values with column expressions at the type level.
-        stmt = stmt.where(
-            or_(
-                Signal.created_at < cursor_ts,
-                and_(Signal.created_at == cursor_ts, Signal.id < cursor_id),
+        # Composite cursor — direction flipped by sort.
+        # newest: (created_at, id) < cursor → older rows come next
+        # oldest: (created_at, id) > cursor → newer rows come next
+        # Explicit OR form (not `tuple_`) because SQLAlchemy's row-value
+        # comparison complains about mixing raw Python values with column
+        # expressions at the type level.
+        if asc_order:
+            stmt = stmt.where(
+                or_(
+                    Signal.created_at > cursor_ts,
+                    and_(Signal.created_at == cursor_ts, Signal.id > cursor_id),
+                )
             )
-        )
+        else:
+            stmt = stmt.where(
+                or_(
+                    Signal.created_at < cursor_ts,
+                    and_(Signal.created_at == cursor_ts, Signal.id < cursor_id),
+                )
+            )
 
     rows = (await session.execute(stmt)).all()
 

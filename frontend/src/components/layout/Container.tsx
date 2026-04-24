@@ -3,24 +3,21 @@ import type { ReactNode } from 'react';
 interface ContainerProps {
   children: ReactNode;
   className?: string;
-  /** Max-width override — defaults to 1200px (dashboard) but the detail
-   * page uses 780px per the mock. */
-  maxWidth?: 'default' | 'narrow';
+  /** 'narrow' caps width at 780px for the signal detail reading layout. */
+  narrow?: boolean;
 }
 
-/**
- * Centered max-width wrapper with responsive horizontal padding.
+/** Horizontal-padding wrapper for sections inside the frame.
  *
- * - default: 1200px max (home, feed)
- * - narrow:  780px max (signal detail reading layout, per mock spec)
- *
- * Horizontal padding: 20px on mobile, 28px on tablet+, matching the mock's
- * TopNav padding so content aligns with the nav items.
+ * Page-level max-width lives on the outer shell in App.tsx (max-w-7xl).
+ * Inside the frame, sections just need consistent horizontal padding.
+ * `narrow` caps at 780px for reading-layout contexts (signal detail).
  */
-export function Container({ children, className = '', maxWidth = 'default' }: ContainerProps) {
-  const maxW = maxWidth === 'narrow' ? 'max-w-[780px]' : 'max-w-[1200px]';
+export function Container({ children, className = '', narrow = false }: ContainerProps) {
   return (
-    <div className={`${maxW} mx-auto px-5 md:px-7 ${className}`}>
+    <div
+      className={`${narrow ? 'max-w-[780px] mx-auto ' : ''}px-6 sm:px-8 ${className}`}
+    >
       {children}
     </div>
   );

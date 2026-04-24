@@ -109,11 +109,14 @@ export interface PaginatedSignals {
 // Filters (query params for /api/signals)
 // ---------------------------------------------------------------------------
 
+export type SortOrder = 'newest' | 'oldest';
+
 export interface SignalFilters {
   asset?: AssetSymbol;
   signal_type?: SignalType;
   confidence_min?: number;
   include_expired?: boolean;
+  sort?: SortOrder;
   limit?: number;
 }
 

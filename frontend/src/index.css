@@ -16,17 +16,19 @@
 @import "tailwindcss";
 
 @theme {
-  /* Surfaces */
-  --color-bg-0: #09090a;
+  /* Surfaces — spread out for more visual separation than the mock's values.
+   * Mock's bg-1→bg-2 was only 3 RGB points apart; cards merged into the page.
+   * Bumping contrast makes the card/page boundary read cleanly. */
+  --color-bg-0: #050506;
   --color-bg-1: #0a0a0b;
-  --color-bg-2: #111113;
-  --color-bg-3: #17171a;
-  --color-bg-4: #1c1c1f;
+  --color-bg-2: #141417;
+  --color-bg-3: #1b1b1f;
+  --color-bg-4: #23232a;
 
-  /* Borders */
-  --color-border-1: #1f1f23;
-  --color-border-2: #27272a;
-  --color-border-3: #3f3f46;
+  /* Borders — same direction, a hair brighter for visible card outlines. */
+  --color-border-1: #222226;
+  --color-border-2: #2d2d33;
+  --color-border-3: #45454d;
 
   /* Text */
   --color-text-1: #fafafa;
@@ -91,71 +93,71 @@
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
-/* Global reset — minimal. Box-sizing on every element + zero default margin
- * makes layout deterministic. Body scoped to the dark surface. */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* Global reset + element defaults live in @layer base so Tailwind's utility
+ * layer (which comes after base in @layer order) can override them. Without
+ * the layer, the universal `margin: 0` is unlayered and silently beats
+ * `.mx-auto { margin-inline: auto }` — centering would fail at every
+ * viewport regardless of max-width. Per CSS Cascade Level 5, unlayered
+ * rules take precedence over layered rules. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-html,
-body {
-  background: var(--bg-1);
-  color: var(--text-1);
-  font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.5;
-  letter-spacing: -0.005em;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  min-height: 100vh;
-}
+  html,
+  body {
+    /* bg-0 is the outer "desktop" surface; the app frame (bg-1) floats above
+     * it. Two-layer surface gives the terminal-window feel per mock's
+     * DesktopFrame on bg-0 → inner page on bg-1 layering. */
+    background: var(--bg-0);
+    color: var(--text-1);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+  }
 
-#root {
-  min-height: 100vh;
-}
+  #root {
+    min-height: 100vh;
+  }
 
-/* Anchor defaults — accent tint, no underline by default. Components that
- * want underlined links override per-context. */
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
 
-a:hover {
-  text-decoration: underline;
-}
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--mono);
+  }
 
-/* Code + monospace defaults — inherit token. */
-code,
-kbd,
-samp,
-pre {
-  font-family: var(--mono);
-}
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 0;
+  }
 
-/* Form controls — inherit so dark surface doesn't get default light bg. */
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 0;
-}
+  button {
+    cursor: pointer;
+  }
 
-button {
-  cursor: pointer;
-}
-
-/* Lists — strip default padding. Components own their list styling. */
-ul,
-ol {
-  list-style: none;
+  ul,
+  ol {
+    list-style: none;
+  }
 }
