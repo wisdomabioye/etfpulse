@@ -52,6 +52,16 @@ class Signal(Base):
     confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=SignalStatus.PENDING, nullable=False)
     price_at_creation: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    # Provenance tag for price_at_creation. NULL only when the price itself is NULL
+    # (both providers failed). Stage 8 uses this to decide whether 24h/72h klines
+    # come from the same source as entry — mixing providers risks micro-skew.
+    price_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Hardcoded "v1" prior to Stage 07; bumped only on prompt-structure changes
+    # that affect AI calibration (not wording edits). Used by the track-record
+    # query to compare apples-to-apples across prompt revisions (issue #32).
+    ai_prompt_version: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="v1"
+    )
     # 32 hex chars = 128 bits; combined with signal_date, collisions are not a concern.
     fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
     signal_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -65,6 +75,10 @@ class Signal(Base):
         CheckConstraint(
             "confidence IS NULL OR confidence BETWEEN 1 AND 10",
             name="ck_signals_confidence_range",
+        ),
+        CheckConstraint(
+            "ai_prompt_version ~ '^v[0-9]+$'",
+            name="ck_signals_ai_prompt_version_format",
         ),
         Index("ix_signals_fingerprint_date", "fingerprint", "signal_date", unique=True),
         Index("ix_signals_created", "created_at"),

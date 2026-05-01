@@ -34,6 +34,44 @@ log = structlog.get_logger()
 # Constants
 # ---------------------------------------------------------------------------
 
+# How to onboard a new asset (e.g. SOL, BNB)
+# -------------------------------------------
+# Wave 1 hardcodes BTC + ETH because that's all SoSoValue's ETF-flows endpoint
+# covers today. Adding a third asset is a multi-file touch — these are every
+# location that needs editing, in the order a change naturally propagates from
+# adapter → pipeline → API → UI:
+#
+#   backend/etfpulse/adapters/sosovalue.py
+#     - add <ASSET>_CURRENCY_ID constant (this file, just below)
+#     - extend _currency_id() resolver — drop the BTC/ETH ternary for a dict
+#     - widen the `Literal["BTC", "ETH"]` annotations on get_spot_price /
+#       get_daily_klines / get_etf_flows
+#   backend/etfpulse/adapters/binance.py
+#     - add an entry to _SYMBOL (e.g. "SOL": "SOLUSDT")
+#     - widen the `Literal["BTC", "ETH"]` annotations
+#   backend/etfpulse/pipeline/signal_builder.py
+#     - extend _ASSETS tuple + Literal
+#   backend/etfpulse/pipeline/prices.py
+#     - extend the `Asset` Literal alias
+#   backend/etfpulse/api/routes/signals.py
+#     - extend the `AssetQuery` Literal alias
+#   backend/etfpulse/bot/handlers/_common.py
+#     - add to _VALID_ASSETS set
+#   backend/fixtures/
+#     - add sosovalue_etf_flows_<asset>.json, sosovalue_market_snapshot_<asset>.json,
+#       sosovalue_klines_<asset>.json, binance_klines_<asset>.json
+#   frontend/src/api/types.ts
+#     - extend the `AssetSymbol` union
+#   frontend/src/components/signals/AssetBadge.tsx
+#     - add a brand-color branch (replace the BTC/ETH ternary with a switch
+#       or token map at this point)
+#   frontend/src/components/signals/FilterBar.tsx
+#     - add a FilterPill for the new asset
+#
+# When this list gets hit for real OR a 3rd asset arrives, extract a registry
+# (e.g. etfpulse/models/assets.py) so all of the above collapse into one source
+# of truth. Don't abstract until then — premature registries hide the seams.
+
 BTC_CURRENCY_ID = "1673723677362319866"
 ETH_CURRENCY_ID = "1673723677362319867"
 

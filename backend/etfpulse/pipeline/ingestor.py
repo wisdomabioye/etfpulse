@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.adapters.sosovalue import sosovalue_client
-from etfpulse.models import ETFFlow, NewsItem
+from etfpulse.models import ETFFlow, NewsCategory, NewsItem
 
 log = structlog.get_logger()
 
@@ -63,18 +63,20 @@ async def ingest_etf_flows(
 
 async def ingest_news(
     session: AsyncSession,
-    category: int = 3,
+    category: NewsCategory = NewsCategory.INSTITUTION,
     page_size: int = 20,
 ) -> int:
     """Fetch news for a category and insert new rows. Returns # inserted.
 
-    Defaults to category 3 (Institution) since that's what the regime monitor
-    and signal explanations rely on. Other categories can be fetched by
-    calling with `category=1` (News), `7` (Announcement), etc.
+    Defaults to `NewsCategory.INSTITUTION` (=3) since that's what the regime
+    monitor and signal explanations rely on. Other categories can be fetched
+    by passing `NewsCategory.NEWS`, `ANNOUNCEMENT`, etc.
     """
+    # NewsCategory is IntEnum, so it's directly assignable to `int` params.
+    # Log the int value (not the enum repr) so downstream JSON consumers stay stable.
     articles = await sosovalue_client.get_news(category=category, page_size=page_size)
     if not articles:
-        log.info("ingest_news_empty", category=category)
+        log.info("ingest_news_empty", category=int(category))
         return 0
 
     rows = [
@@ -102,7 +104,7 @@ async def ingest_news(
     inserted = len(result.scalars().all())
     log.info(
         "ingest_news_done",
-        category=category,
+        category=int(category),
         fetched=len(articles),
         inserted=inserted,
     )

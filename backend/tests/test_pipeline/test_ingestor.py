@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
-from etfpulse.models import ETFFlow, NewsItem
+from etfpulse.models import ETFFlow, NewsCategory, NewsItem
 from etfpulse.pipeline.ingestor import (
     ingest_etf_flows,
     ingest_news,
@@ -63,7 +63,7 @@ async def test_ingest_etf_flows_separates_assets(db_session):
 
 
 async def test_ingest_news_inserts_and_strips_html(db_session):
-    inserted = await ingest_news(db_session, category=3)
+    inserted = await ingest_news(db_session, category=NewsCategory.INSTITUTION)
     assert inserted >= 2
 
     rows = (await db_session.execute(select(NewsItem))).scalars().all()
@@ -86,8 +86,8 @@ async def test_ingest_news_inserts_and_strips_html(db_session):
 
 
 async def test_ingest_news_is_idempotent(db_session):
-    first = await ingest_news(db_session, category=3)
-    second = await ingest_news(db_session, category=3)
+    first = await ingest_news(db_session, category=NewsCategory.INSTITUTION)
+    second = await ingest_news(db_session, category=NewsCategory.INSTITUTION)
     assert first >= 2
     assert second == 0
 

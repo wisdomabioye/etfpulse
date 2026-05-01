@@ -4,7 +4,13 @@ from etfpulse.models.etf import ETFFlow
 from etfpulse.models.news import NewsCategory, NewsItem
 from etfpulse.models.order import Order, OrderSide, OrderStatus, OrderType, TimeInForce, Venue
 from etfpulse.models.position import Position, PositionSide, PositionStatus
-from etfpulse.models.regime import CircuitBreaker, CircuitBreakerTrigger, RegimeSnapshot
+from etfpulse.models.regime import (
+    CircuitBreaker,
+    CircuitBreakerTrigger,
+    MarketRegime,
+    RegimeSnapshot,
+    SignalPosture,
+)
 from etfpulse.models.signal import (
     Signal,
     SignalDirection,
@@ -43,6 +49,8 @@ __all__ = [
     "NewsCategory",
     # Regime
     "RegimeSnapshot",
+    "MarketRegime",
+    "SignalPosture",
     "CircuitBreaker",
     "CircuitBreakerTrigger",
     # Delivery
