@@ -86,6 +86,29 @@ class TestDetect:
         fingerprints = {h.fingerprint for h in hits}
         assert len(fingerprints) == len(hits)
 
+    async def test_re_run_is_idempotent(self, db_session, detector):
+        """Calling detect twice over the same DB state produces equivalent hits.
+
+        The (fingerprint, signal_date) unique index on `signals` makes a
+        downstream re-insert a no-op, so the detector itself is allowed to
+        return the same hit set every time. This pins that property.
+        """
+        now = datetime.now(UTC)
+        db_session.add(_snapshot(captured_at=now - timedelta(days=1), regime=MarketRegime.MARKDOWN))
+        db_session.add(_snapshot(captured_at=now, regime=MarketRegime.ACCUMULATION))
+        await db_session.flush()
+
+        first = await detector.detect(db_session)
+        second = await detector.detect(db_session)
+
+        # Same number of hits, same fingerprints (the idempotency key).
+        assert len(first) == len(second) == 2
+        first_fps = sorted(h.fingerprint for h in first)
+        second_fps = sorted(h.fingerprint for h in second)
+        assert first_fps == second_fps
+        # And the per-asset structure repeats.
+        assert sorted(h.asset for h in first) == sorted(h.asset for h in second) == ["BTC", "ETH"]
+
     async def test_legacy_null_regime_is_skipped(self, db_session, detector):
         """A pre-classifier snapshot (regime IS NULL) cannot anchor a comparison
         — must not crash, must return no hits."""

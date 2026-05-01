@@ -59,9 +59,7 @@ class Signal(Base):
     # Hardcoded "v1" prior to Stage 07; bumped only on prompt-structure changes
     # that affect AI calibration (not wording edits). Used by the track-record
     # query to compare apples-to-apples across prompt revisions (issue #32).
-    ai_prompt_version: Mapped[str] = mapped_column(
-        String(10), nullable=False, server_default="v1"
-    )
+    ai_prompt_version: Mapped[str] = mapped_column(String(10), nullable=False, server_default="v1")
     # 32 hex chars = 128 bits; combined with signal_date, collisions are not a concern.
     fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
     signal_date: Mapped[date] = mapped_column(Date, nullable=False)

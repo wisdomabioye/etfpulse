@@ -361,8 +361,16 @@ class TestFanOutPendingWorker:
         # outer commit we did at setup.
         await db_session.rollback()
 
-    async def test_skips_already_alerted(self, monkeypatch):
-        """ALERTED signals must NOT be re-processed."""
+    async def test_skips_already_alerted(self, monkeypatch, db_session):
+        """ALERTED signals must NOT be re-processed.
+
+        Uses the `db_session` test fixture + a savepoint yielder (same pattern
+        as `test_processes_pending_signals`) so the wrapper sees the isolated
+        test DB rather than the dev DB. Without this, dev-DB rows leak in and
+        the assertion fails non-deterministically.
+        """
+        from contextlib import asynccontextmanager
+
         from etfpulse.pipeline.scheduler import _fan_out_pending_with_session
 
         called_with: list[int] = []
@@ -373,9 +381,13 @@ class TestFanOutPendingWorker:
 
         monkeypatch.setattr("etfpulse.pipeline.scheduler.fan_out_signal", _stub_fan_out)
 
-        # Use an async_session yielder that returns an empty-query session.
-        # We assert fan_out_signal wasn't called since no PENDING signals exist
-        # (the autouse _schema fixture gives us a clean DB).
+        @asynccontextmanager
+        async def _session_yielder():
+            async with db_session.begin_nested():
+                yield db_session
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.async_session", _session_yielder)
+
         summary = await _fan_out_pending_with_session()
 
         assert summary is not None

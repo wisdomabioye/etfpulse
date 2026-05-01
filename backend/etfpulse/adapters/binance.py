@@ -104,9 +104,7 @@ class BinanceClient:
     def __init__(self) -> None:
         self.base_url = settings.binance_base_url.rstrip("/")
         self._spot_cache: TTLCache[str, Decimal] = TTLCache(maxsize=5, ttl=60)
-        self._klines_cache: TTLCache[str, list[BinanceKline]] = TTLCache(
-            maxsize=20, ttl=3600
-        )
+        self._klines_cache: TTLCache[str, list[BinanceKline]] = TTLCache(maxsize=20, ttl=3600)
 
     @property
     def use_fixtures(self) -> bool:
@@ -130,9 +128,7 @@ class BinanceClient:
                 status=response.status_code,
                 body=response.text[:500],
             )
-            raise BinanceError(
-                f"HTTP {response.status_code} on {path}: {response.text[:200]}"
-            )
+            raise BinanceError(f"HTTP {response.status_code} on {path}: {response.text[:200]}")
 
         try:
             return response.json()

@@ -76,13 +76,15 @@ SIGNALS: list[dict] = [
             "headline": "BTC inflows snap 5-day streak — sharp $78M reversal",
             "reasoning": [
                 "Five consecutive inflow days abruptly reversed by a $78.4M outflow.",
-                "The -2.4σ break magnitude is consistent with a single-fund de-risking move, not retail panic.",
+                "The -2.4σ break magnitude is consistent with a single-fund de-risking move, "
+                "not retail panic.",
                 "Streak length of 5 days puts this in the 90th percentile for 2026 YTD.",
             ],
             "confidence": 9,
             "risks": [
                 "Single-day reversal could be noise from quarter-end rebalancing.",
-                "ETH flows remain positive — divergence may resolve by ETH weakening, not BTC strengthening short.",
+                "ETH flows remain positive — divergence may resolve by ETH weakening, "
+                "not BTC strengthening short.",
             ],
             "suggested_action": "consider short",
             "time_horizon": "swing",
@@ -110,7 +112,8 @@ SIGNALS: list[dict] = [
             "headline": "ETH inflows breach $300M — largest single day of Q2",
             "reasoning": [
                 "Single-day net inflow of $312.5M is 3.1σ above the 30-day mean.",
-                "Over half of flow concentrated in ETHA, suggesting broker-advised rotation rather than basis trade.",
+                "Over half of flow concentrated in ETHA, suggesting broker-advised rotation "
+                "rather than basis trade.",
                 "Comparable Q1 spikes preceded multi-week ETH rallies of 8-14%.",
             ],
             "confidence": 8,
@@ -143,7 +146,8 @@ SIGNALS: list[dict] = [
             "headline": "Flow acceleration ambiguous — wait for confirmation",
             "reasoning": [
                 "3-day rate of change is positive but within the historical noise band.",
-                "Underlying spot price action lags the flow signal — divergence reduces conviction.",
+                "Underlying spot price action lags the flow signal — "
+                "divergence reduces conviction.",
             ],
             "confidence": 4,
             "risks": [
@@ -174,7 +178,8 @@ SIGNALS: list[dict] = [
             "headline": "ETH price–flow divergence — flows up, spot down 2.7%",
             "reasoning": [
                 "30-day correlation of 0.78 has collapsed to -0.21 over the last week.",
-                "Institutional flows continue positive while spot is drifting lower — classic early-accumulation pattern.",
+                "Institutional flows continue positive while spot is drifting lower — "
+                "classic early-accumulation pattern.",
                 "Similar divergences in 2025 resolved with spot catching up within 5-9 days.",
             ],
             "confidence": 7,
@@ -301,7 +306,8 @@ SIGNALS: list[dict] = [
             "headline": "BTC flow/price divergence weakens but persists",
             "reasoning": [
                 "Spot up 1.8% while ETF flows net negative for the third consecutive day.",
-                "Correlation breakdown less severe than last week's signal but directionally intact.",
+                "Correlation breakdown less severe than last week's signal "
+                "but directionally intact.",
             ],
             "confidence": 5,
             "risks": [
@@ -331,11 +337,13 @@ SIGNALS: list[dict] = [
             "headline": "Weak BTC flow deceleration — low conviction",
             "reasoning": [
                 "ROC within noise band; no statistically clean acceleration break.",
-                "Published anyway for track-record transparency — low-confidence signals still evaluated.",
+                "Published anyway for track-record transparency — "
+                "low-confidence signals still evaluated.",
             ],
             "confidence": 3,
             "risks": [
-                "Low-confidence signals have a ~40% historical hit rate; position sizing should reflect that.",
+                "Low-confidence signals have a ~40% historical hit rate; "
+                "position sizing should reflect that.",
             ],
             "suggested_action": "wait",
             "time_horizon": "scalp",
@@ -394,7 +402,8 @@ SIGNALS: list[dict] = [
             ],
             "confidence": 2,
             "risks": [
-                "Ignore-this-signal-on-its-own risk: confidence floor in delivery prefs exists for a reason.",
+                "Ignore-this-signal-on-its-own risk: confidence floor in delivery prefs "
+                "exists for a reason.",
             ],
             "suggested_action": "wait",
             "time_horizon": "scalp",

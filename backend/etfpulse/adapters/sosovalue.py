@@ -467,9 +467,7 @@ class SoSoValueClient:
         # If the inference is wrong, `data` is None/empty → explicit error.
         data = raw.get("data") if isinstance(raw, dict) else None
         if not isinstance(data, dict):
-            raise SoSoValueError(
-                f"market-snapshot for {asset}: unexpected response envelope"
-            )
+            raise SoSoValueError(f"market-snapshot for {asset}: unexpected response envelope")
 
         snapshot = MarketSnapshot.model_validate(data)
         self._spot_cache[cache_key] = snapshot.price
@@ -514,9 +512,7 @@ class SoSoValueClient:
         # Inferred envelope: `{"code": 0, "data": [{...}, ...], ...}`.
         data = raw.get("data") if isinstance(raw, dict) else None
         if not isinstance(data, list):
-            raise SoSoValueError(
-                f"klines for {asset}: unexpected response envelope"
-            )
+            raise SoSoValueError(f"klines for {asset}: unexpected response envelope")
 
         klines = [KlinePoint.model_validate(item) for item in data]
         self._klines_cache[cache_key] = klines
