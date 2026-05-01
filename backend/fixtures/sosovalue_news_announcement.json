@@ -1,0 +1,72 @@
+{
+    "code": 0,
+    "message": "success",
+    "data": {
+        "page": 1,
+        "page_size": 2,
+        "total": "143",
+        "list": [
+            {
+                "id": "2046900000000000001",
+                "source_link": "https://sosovalue.com/research/2046900000000000001?from=888001",
+                "original_link": "https://www.sec.gov/news/press-release/2026-04-21-bitcoin-etf",
+                "release_time": "1776784000000",
+                "title": "SEC approves spot Bitcoin ETF in-kind redemptions",
+                "content": "ANNOUNCEMENT: SEC approves spot Bitcoin ETF in-kind redemptions, reducing creation/redemption friction and tightening tracking error vs NAV.<br>",
+                "author": "SECGov",
+                "author_description": "U.S. Securities and Exchange Commission",
+                "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/04/28/cbc4e01c-bff6-4cb5-b0cf-33988e9c0e8b.jpg",
+                "impression_count": "92000",
+                "like_count": "1240",
+                "reply_count": "210",
+                "retweet_count": "560",
+                "category": 7,
+                "feature_image": null,
+                "nick_name": "U.S. SEC",
+                "is_blue_verified": true,
+                "verified_type": "",
+                "matched_currencies": [
+                    {
+                        "currency_id": "1673723677362319866",
+                        "symbol": "BTC",
+                        "name": "Bitcoin"
+                    }
+                ],
+                "tags": ["SEC", "ETF"],
+                "media_info": [],
+                "quote_info": null
+            },
+            {
+                "id": "2046900000000000002",
+                "source_link": "https://sosovalue.com/research/2046900000000000002?from=888001",
+                "original_link": "https://www.cftc.gov/PressRoom/PressReleases/9050-26",
+                "release_time": "1776697500000",
+                "title": "CFTC issues no-action letter on staked-ETH ETF custody",
+                "content": "Announcement: CFTC issues no-action letter clarifying staked-ETH ETF custody treatment for institutional issuers.<br>",
+                "author": "CFTC",
+                "author_description": "Commodity Futures Trading Commission",
+                "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/04/28/cftc-avatar.jpg",
+                "impression_count": "44000",
+                "like_count": "612",
+                "reply_count": "98",
+                "retweet_count": "240",
+                "category": 7,
+                "feature_image": null,
+                "nick_name": "CFTC",
+                "is_blue_verified": true,
+                "verified_type": "",
+                "matched_currencies": [
+                    {
+                        "currency_id": "1673723677362319867",
+                        "symbol": "ETH",
+                        "name": "Ethereum"
+                    }
+                ],
+                "tags": ["CFTC", "Staked ETH"],
+                "media_info": [],
+                "quote_info": null
+            }
+        ]
+    },
+    "details": null
+}

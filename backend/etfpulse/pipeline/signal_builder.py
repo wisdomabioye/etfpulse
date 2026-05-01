@@ -6,8 +6,10 @@ Two functions:
         `(fingerprint, signal_date)` upsert. Optionally enriches with AI
         analysis (Resolution R6 — never blocks). Persists the spot price
         from the price composer when provided.
-    `run_daily_cycle(session)` — full orchestration: ingest → fetch prices
-        → detect → build_signal per hit. Returns a summary dict.
+    `run_daily_cycle(session)` — full orchestration: ingest flows →
+        ingest news (INSTITUTION + ANNOUNCEMENT) → fetch spot prices →
+        classify + persist regime snapshot → run all detectors →
+        build_signal per hit. Returns a summary dict.
 
 Anti-drift rules installed by this stage:
     D12 — `build_signal` calls AI OPTIONALLY: upsert first (so re-runs are
@@ -32,6 +34,7 @@ Stage 07 migration) so Stage 08 outcome evaluation can pin the +24h /
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -41,11 +44,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.adapters.openrouter import openrouter_client
 from etfpulse.adapters.sosovalue import SoSoValueError
-from etfpulse.models import Signal
+from etfpulse.models import NewsCategory, RegimeSnapshot, Signal
 from etfpulse.pipeline.analysis import compute_expires_at
 from etfpulse.pipeline.detectors import ALL_DETECTORS, DetectorHit
-from etfpulse.pipeline.ingestor import ingest_etf_flows
+from etfpulse.pipeline.ingestor import ingest_etf_flows, ingest_news
 from etfpulse.pipeline.prices import PriceSource, get_spot_price_with_source
+from etfpulse.pipeline.regime_monitor import classify_regime
+
+# Categories ingested every cycle. INSTITUTION feeds AI explanations of
+# institutional flow context; ANNOUNCEMENT picks up regulator/issuer news that
+# moves macro posture. Other categories (KOL, crypto-stock) are too noisy to
+# justify the quota cost in Phase 1.
+_NEWS_CATEGORIES: tuple[NewsCategory, ...] = (
+    NewsCategory.INSTITUTION,
+    NewsCategory.ANNOUNCEMENT,
+)
+
+# JSONB wrapper key inside `regime_snapshots.macro_events`. The column is
+# typed `dict | None` (per SQLAlchemy mapping), so a list of event labels is
+# stored as `{<key>: [...]}`. Pinned as a constant so /api/regime (#103) and
+# any future consumer agree on the shape rather than hardcoding the string.
+REGIME_MACRO_EVENTS_KEY = "events_nearby"
 
 log = structlog.get_logger()
 
@@ -139,10 +158,16 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
         1. Ingest ETF flows for each asset. Any `SoSoValueError` (quota, rate
            limit, network, 5xx) is caught and recorded — the cycle continues
            with whatever data is already in the DB. Resolution R10.
-        2. Iterate `ALL_DETECTORS`. Each detector internally handles its own
+        2. Ingest news for each category in `_NEWS_CATEGORIES`. Same D13
+           catch-and-continue contract.
+        3. Fetch spot prices once per asset (issue #34).
+        4. Classify the current market regime, persist a `RegimeSnapshot`.
+           The snapshot must land BEFORE detectors run so `RegimeShiftDetector`
+           can compare it against the prior snapshot.
+        5. Iterate `ALL_DETECTORS`. Each detector internally handles its own
            assets. Per D13, every `detect()` call is wrapped in try/except
            so one buggy detector cannot kill the cycle.
-        3. For each hit, call `build_signal`. New rows are counted as
+        6. For each hit, call `build_signal`. New rows are counted as
            `signals_new`; idempotent skips as `signals_duplicate`.
 
     The session is NOT committed (D14) — caller owns the transaction.
@@ -150,8 +175,12 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "ingested": {},
         "ingest_errors": [],
+        "news_ingested": {},
+        "news_errors": [],
         "prices": {},
         "price_errors": [],
+        "regime": None,
+        "regime_error": None,
         "detectors_run": 0,
         "detector_errors": [],
         "signals_new": 0,
@@ -160,7 +189,7 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
         "ai_failed": 0,
     }
 
-    # --- Ingestion ----------------------------------------------------------
+    # --- ETF flow ingestion -------------------------------------------------
     for asset in _ASSETS:
         try:
             count = await ingest_etf_flows(session, asset)
@@ -173,6 +202,24 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
                 error=str(exc),
             )
             summary["ingest_errors"].append((asset, type(exc).__name__))
+
+    # --- News ingestion (D13: per-category catch-and-continue) -------------
+    # News context feeds the AI prompt in Phase 2 and the regime classifier's
+    # velocity score today. A failed category does not abort the cycle —
+    # missing news results in a slightly less informed regime and a less
+    # contextual AI prompt, both of which degrade gracefully.
+    for category in _NEWS_CATEGORIES:
+        try:
+            count = await ingest_news(session, category=category)
+            summary["news_ingested"][category.name] = count
+        except SoSoValueError as exc:
+            log.warning(
+                "daily_cycle_news_ingest_failed",
+                category=int(category),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            summary["news_errors"].append((category.name, type(exc).__name__))
 
     # --- Spot prices (issue #34) --------------------------------------------
     # One fetch per asset at the top of the cycle. Both failures are
@@ -190,6 +237,42 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             }
         else:
             summary["price_errors"].append(asset)
+
+    # --- Regime classification + snapshot persistence -----------------------
+    # MUST run before detectors so RegimeShiftDetector can compare today's
+    # snapshot against the previous one. Failure is non-fatal: detectors that
+    # don't depend on the regime still run; RegimeShiftDetector silently
+    # skips when no snapshot exists.
+    try:
+        classification = await classify_regime(session)
+        snapshot = RegimeSnapshot(
+            captured_at=datetime.now(UTC),
+            regime=classification.regime.value,
+            signal_posture=classification.signal_posture.value,
+            confidence=classification.confidence,
+            reasoning=classification.reasoning,
+            macro_events=(
+                {REGIME_MACRO_EVENTS_KEY: classification.macro_events_nearby}
+                if classification.macro_events_nearby
+                else None
+            ),
+        )
+        session.add(snapshot)
+        await session.flush()  # assign id; commit stays the caller's job (D14)
+        summary["regime"] = {
+            "regime": classification.regime.value,
+            "signal_posture": classification.signal_posture.value,
+            "confidence": classification.confidence,
+            "macro_events_nearby": list(classification.macro_events_nearby),
+        }
+    except Exception as exc:
+        log.error(
+            "daily_cycle_regime_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            exc_info=exc,
+        )
+        summary["regime_error"] = type(exc).__name__
 
     # --- Detection + signal build ------------------------------------------
     for detector in ALL_DETECTORS:

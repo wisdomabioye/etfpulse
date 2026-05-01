@@ -204,7 +204,9 @@ class BinanceClient:
             raw = await self._request("/api/v3/klines", params=params)
 
         if not isinstance(raw, list):
-            raise BinanceError(f"unexpected klines response for {symbol}: type={type(raw).__name__}")
+            raise BinanceError(
+                f"unexpected klines response for {symbol}: type={type(raw).__name__}"
+            )
 
         klines = [BinanceKline.from_raw(cast(list[Any], row)) for row in raw]
         self._klines_cache[cache_key] = klines

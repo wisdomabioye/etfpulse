@@ -74,7 +74,14 @@ async def ingest_news(
     """
     # NewsCategory is IntEnum, so it's directly assignable to `int` params.
     # Log the int value (not the enum repr) so downstream JSON consumers stay stable.
-    articles = await sosovalue_client.get_news(category=category, page_size=page_size)
+    # In fixture mode, the adapter loads `sosovalue_news_{name}.json` — we
+    # forward the per-category fixture name so each category has distinct test
+    # data rather than every category sharing the institution fixture.
+    articles = await sosovalue_client.get_news(
+        category=category,
+        page_size=page_size,
+        fixture_name=f"sosovalue_news_{category.name.lower()}",
+    )
     if not articles:
         log.info("ingest_news_empty", category=int(category))
         return 0

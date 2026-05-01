@@ -339,8 +339,12 @@ class TestRunDailyCycle:
         expected_keys = {
             "ingested",
             "ingest_errors",
+            "news_ingested",
+            "news_errors",
             "prices",
             "price_errors",
+            "regime",
+            "regime_error",
             "detectors_run",
             "detector_errors",
             "signals_new",
