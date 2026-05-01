@@ -35,6 +35,26 @@ def upgrade() -> None:
         sa.Column("ai_prompt_version", sa.String(length=10), server_default="v1", nullable=False),
     )
 
+    # Data migration — Stage 07-P3 promotes price_source from a trigger_data
+    # JSONB key (Stage 04 stop-gap) to its own column. Copy the value, then
+    # strip the now-redundant key so there's a single source of truth. Idempotent:
+    # rows without the key get NULL (which the column allows). The downgrade
+    # mirrors this so a roll-back doesn't lose the provenance tag.
+    op.execute(
+        """
+        UPDATE signals
+        SET price_source = trigger_data->>'price_source'
+        WHERE trigger_data ? 'price_source'
+        """
+    )
+    op.execute(
+        """
+        UPDATE signals
+        SET trigger_data = trigger_data - 'price_source'
+        WHERE trigger_data ? 'price_source'
+        """
+    )
+
     # CHECK constraints (Alembic autogen does not detect these; added manually).
     op.create_check_constraint(
         "ck_regime_snapshots_regime_enum",
@@ -60,6 +80,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Reverse the data migration before dropping the column — write the
+    # column back into trigger_data so a roll-back doesn't lose provenance.
+    op.execute(
+        """
+        UPDATE signals
+        SET trigger_data = trigger_data || jsonb_build_object('price_source', price_source)
+        WHERE price_source IS NOT NULL
+        """
+    )
     op.drop_constraint("ck_signals_ai_prompt_version_format", "signals", type_="check")
     op.drop_constraint("ck_regime_snapshots_confidence_range", "regime_snapshots", type_="check")
     op.drop_constraint("ck_regime_snapshots_posture_enum", "regime_snapshots", type_="check")

@@ -25,8 +25,9 @@ Anti-drift rules installed by this stage:
 Issue #34 (resolved 2026-04-24): spot price is fetched once per asset at
 the start of every cycle via `pipeline.prices.get_spot_price_with_source`,
 which tries SoSoValue primary then Binance fallback. The source tag is
-stuffed into `Signal.trigger_data["price_source"]` so Stage 08 outcome
-evaluation can pin the +24h / +72h lookup to the same provider.
+persisted on `Signal.price_source` (a dedicated String column from the
+Stage 07 migration) so Stage 08 outcome evaluation can pin the +24h /
++72h lookup to the same provider.
 """
 
 from __future__ import annotations
@@ -71,25 +72,20 @@ async def build_signal(
     to fetch once per asset per cycle via `pipeline.prices` and pass the
     matching price in here. If `price_at_creation` is None (both providers
     failed), the Signal persists with NULL price — the backfill script
-    picks it up later. The source string, when present, is persisted into
-    `trigger_data["price_source"]` so Stage 08 can match the provider on
-    outcome evaluation.
+    picks it up later. The source string, when present, is persisted on the
+    dedicated `Signal.price_source` column so Stage 08 can match the
+    provider on outcome evaluation.
     """
-    # Stuff price_source into trigger_data — JSONB column, no migration.
-    # Defensive copy so we don't mutate the DetectorHit's data.
-    trigger_data_with_source = dict(hit.trigger_data)
-    if price_source is not None:
-        trigger_data_with_source["price_source"] = price_source
-
     stmt = (
         insert(Signal)
         .values(
             signal_type=hit.signal_type,
             asset=hit.asset,
-            trigger_data=trigger_data_with_source,
+            trigger_data=hit.trigger_data,
             fingerprint=hit.fingerprint,
             signal_date=hit.signal_date,
             price_at_creation=price_at_creation,
+            price_source=price_source,
             # ai_analysis, confidence, expires_at NULL at insert; updated
             # below if AI enrichment succeeds.
         )
@@ -217,9 +213,7 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             price_tuple = prices.get(hit.asset)
             price = price_tuple[0] if price_tuple else None
             source = price_tuple[1] if price_tuple else None
-            signal = await build_signal(
-                session, hit, price_at_creation=price, price_source=source
-            )
+            signal = await build_signal(session, hit, price_at_creation=price, price_source=source)
             if signal is None:
                 summary["signals_duplicate"] += 1
             else:

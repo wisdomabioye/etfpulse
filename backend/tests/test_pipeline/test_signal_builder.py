@@ -200,12 +200,13 @@ class TestBuildSignal:
         assert len(rows) == 2
 
     async def test_builds_with_price_and_source(self, db_session, monkeypatch, stub_ai):
-        """Issue #34: caller passes price + source → row stores both.
+        """Issue #34 + Stage 07-P3: caller passes price + source → row stores
+        both as first-class columns.
 
         Price lands on `Signal.price_at_creation` (typed Numeric, Decimal in
-        Python). Source is stuffed into `trigger_data` as a JSONB field so
-        Stage 08 outcome evaluation can pin +24h/+72h lookups to the same
-        provider without a schema migration.
+        Python). Source lands on the dedicated `Signal.price_source` String
+        column (Stage 07 migration). `trigger_data` MUST NOT carry a
+        `price_source` key — the column is the only source of truth now.
         """
         from decimal import Decimal
 
@@ -218,22 +219,22 @@ class TestBuildSignal:
         )
         assert signal is not None
         assert signal.price_at_creation == Decimal("84120.50")
-        assert signal.trigger_data["price_source"] == "sosovalue"
-        # Original trigger_data keys preserved — we don't stomp on them.
+        assert signal.price_source == "sosovalue"
+        # trigger_data must stay as the detector produced it — no leakage.
+        assert "price_source" not in signal.trigger_data
         for key in hit.trigger_data:
             assert signal.trigger_data[key] == hit.trigger_data[key]
 
-    async def test_builds_without_price_leaves_fields_null(
-        self, db_session, monkeypatch, stub_ai
-    ):
+    async def test_builds_without_price_leaves_fields_null(self, db_session, monkeypatch, stub_ai):
         """When both price providers fail, the signal still persists — with
-        NULL `price_at_creation` and no `price_source` tag. The backfill
+        NULL `price_at_creation` and NULL `price_source`. The backfill
         script (scripts/backfill_signal_prices.py) is responsible for
         revisiting these rows later."""
         hit = _make_hit()
         signal = await build_signal(db_session, hit)  # both price args default None
         assert signal is not None
         assert signal.price_at_creation is None
+        assert signal.price_source is None
         assert "price_source" not in signal.trigger_data
 
 
