@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
-import { useInfiniteSignals } from '../api/queries';
+import { useState } from 'react';
+import { useSignals } from '../api/queries';
 import type { SignalFilters } from '../api/types';
 import { FilterBar, SignalCard } from '../components/signals';
 import {
   Button,
   EmptyState,
   PageHeader,
+  Pager,
   SkeletonCard,
 } from '../components/ui';
 import { formatAgo } from '../lib/format';
@@ -19,45 +20,74 @@ import { formatAgo } from '../lib/format';
  *   ├─────────────────────────────────────────┤ ← sticky FilterBar begins
  *   │ Asset · Type · MinConf · Sort          │
  *   ├─────────────────────────────────────────┤
- *   │    Signal feed     Showing X of Y      │
+ *   │    Signal feed     Showing X-Y of Z    │
  *   │    [SignalCard full-size]              │
  *   │    [SignalCard full-size]              │
  *   │    ...                                  │
- *   │    [Load 20 more]                       │
+ *   │    Prev · 1 · 2 · 3 · … · N · Next     │
  *   └─────────────────────────────────────────┘
  *
  * Single-column max-w-[900px], NOT the 3-col grid used on home. Mock is
  * explicit — feed is a reading list, home's "most recent" is a teaser.
+ *
+ * Pagination: page-numbered (offset-based). 10 cards per page; the API
+ * returns `total`, `page`, `total_pages` so the Pager renders exact counts.
+ * Page state lives in this component; URL-syncing is a separate concern
+ * (TODO open issue if shareable links matter).
  */
+const PAGE_SIZE = 10;
+
 export function Signals() {
-  const [filters, setFilters] = useState<SignalFilters>({ limit: 20 });
+  // Page state is separate from filters so changing a filter resets to page 1
+  // (more intuitive than landing on "page 5 of 1" results when narrowing).
+  // Reset is wired in `handleFiltersChange` below — doing it in useEffect
+  // would violate react-hooks/set-state-in-effect.
+  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState<SignalFilters>({ limit: PAGE_SIZE });
 
-  const query = useInfiniteSignals(filters);
+  const handleFiltersChange = (next: SignalFilters) => {
+    setFilters(next);
+    setPage(1);
+  };
 
-  const items = useMemo(
-    () => query.data?.pages.flatMap((p) => p.items) ?? [],
-    [query.data],
-  );
+  const query = useSignals({ ...filters, page });
 
-  // No total-count in the cursor-paginated API; show loaded count with a
-  // "+" indicator when more pages remain. Matches wireframe's "Showing X"
-  // spirit without faking a number we don't have.
+  const items = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const totalPages = query.data?.total_pages ?? 0;
+  const limit = filters.limit ?? PAGE_SIZE;
+
+  // "Showing 11-20 of 47" — exact range. Falls back gracefully on the
+  // last (partial) page where end < page * limit.
+  const rangeStart = total === 0 ? 0 : (page - 1) * limit + 1;
+  const rangeEnd = Math.min(page * limit, total);
+
   const meta = query.isLoading
     ? 'Loading…'
-    : items.length === 0
+    : total === 0
       ? '0 results'
-      : `Showing ${items.length}${query.hasNextPage ? '+' : ''} · updated ${formatAgo(new Date(query.dataUpdatedAt).toISOString())}`;
+      : `Showing ${rangeStart}-${rangeEnd} of ${total} · updated ${formatAgo(new Date(query.dataUpdatedAt).toISOString())}`;
 
-  const clearFilters = () =>
+  const clearFilters = () => {
     setFilters({ limit: filters.limit });
+    setPage(1);
+  };
 
+  // "Active" means: anything that narrows the result set away from the
+  // implicit defaults (asset/type/confidence-floor/include-expired/sort).
+  // Drives the empty-state copy + the "Clear filters" affordance — so any
+  // filter that could explain a 0-result page belongs here.
   const hasActiveFilters = Boolean(
-    filters.asset || filters.signal_type || (filters.confidence_min ?? 1) > 1,
+    filters.asset ||
+      filters.signal_type ||
+      (filters.confidence_min ?? 1) > 1 ||
+      filters.include_expired ||
+      (filters.sort && filters.sort !== 'newest'),
   );
 
   return (
     <>
-      <FilterBar value={filters} onChange={setFilters} />
+      <FilterBar value={filters} onChange={handleFiltersChange} />
 
       <section className="px-6 sm:px-8 py-7 pb-14">
         <div className="mx-auto max-w-[900px]">
@@ -103,21 +133,12 @@ export function Signals() {
                 ))}
               </div>
 
-              <div className="flex justify-center mt-6">
-                {query.hasNextPage ? (
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    onClick={() => query.fetchNextPage()}
-                    disabled={query.isFetchingNextPage}
-                  >
-                    {query.isFetchingNextPage ? 'Loading…' : 'Load 20 more'}
-                  </Button>
-                ) : (
-                  <span className="font-mono text-[11px] text-text-4 uppercase tracking-[0.1em]">
-                    end of feed
-                  </span>
-                )}
+              <div className="mt-6">
+                <Pager
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                />
               </div>
             </>
           )}

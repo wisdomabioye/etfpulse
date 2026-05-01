@@ -185,12 +185,26 @@ class SignalDetail(BaseModel):
 class PaginatedSignals(BaseModel):
     """Envelope for `GET /api/signals` list responses.
 
-    `next_cursor` is a plain `"iso_timestamp|id"` string or None when no
-    more pages. Opaque to clients — they just pass it back via `?cursor=`.
+    Two pagination modes share this shape:
+      - **Cursor-based** (default): `next_cursor` is `"iso_timestamp|id"` or
+        None at end. Pass back via `?cursor=`. Best for infinite-scroll feeds.
+        `page` is `None` in this mode — cursor traversal has no page number.
+      - **Page-based**: `page` (1-based) populated when `?page=N` was sent.
+        Best for numbered pagers.
+
+    `total` and `total_pages` are always populated regardless of mode so a
+    UI can render "Showing N of M" without conditional logic. `total` is a
+    single COUNT roundtrip per list call — acceptable at the signal table's
+    scale (10s of thousands max).
     """
 
     items: list[SignalListItem]
     next_cursor: str | None = None
+    total: int = 0
+    # Null in cursor mode (cursor traversal is not page-numbered); 1-based int
+    # when `?page=N` was supplied.
+    page: int | None = None
+    total_pages: int = 0
 
 
 def _derive_display_status(

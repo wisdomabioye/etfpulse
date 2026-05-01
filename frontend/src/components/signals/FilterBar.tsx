@@ -43,6 +43,7 @@ export function FilterBar({ value, onChange }: FilterBarProps) {
   const type = value.signal_type ?? 'ALL';
   const confMin = value.confidence_min ?? 1;
   const sort: SortOrder = value.sort ?? 'newest';
+  const includeExpired = value.include_expired === true;
 
   // apiGet drops undefined values (see api/client.ts#buildUrl), so setting
   // a filter field to undefined is the normalized "off" state. TanStack's
@@ -60,12 +61,16 @@ export function FilterBar({ value, onChange }: FilterBarProps) {
   const setSort = (next: SortOrder) =>
     onChange({ ...value, sort: next === 'newest' ? undefined : next });
 
+  const setIncludeExpired = (next: boolean) =>
+    onChange({ ...value, include_expired: next ? true : undefined });
+
   return (
-    <div
-      className="sticky top-0 z-10 bg-bg-1 border-b border-border-2 px-6 sm:px-8 py-3.5 flex items-center gap-4 flex-wrap"
-      role="toolbar"
-      aria-label="Filter signals"
-    >
+    <div className="sticky top-0 z-10 bg-bg-1 border-b border-border-2">
+      <div
+        className="px-6 sm:px-8 py-3.5 flex items-center gap-4 flex-wrap"
+        role="toolbar"
+        aria-label="Filter signals"
+      >
       {/* Asset pills */}
       <div className="flex items-center gap-4">
         <span className={LABEL}>Asset</span>
@@ -138,6 +143,44 @@ export function FilterBar({ value, onChange }: FilterBarProps) {
           <option value="oldest">Oldest</option>
         </select>
       </div>
+
+      {VERTICAL_RULE}
+
+      {/* Include expired — off by default per backend contract; alerts have a
+          shelf life and the feed hides them after `expires_at` to avoid
+          surfacing stale guidance. Toggling on shows the full history,
+          including signals past their `expires_at`. */}
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          className="accent-accent w-3.5 h-3.5 cursor-pointer"
+          checked={includeExpired}
+          onChange={(e) => setIncludeExpired(e.target.checked)}
+          aria-label="Include expired signals"
+        />
+        <span className={LABEL}>Include expired</span>
+      </label>
+      </div>
+
+      {/* Hint banner — only visible when the toggle is active. Tells the user
+          they're seeing alerts past their shelf life so a stale recommendation
+          isn't acted on as if it were live. */}
+      {includeExpired ? (
+        <div
+          className="px-6 sm:px-8 py-2 border-t border-border-2 bg-bg-2 flex items-center gap-2"
+          role="status"
+        >
+          <span
+            className="inline-block w-1.5 h-1.5 rounded-full bg-warn"
+            aria-hidden
+          />
+          <p className="font-mono text-[11px] text-text-2 leading-tight">
+            Showing expired signals — these alerts are past their{' '}
+            <code className="text-text-1">expires_at</code> and are kept here
+            for review only. Don&apos;t act on them as live guidance.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

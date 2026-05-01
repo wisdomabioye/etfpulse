@@ -101,8 +101,14 @@ export interface SignalDetail {
 
 export interface PaginatedSignals {
   items: SignalListItem[];
-  /** Pass back as `?cursor=` to fetch the next page. null = no more pages. */
+  /** Cursor pagination — pass back as `?cursor=` to fetch the next page. */
   next_cursor: string | null;
+  /** Total rows matching the current filter set (page mode + cursor mode). */
+  total: number;
+  /** 1-based current page number, or `null` in cursor mode (no page concept). */
+  page: number | null;
+  /** ceil(total / limit). 0 when result set is empty. */
+  total_pages: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +124,8 @@ export interface SignalFilters {
   include_expired?: boolean;
   sort?: SortOrder;
   limit?: number;
+  /** 1-based page number for offset pagination. Omit to use cursor mode. */
+  page?: number;
 }
 
 // ---------------------------------------------------------------------------

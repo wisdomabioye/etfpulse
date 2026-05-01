@@ -122,7 +122,14 @@ class TestListBasics:
         r = await client.get("/api/signals")
         assert r.status_code == 200
         body = r.json()
-        assert body == {"items": [], "next_cursor": None}
+        assert body["items"] == []
+        assert body["next_cursor"] is None
+        # `total`/`total_pages` are populated in both modes; `page` is None
+        # in cursor mode (this request omits `?page=`) — only set when the
+        # client actually requested a page-numbered slice.
+        assert body["total"] == 0
+        assert body["total_pages"] == 0
+        assert body["page"] is None
 
     async def test_returns_signals_desc_by_created_at(self, db_session, client):
         now = datetime.now(UTC)
@@ -251,6 +258,88 @@ class TestCursorPagination:
         body3 = r3.json()
         assert [i["headline"] for i in body3["items"]] == ["signal-4"]
         assert body3["next_cursor"] is None  # no more pages
+
+
+class TestPagePagination:
+    """Page-mode pagination — `?page=N` returns offset-based slices plus
+    `total / page / total_pages`. Cursor logic is bypassed when page is
+    supplied."""
+
+    async def test_first_page_returns_total_and_pages(self, db_session, client):
+        now = datetime.now(UTC)
+        for i in range(5):
+            await _seed_signal(
+                db_session,
+                created_at=now - timedelta(hours=i),
+                headline=f"signal-{i}",
+            )
+
+        r = await client.get("/api/signals?page=1&limit=2")
+        body = r.json()
+        assert r.status_code == 200
+        assert [i["headline"] for i in body["items"]] == ["signal-0", "signal-1"]
+        assert body["total"] == 5
+        assert body["page"] == 1
+        assert body["total_pages"] == 3  # ceil(5/2)
+
+    async def test_middle_page_offsets_correctly(self, db_session, client):
+        now = datetime.now(UTC)
+        for i in range(5):
+            await _seed_signal(
+                db_session,
+                created_at=now - timedelta(hours=i),
+                headline=f"signal-{i}",
+            )
+
+        r = await client.get("/api/signals?page=2&limit=2")
+        body = r.json()
+        assert [i["headline"] for i in body["items"]] == ["signal-2", "signal-3"]
+        assert body["page"] == 2
+        assert body["total_pages"] == 3
+
+    async def test_last_page_partial(self, db_session, client):
+        now = datetime.now(UTC)
+        for i in range(5):
+            await _seed_signal(
+                db_session,
+                created_at=now - timedelta(hours=i),
+                headline=f"signal-{i}",
+            )
+
+        r = await client.get("/api/signals?page=3&limit=2")
+        body = r.json()
+        assert [i["headline"] for i in body["items"]] == ["signal-4"]
+        assert body["next_cursor"] is None  # no more
+
+    async def test_total_respects_filters(self, db_session, client):
+        """`total` must reflect the filtered count, not all signals."""
+        now = datetime.now(UTC)
+        # Distinct created_at per row — fingerprint hashes (asset, type,
+        # timestamp_str), so same-timestamp seed rows collide.
+        for i in range(3):
+            await _seed_signal(
+                db_session,
+                created_at=now - timedelta(minutes=i),
+                asset="BTC",
+                headline=f"btc-{i}",
+            )
+        for i in range(2):
+            await _seed_signal(
+                db_session,
+                created_at=now - timedelta(minutes=10 + i),
+                asset="ETH",
+                headline=f"eth-{i}",
+            )
+
+        r = await client.get("/api/signals?page=1&limit=10&asset=BTC")
+        body = r.json()
+        assert body["total"] == 3
+        assert body["total_pages"] == 1
+
+    async def test_page_zero_is_rejected(self, db_session, client):
+        """`page` is 1-indexed; `?page=0` must 422 not return last page."""
+        r = await client.get("/api/signals?page=0")
+        assert r.status_code == 422
 
     async def test_malformed_cursor_returns_422(self, db_session, client):
         r = await client.get("/api/signals?cursor=not-valid")

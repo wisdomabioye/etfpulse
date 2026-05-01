@@ -6,6 +6,7 @@ export { EmptyState } from './EmptyState';
 export { FilterPill } from './FilterPill';
 export { Kicker } from './Kicker';
 export { PageHeader } from './PageHeader';
+export { Pager } from './Pager';
 export { SectionHeader } from './SectionHeader';
 export { SectionLabel } from './SectionLabel';
 export { Skeleton, SkeletonCard, SkeletonGrid } from './Skeleton';
