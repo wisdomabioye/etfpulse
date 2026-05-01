@@ -138,4 +138,44 @@ export interface DashboardStats {
   /** null when no confidence-bearing signals exist (empty DB or all AI-failed). */
   avg_confidence: number | null;
   last_signal_at: string | null;
+  /** Stage 7-P7 — latest regime classification surfaced on the home page so
+   * the badge tile + TopNav indicator (#104) don't need a second
+   * /api/regime roundtrip. Null when no classification exists yet (cold-boot
+   * before the first daily cycle) OR when the latest snapshot is a legacy
+   * pre-Stage-7 row with NULL regime columns. Field name `signal_posture`
+   * matches /api/regime + the model column — one canonical name across
+   * the stack. */
+  current_regime: string | null;
+  signal_posture: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Regime
+// ---------------------------------------------------------------------------
+
+/** Wyckoff-style market phase. Mirrors `MarketRegime` StrEnum on the backend. */
+export type MarketRegime =
+  | 'accumulation'
+  | 'markup'
+  | 'distribution'
+  | 'markdown'
+  | 'uncertain';
+
+/** How aggressively to fire signals given the regime + macro context. */
+export type SignalPosture = 'aggressive' | 'normal' | 'cautious' | 'paused';
+
+/** Response from `GET /api/regime`. The `reasoning` JSONB is pass-through —
+ * see `pipeline/regime_monitor.py` for the structured score-breakdown shape
+ * the classifier writes. Consumers must tolerate missing top-level keys.
+ *
+ * Endpoint returns 503 when the table is empty or the latest snapshot is a
+ * legacy pre-Stage-7 row — frontend treats fetch errors as "no regime yet"
+ * rather than rendering hollow card. */
+export interface RegimeResponse {
+  regime: MarketRegime;
+  signal_posture: SignalPosture;
+  confidence: number;
+  reasoning: Record<string, unknown>;
+  macro_events_nearby: string[];
+  classified_at: string;
 }

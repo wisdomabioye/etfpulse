@@ -19,6 +19,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from etfpulse.models.base import Base
 
+# JSONB wrapper key inside `regime_snapshots.macro_events`. The column is
+# typed `dict | None` (per the SQLAlchemy mapping below), so a list of
+# event labels is stored as `{<key>: [...]}`. Pinned here — alongside the
+# column — so every reader and writer (signal_builder writing, /api/regime
+# reading, future Telegram formatter reading) agrees on the shape without
+# importing a constant from the orchestrator.
+REGIME_MACRO_EVENTS_KEY = "events_nearby"
+
 
 class CircuitBreakerTrigger(StrEnum):
     MACRO_EVENT = "macro_event"  # high-impact macro event near — see Stage 09

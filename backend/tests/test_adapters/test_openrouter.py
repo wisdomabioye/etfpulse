@@ -13,6 +13,8 @@ import pytest
 
 from etfpulse.adapters.openrouter import OpenRouterClient
 from etfpulse.config import settings
+from etfpulse.models import MarketRegime, SignalPosture
+from etfpulse.pipeline.regime_monitor import RegimeClassification
 
 _CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -216,3 +218,99 @@ async def test_fixture_mode_present_key_returns_analysis(monkeypatch, tmp_path):
     assert result.headline == "BTC inflows snap 4-day streak"
     # Fixture mode does NOT touch the daily counter.
     assert client._call_count == 0
+
+
+# ---- Stage 7-P6: prompt v2 + finish_reason='error' + identifying headers ----
+
+
+async def test_finish_reason_error_returns_none(httpx_mock, live_client):
+    """Mid-200 provider error per OpenRouter docs — `choices[0].finish_reason
+    == 'error'` paired with a populated `error` field. Must be caught and
+    returned as None per R6, NOT propagated as an exception."""
+    httpx_mock.add_response(
+        url=_CHAT_URL,
+        json={
+            "id": "gen-mid-error",
+            "model": "anthropic/claude-sonnet-4.6",
+            "choices": [
+                {
+                    "finish_reason": "error",
+                    "message": {"role": "assistant", "content": None},
+                    "error": {"code": 502, "message": "upstream provider down"},
+                }
+            ],
+        },
+    )
+
+    result = await live_client.analyze("flow_anomaly", "BTC", {})
+    assert result is None
+
+
+async def test_identifying_headers_sent(httpx_mock, live_client, monkeypatch):
+    """Adapter must send HTTP-Referer + X-OpenRouter-Title so OpenRouter can
+    attribute usage. Verified via httpx_mock's recorded request."""
+    monkeypatch.setattr(settings, "openrouter_app_url", "https://example.test")
+    monkeypatch.setattr(settings, "openrouter_app_title", "ETFPulseTest")
+
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {})
+
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    headers = requests[0].headers
+    assert headers["HTTP-Referer"] == "https://example.test"
+    assert headers["X-OpenRouter-Title"] == "ETFPulseTest"
+
+
+async def test_v2_prompt_includes_regime_when_supplied(httpx_mock, live_client):
+    """When `regime` kwarg is passed, the user message must contain the
+    regime block. Verified by inspecting the outbound request body."""
+    classification = RegimeClassification(
+        regime=MarketRegime.MARKUP,
+        signal_posture=SignalPosture.NORMAL,
+        confidence=8,
+        reasoning={"score": 50},
+        macro_events_nearby=["FOMC"],
+    )
+
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {}, regime=classification, news_context=None)
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    user_msg = body["messages"][1]["content"]
+    assert "Market regime classification" in user_msg
+    assert '"regime": "markup"' in user_msg
+    assert '"signal_posture": "normal"' in user_msg
+    assert '"FOMC"' in user_msg
+
+
+async def test_v2_prompt_includes_news_context_when_supplied(httpx_mock, live_client):
+    """When `news_context` is non-empty, prompt embeds the items as JSON."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    news = [
+        {
+            "title": "BlackRock files amendment",
+            "category": 3,
+            "published_iso": "2026-04-30T12:00:00+00:00",
+            "summary": "In-kind redemptions clarified.",
+        }
+    ]
+
+    await live_client.analyze("flow_anomaly", "BTC", {}, news_context=news)
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    user_msg = body["messages"][1]["content"]
+    assert "Recent relevant news" in user_msg
+    assert "BlackRock files amendment" in user_msg
+
+
+async def test_v2_prompt_omits_optional_blocks_when_none(httpx_mock, live_client):
+    """Backward-compat: legacy callers (no regime, no news) get a prompt
+    that omits both blocks entirely — not empty placeholders."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {})
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    user_msg = body["messages"][1]["content"]
+    assert "Market regime classification" not in user_msg
+    assert "Recent relevant news" not in user_msg

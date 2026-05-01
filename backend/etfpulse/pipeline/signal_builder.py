@@ -44,12 +44,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.adapters.openrouter import openrouter_client
 from etfpulse.adapters.sosovalue import SoSoValueError
-from etfpulse.models import NewsCategory, RegimeSnapshot, Signal
-from etfpulse.pipeline.analysis import compute_expires_at
+from etfpulse.models import (
+    REGIME_MACRO_EVENTS_KEY,
+    NewsCategory,
+    RegimeSnapshot,
+    Signal,
+)
+from etfpulse.pipeline.analysis import AI_PROMPT_VERSION, compute_expires_at
 from etfpulse.pipeline.detectors import ALL_DETECTORS, DetectorHit
 from etfpulse.pipeline.ingestor import ingest_etf_flows, ingest_news
+from etfpulse.pipeline.news_context import NewsContextItem, gather_news_context
 from etfpulse.pipeline.prices import PriceSource, get_spot_price_with_source
-from etfpulse.pipeline.regime_monitor import classify_regime
+from etfpulse.pipeline.regime_monitor import RegimeClassification, classify_regime
 
 # Categories ingested every cycle. INSTITUTION feeds AI explanations of
 # institutional flow context; ANNOUNCEMENT picks up regulator/issuer news that
@@ -59,12 +65,6 @@ _NEWS_CATEGORIES: tuple[NewsCategory, ...] = (
     NewsCategory.INSTITUTION,
     NewsCategory.ANNOUNCEMENT,
 )
-
-# JSONB wrapper key inside `regime_snapshots.macro_events`. The column is
-# typed `dict | None` (per SQLAlchemy mapping), so a list of event labels is
-# stored as `{<key>: [...]}`. Pinned as a constant so /api/regime (#103) and
-# any future consumer agree on the shape rather than hardcoding the string.
-REGIME_MACRO_EVENTS_KEY = "events_nearby"
 
 log = structlog.get_logger()
 
@@ -76,6 +76,8 @@ async def build_signal(
     hit: DetectorHit,
     price_at_creation: Decimal | None = None,
     price_source: PriceSource | None = None,
+    regime: RegimeClassification | None = None,
+    news_context: list[NewsContextItem] | None = None,
 ) -> Signal | None:
     """Upsert a Signal from a detector hit; enrich with AI analysis if available.
 
@@ -94,17 +96,38 @@ async def build_signal(
     picks it up later. The source string, when present, is persisted on the
     dedicated `Signal.price_source` column so Stage 08 can match the
     provider on outcome evaluation.
+
+    `regime` + `news_context` (Stage 7-P6, closes #32): when supplied, both
+    are (a) embedded in `trigger_data` for audit + future re-analysis, and
+    (b) forwarded to `openrouter_client.analyze` as additional prompt
+    context. `Signal.ai_prompt_version` is stamped from the analysis
+    module's `AI_PROMPT_VERSION` so the track-record query can compare
+    apples-to-apples across prompt revisions.
     """
+    # Augment trigger_data with regime + news (defensive copy — DetectorHit
+    # is frozen and we don't want to surprise other callers by mutating it).
+    persisted_trigger_data: dict[str, Any] = dict(hit.trigger_data)
+    if regime is not None:
+        persisted_trigger_data["regime_at_creation"] = {
+            "regime": regime.regime.value,
+            "signal_posture": regime.signal_posture.value,
+            "confidence": regime.confidence,
+            "macro_events_nearby": list(regime.macro_events_nearby),
+        }
+    if news_context:
+        persisted_trigger_data["news_context"] = news_context
+
     stmt = (
         insert(Signal)
         .values(
             signal_type=hit.signal_type,
             asset=hit.asset,
-            trigger_data=hit.trigger_data,
+            trigger_data=persisted_trigger_data,
             fingerprint=hit.fingerprint,
             signal_date=hit.signal_date,
             price_at_creation=price_at_creation,
             price_source=price_source,
+            ai_prompt_version=AI_PROMPT_VERSION,
             # ai_analysis, confidence, expires_at NULL at insert; updated
             # below if AI enrichment succeeds.
         )
@@ -131,10 +154,16 @@ async def build_signal(
         log.error("signal_inserted_then_missing", id=new_id)
         return None
 
+    # Pass the ORIGINAL hit.trigger_data to the AI prompt — not the augmented
+    # `persisted_trigger_data`. Regime + news are surfaced via dedicated
+    # prompt sections; duplicating them inside the trigger-data block would
+    # encourage the model to double-cite.
     analysis = await openrouter_client.analyze(
         signal_type=hit.signal_type,
         asset=hit.asset,
         trigger_data=hit.trigger_data,
+        regime=regime,
+        news_context=news_context,
     )
     if analysis is not None:
         signal.ai_analysis = analysis.model_dump()
@@ -147,6 +176,7 @@ async def build_signal(
         signal_type=signal.signal_type,
         asset=signal.asset,
         ai_present=analysis is not None,
+        ai_prompt_version=signal.ai_prompt_version,
     )
     return signal
 
@@ -243,6 +273,7 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
     # snapshot against the previous one. Failure is non-fatal: detectors that
     # don't depend on the regime still run; RegimeShiftDetector silently
     # skips when no snapshot exists.
+    classification: RegimeClassification | None = None
     try:
         classification = await classify_regime(session)
         snapshot = RegimeSnapshot(
@@ -273,8 +304,22 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             exc_info=exc,
         )
         summary["regime_error"] = type(exc).__name__
+        classification = None  # downstream uses None-fallback
 
     # --- Detection + signal build ------------------------------------------
+    # Per-asset news context cache so we don't re-query news_items inside
+    # `build_signal` for every hit on the same asset within one cycle.
+    # Cache key is `asset` only — safe because every call here uses the
+    # default `hours`/`max_items`. If a future caller in this loop ever
+    # passes non-default kwargs to `gather_news_context`, widen the key
+    # to `(asset, hours, max_items)` first or it will return stale dicts.
+    news_cache: dict[str, list[NewsContextItem]] = {}
+
+    async def _news_for(asset: str) -> list[NewsContextItem]:
+        if asset not in news_cache:
+            news_cache[asset] = await gather_news_context(session, asset)
+        return news_cache[asset]
+
     for detector in ALL_DETECTORS:
         summary["detectors_run"] += 1
         try:
@@ -296,7 +341,15 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             price_tuple = prices.get(hit.asset)
             price = price_tuple[0] if price_tuple else None
             source = price_tuple[1] if price_tuple else None
-            signal = await build_signal(session, hit, price_at_creation=price, price_source=source)
+            news_for_hit = await _news_for(hit.asset)
+            signal = await build_signal(
+                session,
+                hit,
+                price_at_creation=price,
+                price_source=source,
+                regime=classification,
+                news_context=news_for_hit,
+            )
             if signal is None:
                 summary["signals_duplicate"] += 1
             else:

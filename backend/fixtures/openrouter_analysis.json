@@ -41,5 +41,35 @@
     ],
     "suggested_action": "wait",
     "time_horizon": "scalp"
+  },
+  "divergence": {
+    "headline": "Institutional buying through a price drawdown — early-accumulation read",
+    "reasoning": [
+      "Three consecutive days of positive ETF flows alongside a 2.7% spot drawdown.",
+      "Recent SEC announcements on in-kind redemptions reduce structural friction for issuers — supportive backdrop.",
+      "Pattern matches early-accumulation phases in the regime classifier; flows leading price typically resolves in 5-9 days."
+    ],
+    "confidence": 6,
+    "risks": [
+      "Macro events nearby raise the chance the regime monitor flips to 'cautious' before this resolves.",
+      "Divergences can persist longer than expected if a single seller dominates spot."
+    ],
+    "suggested_action": "consider long",
+    "time_horizon": "swing"
+  },
+  "regime_shift": {
+    "headline": "Regime transition: accumulation → markup — posture moves to normal",
+    "reasoning": [
+      "Combined 7-day BTC + ETH flow score crossed the markup threshold.",
+      "News velocity remained moderate — directional signal isn't drowning in noise.",
+      "Macro calendar is clear of high-impact events for the next two days, so posture stays NORMAL rather than flipping CAUTIOUS."
+    ],
+    "confidence": 7,
+    "risks": [
+      "Regime transitions are coincident, not leading — entry on the very first crossing has historically been worse than waiting for one confirming day.",
+      "Single-asset breakouts can drag the combined score across without broad participation."
+    ],
+    "suggested_action": "consider long",
+    "time_horizon": "position"
   }
 }

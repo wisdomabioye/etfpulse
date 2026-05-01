@@ -4,7 +4,8 @@ Resolution R5: uses `response_format={"type":"json_object"}` so the model
 returns parsed JSON, not free-form prose we have to regex.
 
 Resolution R6: `analyze()` NEVER raises into the pipeline. Any failure
-(network, 4xx, 5xx, malformed JSON, schema mismatch, empty key, daily cap)
+(network, 4xx, 5xx, malformed JSON, schema mismatch, empty key, daily cap,
+mid-stream provider error reported via `choices[0].finish_reason="error"`)
 returns `None`, and `signal_builder` decides how to proceed (typically: emit
 the signal without ai_analysis, queue for retry tomorrow).
 
@@ -16,6 +17,13 @@ deploys would need a shared counter (Redis); single-process today.
 Fixture mode: when `settings.sosovalue_use_fixtures=True` (reused for
 single-switch test/demo mode), reads from
 `backend/fixtures/openrouter_analysis.json` keyed by `signal_type`.
+
+Stage 7-P6: prompt v2 — `analyze()` now accepts optional `regime` (a
+RegimeClassification) and `news_context` (a list of dict rows from
+`pipeline.news_context`). Both default to None for backward compatibility;
+when present they're injected as additional context blocks in the user
+prompt. Identifying headers (`HTTP-Referer`, `X-OpenRouter-Title`) are
+also sent so OpenRouter rankings reflect this app.
 """
 
 from __future__ import annotations
@@ -31,6 +39,14 @@ from pydantic import ValidationError
 
 from etfpulse.config import settings
 from etfpulse.pipeline.analysis import AISignalAnalysis
+
+# `RegimeClassification` is a frozen dataclass with no DB-engine coupling —
+# safe to import here even though it lives in `pipeline/`. The existing
+# `analysis.py` import already establishes that adapters can read pipeline
+# data shapes (no cycle: regime_monitor imports adapters.sosovalue, never
+# adapters.openrouter). `NewsContextItem` is a TypedDict — same story.
+from etfpulse.pipeline.news_context import NewsContextItem
+from etfpulse.pipeline.regime_monitor import RegimeClassification
 
 log = structlog.get_logger()
 
@@ -62,32 +78,60 @@ class OpenRouterQuotaError(OpenRouterError):
 _SYSTEM_PROMPT = (
     "You are a crypto-market analyst evaluating an ETF flow signal. "
     "Respond ONLY with a JSON object matching the provided schema — no prose, "
-    "no markdown fences, no commentary. Be concise and grounded in the trigger "
-    "data; do not invent numbers."
-)
-
-_USER_PROMPT_TEMPLATE = (
-    "Signal type: {signal_type}\n"
-    "Asset: {asset}\n"
-    "Trigger data:\n{trigger_data}\n\n"
-    "Respond as JSON matching this schema:\n{schema}\n"
+    "no markdown fences, no commentary. Be concise and grounded in the "
+    "supplied evidence; do not invent numbers. When market regime or recent "
+    "news is provided, factor it into your reasoning + risks; when omitted, "
+    "rely on trigger data alone."
 )
 
 
 def _build_messages(
-    signal_type: str, asset: str, trigger_data: dict[str, Any]
+    signal_type: str,
+    asset: str,
+    trigger_data: dict[str, Any],
+    regime: RegimeClassification | None = None,
+    news_context: list[NewsContextItem] | None = None,
 ) -> list[dict[str, str]]:
+    """Compose the v2 prompt — trigger data + optional regime + optional news.
+
+    Sections appear in fixed order so prompt diffs are reproducible:
+        1. Signal identity (type, asset)
+        2. Trigger data (always)
+        3. Regime classification (optional)
+        4. Recent news (optional, max items already capped at gather time)
+        5. Output schema
+
+    The regime block surfaces `regime`, `signal_posture`, `confidence`, and
+    `macro_events_nearby` only — not the full `reasoning` JSONB, which would
+    bloat the prompt and double-count the signals already in trigger_data.
+    """
+    sections: list[str] = [
+        f"Signal type: {signal_type}",
+        f"Asset: {asset}",
+        "Trigger data:",
+        json.dumps(trigger_data, indent=2, default=str),
+    ]
+
+    if regime is not None:
+        regime_block = {
+            "regime": regime.regime.value,
+            "signal_posture": regime.signal_posture.value,
+            "confidence": regime.confidence,
+            "macro_events_nearby": list(regime.macro_events_nearby),
+        }
+        sections.append("\nMarket regime classification:")
+        sections.append(json.dumps(regime_block, indent=2))
+
+    if news_context:
+        sections.append("\nRecent relevant news (most recent first):")
+        sections.append(json.dumps(news_context, indent=2, default=str))
+
+    sections.append("\nRespond as JSON matching this schema:")
+    sections.append(json.dumps(AISignalAnalysis.model_json_schema(), indent=2))
+
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": _USER_PROMPT_TEMPLATE.format(
-                signal_type=signal_type,
-                asset=asset,
-                trigger_data=json.dumps(trigger_data, indent=2, default=str),
-                schema=json.dumps(AISignalAnalysis.model_json_schema(), indent=2),
-            ),
-        },
+        {"role": "user", "content": "\n".join(sections)},
     ]
 
 
@@ -177,13 +221,23 @@ class OpenRouterClient:
         signal_type: str,
         asset: str,
         trigger_data: dict[str, Any],
+        regime: RegimeClassification | None = None,
+        news_context: list[NewsContextItem] | None = None,
     ) -> AISignalAnalysis | None:
         """Generate a typed analysis for a detector hit, or None on any failure.
+
+        `regime` and `news_context` are Stage 7-P6 additions — when supplied,
+        they're injected into the v2 prompt as additional context. Both
+        default to None for backward-compat with callers that haven't been
+        updated; the system prompt instructs the model to fall back to
+        trigger-data-only reasoning when they're absent.
 
         Resolution R6 — never raises. Failure modes (all → None, all logged):
             - Empty API key (config missing)
             - Daily cap hit
             - Network error / 4xx / 5xx
+            - Mid-stream `choices[0].finish_reason="error"` (200 status,
+              provider-side error per OpenRouter docs)
             - Malformed JSON in response
             - JSON parses but doesn't satisfy AISignalAnalysis
             - Fixture mode + missing fixture file/key
@@ -201,7 +255,9 @@ class OpenRouterClient:
             return None
 
         try:
-            raw_content = await self._call_chat_completions(signal_type, asset, trigger_data)
+            raw_content = await self._call_chat_completions(
+                signal_type, asset, trigger_data, regime, news_context
+            )
         except OpenRouterError as exc:
             log.warning(
                 "openrouter_request_failed",
@@ -244,20 +300,31 @@ class OpenRouterClient:
     # --- HTTP ---------------------------------------------------------------
 
     async def _call_chat_completions(
-        self, signal_type: str, asset: str, trigger_data: dict[str, Any]
+        self,
+        signal_type: str,
+        asset: str,
+        trigger_data: dict[str, Any],
+        regime: RegimeClassification | None,
+        news_context: list[NewsContextItem] | None,
     ) -> str:
         """POST one chat completion. Returns the raw content string from the
-        first choice. Raises OpenRouterError on any HTTP/transport failure.
+        first choice. Raises OpenRouterError on any HTTP/transport failure
+        OR on a mid-200 provider error (`finish_reason="error"`).
         """
         body = {
             "model": self.model,
-            "messages": _build_messages(signal_type, asset, trigger_data),
+            "messages": _build_messages(signal_type, asset, trigger_data, regime, news_context),
             "response_format": {"type": "json_object"},
             "max_tokens": _MAX_TOKENS,
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            # Identifying headers — improve OpenRouter rankings/attribution
+            # and make our usage debuggable on their dashboard. Both are
+            # documented as optional; we send both for completeness.
+            "HTTP-Referer": settings.openrouter_app_url,
+            "X-OpenRouter-Title": settings.openrouter_app_title,
         }
 
         async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
@@ -287,7 +354,16 @@ class OpenRouterClient:
         if not choices:
             raise OpenRouterError(f"no choices in response: {str(data)[:200]}")
 
-        content = choices[0].get("message", {}).get("content")
+        first_choice = choices[0]
+
+        # Mid-stream provider error (per OpenRouter docs): 200 OK with
+        # `finish_reason="error"` and a populated `error` field on the
+        # choice. Treat it the same as a 4xx/5xx — log + return None.
+        if first_choice.get("finish_reason") == "error":
+            err_payload = first_choice.get("error") or {}
+            raise OpenRouterError(f"provider error mid-response: {json.dumps(err_payload)[:200]}")
+
+        content = first_choice.get("message", {}).get("content")
         if not isinstance(content, str):
             raise OpenRouterError(f"missing string content in first choice: {str(data)[:200]}")
         return content

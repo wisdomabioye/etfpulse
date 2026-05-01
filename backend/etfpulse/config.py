@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # Soft daily cap on OpenRouter calls — enforced by signal_builder before
     # invoking the adapter. Issue #12. 0 disables the cap entirely.
     openrouter_daily_call_cap: int = Field(default=100, ge=0)
+    # Identifying headers sent with every OpenRouter call — surface this app
+    # on OpenRouter's dashboard + rankings. Both are documented as optional
+    # but free; we send them for observability. Override per-environment if
+    # desired (different prod vs preview attribution).
+    openrouter_app_url: str = "https://etfpulse.xpldevelopers.org"
+    openrouter_app_title: str = "ETFPulse"
 
     # Signal scheduler — fires once daily at HH:MM **UTC**. Timezone is pinned
     # to UTC inside the scheduler module (Issue #31), so these are always UTC

@@ -5,6 +5,7 @@ from etfpulse.models.news import NewsCategory, NewsItem
 from etfpulse.models.order import Order, OrderSide, OrderStatus, OrderType, TimeInForce, Venue
 from etfpulse.models.position import Position, PositionSide, PositionStatus
 from etfpulse.models.regime import (
+    REGIME_MACRO_EVENTS_KEY,
     CircuitBreaker,
     CircuitBreakerTrigger,
     MarketRegime,
@@ -51,6 +52,7 @@ __all__ = [
     "RegimeSnapshot",
     "MarketRegime",
     "SignalPosture",
+    "REGIME_MACRO_EVENTS_KEY",
     "CircuitBreaker",
     "CircuitBreakerTrigger",
     # Delivery

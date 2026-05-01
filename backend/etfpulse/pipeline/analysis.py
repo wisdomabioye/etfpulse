@@ -10,6 +10,17 @@ truncate, and strip rather than reject — a partial analysis is better than
 no signal. Strict validation is for human/system inputs, not model outputs.
 Resolution R18: clamp confidence to [1,10], truncate reasoning to 5 items,
 risks to 3 items.
+
+Prompt versioning (issue #32, closed by Stage 7-P6):
+    AI_PROMPT_VERSION is the string stamped onto every Signal at insert
+    time so the track-record query can compare apples-to-apples across
+    prompt revisions. Bump ONLY when the prompt's CONTEXT SHAPE changes —
+    adding/removing sections (e.g. v1 → v2 added regime + news_context),
+    changing the confidence rubric, or reworking how trigger_data is
+    framed. Small wording edits (typos, grammar, polish) DO NOT bump —
+    they don't change calibration. The CHECK constraint
+    `ck_signals_ai_prompt_version_format` (`^v[0-9]+$`) is the wire
+    format; keep this string compatible.
 """
 
 from __future__ import annotations
@@ -36,6 +47,11 @@ _HEADLINE_MAX_LEN = 200
 # flood the alert with 20 reasoning bullets.
 _REASONING_MAX_ITEMS = 5
 _RISKS_MAX_ITEMS = 3
+
+
+# Stamped onto Signal.ai_prompt_version at insert time. See module docstring
+# for the bump policy. Match the regex `^v[0-9]+$` (DB CHECK constraint).
+AI_PROMPT_VERSION = "v2"
 
 
 class AISignalAnalysis(BaseModel):

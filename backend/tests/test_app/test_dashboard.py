@@ -15,7 +15,12 @@ from httpx import ASGITransport
 
 from etfpulse.api.deps import get_db_session
 from etfpulse.app import create_app
-from etfpulse.models import Signal
+from etfpulse.models import (
+    MarketRegime,
+    RegimeSnapshot,
+    Signal,
+    SignalPosture,
+)
 from etfpulse.pipeline.detectors import compute_fingerprint
 
 
@@ -69,6 +74,9 @@ class TestDashboardStats:
             "signals_today": 0,
             "avg_confidence": None,
             "last_signal_at": None,
+            # Stage 7-P7: regime fields null until the first cycle runs.
+            "current_regime": None,
+            "signal_posture": None,
         }
 
     async def test_total_signals_counts_all(self, db_session, client):
@@ -150,7 +158,7 @@ class TestDashboardStats:
         parsed = datetime.fromisoformat(body["last_signal_at"])
         assert parsed == now
 
-    async def test_returns_all_four_fields(self, db_session, client):
+    async def test_returns_all_documented_fields(self, db_session, client):
         """Locks the response contract — frontend depends on exactly these keys."""
         r = await client.get("/api/dashboard/stats")
         body = r.json()
@@ -159,4 +167,63 @@ class TestDashboardStats:
             "signals_today",
             "avg_confidence",
             "last_signal_at",
+            "current_regime",
+            "signal_posture",
         }
+
+    async def test_current_regime_populated_when_snapshot_exists(self, db_session, client):
+        """When a `regime_snapshots` row exists, the home stats surface it
+        without a second roundtrip to /api/regime."""
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=datetime.now(UTC),
+                regime=MarketRegime.MARKUP.value,
+                signal_posture=SignalPosture.NORMAL.value,
+                confidence=8,
+            )
+        )
+        await db_session.flush()
+
+        r = await client.get("/api/dashboard/stats")
+        body = r.json()
+        assert body["current_regime"] == "markup"
+        assert body["signal_posture"] == "normal"
+
+    async def test_current_regime_uses_latest_snapshot(self, db_session, client):
+        """Multiple snapshots → newest wins (matches /api/regime semantics
+        + uses the same `get_latest_regime` helper)."""
+        now = datetime.now(UTC)
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=now - timedelta(days=1),
+                regime=MarketRegime.ACCUMULATION.value,
+                signal_posture=SignalPosture.AGGRESSIVE.value,
+                confidence=5,
+            )
+        )
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=now,
+                regime=MarketRegime.DISTRIBUTION.value,
+                signal_posture=SignalPosture.CAUTIOUS.value,
+                confidence=6,
+            )
+        )
+        await db_session.flush()
+
+        r = await client.get("/api/dashboard/stats")
+        body = r.json()
+        assert body["current_regime"] == "distribution"
+        assert body["signal_posture"] == "cautious"
+
+    async def test_current_regime_null_for_legacy_snapshot(self, db_session, client):
+        """Pre-Stage-7 snapshot (regime IS NULL) → fields surface as null,
+        not the raw column value."""
+        # Legacy row with no regime/posture columns populated.
+        db_session.add(RegimeSnapshot(captured_at=datetime.now(UTC)))
+        await db_session.flush()
+
+        r = await client.get("/api/dashboard/stats")
+        body = r.json()
+        assert body["current_regime"] is None
+        assert body["signal_posture"] is None

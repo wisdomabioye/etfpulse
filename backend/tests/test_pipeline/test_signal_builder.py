@@ -10,13 +10,15 @@ The five required cases (a–e from #44) are each a separate test below.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 
-from etfpulse.models import Signal
-from etfpulse.pipeline.analysis import AISignalAnalysis
+from etfpulse.models import MarketRegime, Signal, SignalPosture
+from etfpulse.pipeline.analysis import AI_PROMPT_VERSION, AISignalAnalysis
 from etfpulse.pipeline.detectors import DetectorHit, compute_fingerprint
+from etfpulse.pipeline.regime_monitor import RegimeClassification
 from etfpulse.pipeline.signal_builder import build_signal, run_daily_cycle
 
 # ---------------------------------------------------------------------------
@@ -208,8 +210,6 @@ class TestBuildSignal:
         column (Stage 07 migration). `trigger_data` MUST NOT carry a
         `price_source` key — the column is the only source of truth now.
         """
-        from decimal import Decimal
-
         hit = _make_hit()
         signal = await build_signal(
             db_session,
@@ -236,6 +236,79 @@ class TestBuildSignal:
         assert signal.price_at_creation is None
         assert signal.price_source is None
         assert "price_source" not in signal.trigger_data
+
+    async def test_stamps_ai_prompt_version_on_insert(self, db_session, monkeypatch, stub_ai):
+        """Stage 7-P6 (closes #32): every new Signal row must carry the
+        current `AI_PROMPT_VERSION` so track-record queries can compare
+        apples-to-apples across prompt revisions."""
+        hit = _make_hit()
+        signal = await build_signal(db_session, hit)
+        assert signal is not None
+        assert signal.ai_prompt_version == AI_PROMPT_VERSION
+
+    async def test_regime_and_news_context_persist_to_trigger_data(
+        self, db_session, monkeypatch, stub_ai
+    ):
+        """When the orchestrator passes `regime` + `news_context`, both land
+        inside `trigger_data` JSONB under known keys for audit + future
+        re-analysis. Original DetectorHit keys are preserved alongside."""
+        regime = RegimeClassification(
+            regime=MarketRegime.MARKUP,
+            signal_posture=SignalPosture.NORMAL,
+            confidence=8,
+            reasoning={"score": 50},
+            macro_events_nearby=["FOMC"],
+        )
+        news = [
+            {"title": "BlackRock filing", "category": 3, "published_iso": "x", "summary": "y"},
+        ]
+
+        hit = _make_hit()
+        signal = await build_signal(db_session, hit, regime=regime, news_context=news)
+
+        assert signal is not None
+        assert signal.trigger_data["regime_at_creation"]["regime"] == "markup"
+        assert signal.trigger_data["regime_at_creation"]["signal_posture"] == "normal"
+        assert signal.trigger_data["regime_at_creation"]["confidence"] == 8
+        assert signal.trigger_data["regime_at_creation"]["macro_events_nearby"] == ["FOMC"]
+        assert signal.trigger_data["news_context"] == news
+        # Original DetectorHit keys preserved.
+        for key in hit.trigger_data:
+            assert signal.trigger_data[key] == hit.trigger_data[key]
+
+    async def test_regime_and_news_context_forwarded_to_ai(self, db_session, monkeypatch):
+        """`build_signal` must forward `regime` + `news_context` to
+        `openrouter_client.analyze` so the AI prompt sees them. Verified by
+        capturing the kwargs the stub receives."""
+        captured_kwargs: dict = {}
+
+        async def _ai(**kwargs):
+            captured_kwargs.update(kwargs)
+            return AISignalAnalysis(
+                headline="x",
+                reasoning=["r"],
+                confidence=7,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        regime = RegimeClassification(
+            regime=MarketRegime.ACCUMULATION,
+            signal_posture=SignalPosture.AGGRESSIVE,
+            confidence=6,
+            reasoning={},
+            macro_events_nearby=[],
+        )
+        news = [{"title": "n", "category": 3, "published_iso": "x", "summary": None}]
+
+        hit = _make_hit()
+        await build_signal(db_session, hit, regime=regime, news_context=news)
+
+        assert captured_kwargs["regime"] is regime
+        assert captured_kwargs["news_context"] == news
 
 
 # ---------------------------------------------------------------------------
