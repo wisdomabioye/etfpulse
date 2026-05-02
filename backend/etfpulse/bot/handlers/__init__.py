@@ -13,15 +13,19 @@ from __future__ import annotations
 
 from telegram.ext import Application, CommandHandler
 
-from etfpulse.bot.handlers.help import cmd_help, cmd_track_record
+from etfpulse.bot.handlers.help import cmd_help
 from etfpulse.bot.handlers.prefs import cmd_prefs
 from etfpulse.bot.handlers.start import cmd_start
 from etfpulse.bot.handlers.subscribe import cmd_subscribe, cmd_unsubscribe
+from etfpulse.bot.handlers.track_record import cmd_performance, cmd_track_record
 
 # Single source of truth — command name → handler. Ordering doesn't matter
 # (PTB matches by exact command name), but alphabetical keeps diffs readable.
+# `performance` is the design-doc-spec'd alias for `track_record` — same
+# handler bound under two command names; PTB dispatches whichever the user typed.
 _COMMANDS: list[tuple[str, object]] = [
     ("help", cmd_help),
+    ("performance", cmd_performance),
     ("prefs", cmd_prefs),
     ("start", cmd_start),
     ("subscribe", cmd_subscribe),

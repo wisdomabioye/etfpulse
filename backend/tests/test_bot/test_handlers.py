@@ -17,10 +17,11 @@ import pytest
 from sqlalchemy import select
 from telegram import Chat
 
-from etfpulse.bot.handlers.help import cmd_help, cmd_track_record
+from etfpulse.bot.handlers.help import cmd_help
 from etfpulse.bot.handlers.prefs import cmd_prefs
 from etfpulse.bot.handlers.start import cmd_start
 from etfpulse.bot.handlers.subscribe import cmd_subscribe, cmd_unsubscribe
+from etfpulse.bot.handlers.track_record import cmd_performance, cmd_track_record
 from etfpulse.models import ChannelType, NotificationChannel, User
 
 # The handler modules that import `async_session` directly.
@@ -28,6 +29,7 @@ _SESSION_CONSUMERS = (
     "etfpulse.bot.handlers.start",
     "etfpulse.bot.handlers.subscribe",
     "etfpulse.bot.handlers.prefs",
+    "etfpulse.bot.handlers.track_record",
 )
 
 
@@ -245,12 +247,207 @@ class TestStaticHandlers:
         await cmd_help(update, _ctx())
 
         reply_text = update.effective_message.reply_html.await_args.args[0]
-        for cmd in ["/start", "/prefs", "/subscribe", "/unsubscribe", "/help"]:
+        for cmd in [
+            "/start",
+            "/prefs",
+            "/subscribe",
+            "/unsubscribe",
+            "/help",
+            "/track-record",
+            "/performance",
+        ]:
             assert cmd in reply_text
 
-    async def test_track_record_is_stub(self):
+
+# ---- /track-record + /performance ----------------------------------------
+
+
+class TestCmdTrackRecord:
+    async def test_empty_db_renders_no_outcomes_caption(self, db_session, patch_session):
+        """Cold-boot — no SignalOutcome rows. Render the consistent
+        "no outcomes evaluated yet" copy that matches the web HeroHitRatePanel
+        + TrackRecord page empty states."""
         update = _dm_update()
         await cmd_track_record(update, _ctx())
 
         reply_text = update.effective_message.reply_html.await_args.args[0]
-        assert "coming" in reply_text.lower()
+        assert "Signal track record" in reply_text
+        assert "No outcomes evaluated yet" in reply_text
+        assert "72h after a signal fires" in reply_text
+
+    async def test_renders_summary_and_recent_with_seeded_outcomes(self, db_session, patch_session):
+        """Seed 3 outcomes (2 target-hit, 1 stop-hit); assert hit rate + recent
+        list render correctly with both ✅ and ❌ icons."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from etfpulse.models import Signal, SignalOutcome
+        from etfpulse.pipeline.detectors import compute_fingerprint
+
+        # `outcomes_spec` covers the two non-pending verdicts the recent
+        # list can render — `(hit_target, hit_stop)` per signal. Two
+        # target-hits + one stop-hit exercises both ✅ and ❌ icons.
+        outcomes_spec = [(True, False), (True, False), (False, True)]
+        for i, (hit_target, hit_stop) in enumerate(outcomes_spec):
+            signal = Signal(
+                signal_type="flow_anomaly",
+                asset="BTC",
+                trigger_data={},
+                ai_analysis={"suggested_action": "consider long", "headline": "x"},
+                confidence=8,
+                status="alerted",
+                price_at_creation=Decimal("84200"),
+                price_source="binance",
+                ai_prompt_version="v3",
+                fingerprint=compute_fingerprint("track-rec-bot", str(i)),
+                signal_date=date(2026, 4, 25),
+                entry_price=Decimal("84200"),
+                stop_price=Decimal("82000"),
+                target_price=Decimal("89500"),
+            )
+            db_session.add(signal)
+            await db_session.flush()
+            db_session.add(
+                SignalOutcome(
+                    signal_id=signal.id,
+                    asset="BTC",
+                    signal_type="flow_anomaly",
+                    direction="long",
+                    confidence=8,
+                    entry_price=Decimal("84200"),
+                    stop_price=Decimal("82000"),
+                    target_price=Decimal("89500"),
+                    price_at_signal=Decimal("84200"),
+                    price_after_72h=Decimal("89600") if hit_target else Decimal("81900"),
+                    hit_target=hit_target,
+                    hit_stop=hit_stop,
+                    evaluated_at=datetime.now(UTC),
+                )
+            )
+        await db_session.flush()
+
+        update = _dm_update()
+        await cmd_track_record(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        # Summary block.
+        assert "Total evaluated:</b> 3" in reply_text
+        # 2/3 → 67%
+        assert "Targets hit:</b> 2 (67%)" in reply_text
+        # Recent list.
+        assert "Last 3:" in reply_text
+        # Each outcome rendered with the correct icon.
+        assert "✅" in reply_text
+        assert "❌" in reply_text
+
+    async def test_recent_capped_at_five(self, db_session, patch_session):
+        """Even with 8 evaluated outcomes, the bot lists the most recent 5."""
+        from datetime import UTC, date, datetime, timedelta
+        from decimal import Decimal
+
+        from etfpulse.models import Signal, SignalOutcome
+        from etfpulse.pipeline.detectors import compute_fingerprint
+
+        now = datetime.now(UTC)
+        for i in range(8):
+            signal = Signal(
+                signal_type="flow_anomaly",
+                asset="BTC",
+                trigger_data={},
+                ai_analysis={"suggested_action": "consider long", "headline": "x"},
+                confidence=7,
+                status="alerted",
+                price_at_creation=Decimal("84200"),
+                price_source="binance",
+                ai_prompt_version="v3",
+                fingerprint=compute_fingerprint("track-rec-bot-cap", str(i)),
+                signal_date=date(2026, 4, 25),
+                target_price=Decimal("89500"),
+            )
+            db_session.add(signal)
+            await db_session.flush()
+            db_session.add(
+                SignalOutcome(
+                    signal_id=signal.id,
+                    asset="BTC",
+                    signal_type="flow_anomaly",
+                    direction="long",
+                    confidence=7,
+                    target_price=Decimal("89500"),
+                    price_at_signal=Decimal("84200"),
+                    hit_target=True,
+                    hit_stop=False,
+                    evaluated_at=now - timedelta(hours=i),
+                )
+            )
+        await db_session.flush()
+
+        update = _dm_update()
+        await cmd_track_record(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        assert "Last 5:" in reply_text
+        # Total evaluated still reflects all 8.
+        assert "Total evaluated:</b> 8" in reply_text
+
+    async def test_performance_alias_dispatches_to_same_handler(self):
+        """`/performance` is bound to the same callable — the alias and the
+        primary command produce identical output. Pin this so a future
+        rename doesn't silently desync them."""
+        # Same function object — alias is `cmd_performance = cmd_track_record`.
+        assert cmd_performance is cmd_track_record
+
+    async def test_no_target_signals_render_with_pending_icon(self, db_session, patch_session):
+        """Outcomes where AI didn't set a target render with ⏳ — distinct
+        from "neither hit" (which has a target but didn't reach it)."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from etfpulse.models import Signal, SignalOutcome
+        from etfpulse.pipeline.detectors import compute_fingerprint
+
+        signal = Signal(
+            signal_type="flow_anomaly",
+            asset="ETH",
+            trigger_data={},
+            ai_analysis={"suggested_action": "consider long", "headline": "x"},
+            confidence=4,
+            status="alerted",
+            price_at_creation=Decimal("2480"),
+            price_source="binance",
+            ai_prompt_version="v3",
+            fingerprint=compute_fingerprint("no-target-bot"),
+            signal_date=date(2026, 4, 25),
+        )
+        db_session.add(signal)
+        await db_session.flush()
+        db_session.add(
+            SignalOutcome(
+                signal_id=signal.id,
+                asset="ETH",
+                signal_type="flow_anomaly",
+                direction="long",
+                confidence=4,
+                target_price=None,  # AI declined a target
+                price_at_signal=Decimal("2480"),
+                hit_target=None,
+                hit_stop=False,
+                evaluated_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        update = _dm_update()
+        await cmd_track_record(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        # No-target signals appear in the recent list with the ⏳ icon
+        # rather than the ✅/❌ verdicts.
+        assert "⏳" in reply_text
+        assert "no target set" in reply_text
+        # Path 3 of `_format_track_record_message` — outcomes exist but
+        # none had a target → list-only with the "not yet computable" caption.
+        # Beats the cold-boot copy when we DO have data; beats rendering "0%".
+        assert "Hit rate not yet computable" in reply_text
+        # Sanity — the cold-boot caption MUST NOT fire here.
+        assert "No outcomes evaluated yet" not in reply_text

@@ -292,6 +292,27 @@ async def get_stats_by_confidence_floor(session: AsyncSession) -> TrackRecordSta
     return TrackRecordStat(by_floor=by_floor)
 
 
+async def get_recent_outcomes(session: AsyncSession, *, limit: int = 5) -> list[SignalOutcome]:
+    """Most recent N evaluated outcomes, newest-first by `evaluated_at DESC`.
+
+    Stage 8-P9 — feeds the Telegram `/track-record` command's "Last N"
+    section. Same `evaluated_at IS NOT NULL` filter as the rest of the
+    track-record surface (`/api/track-record`, `/api/dashboard/stats`)
+    so an unevaluated row leaked by a future writer never reaches the bot.
+
+    Returns empty list when no outcomes exist yet (cold-boot before any
+    signal ages past 72h) — caller renders a "no outcomes yet" caption.
+    """
+    stmt = (
+        select(SignalOutcome)
+        .where(SignalOutcome.evaluated_at.is_not(None))
+        .order_by(SignalOutcome.evaluated_at.desc(), SignalOutcome.id.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def evaluate_pending_outcomes(session: AsyncSession) -> dict[str, int]:
     """Score every aged signal that doesn't yet have an outcome.
 

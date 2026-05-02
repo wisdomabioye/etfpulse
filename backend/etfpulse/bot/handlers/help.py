@@ -1,7 +1,7 @@
-"""/help and /track-record — static responses, no DB state.
+"""/help — static command list, no DB state.
 
-`/help` — command list.
-`/track-record` — stub pointing at Stage 08 (SignalOutcome-driven stats).
+`/track-record` and `/performance` were stubs here in Stage 7; they moved
+to `bot/handlers/track_record.py` in Stage 8-P9 when they grew DB lookups.
 """
 
 from __future__ import annotations
@@ -16,30 +16,15 @@ _HELP_TEXT = (
     "• <code>/prefs assets BTC,ETH</code> — set which assets to watch\n"
     "• <code>/prefs confidence 7</code> — minimum confidence (1-10)\n"
     "• <code>/subscribe</code> / <code>/unsubscribe</code> — resume / pause\n"
-    "• <code>/track-record</code> — public signal performance (coming soon)\n"
+    "• <code>/track-record</code> (or <code>/performance</code>) — public signal performance\n"
     "• <code>/help</code> — this message"
-)
-
-_TRACK_RECORD_STUB = (
-    "📊 <b>Track record coming in Stage 08.</b>\n\n"
-    "Once we have evaluated 24h + 72h outcomes for a meaningful number of "
-    "signals, this command will show hit-rate, average return, and "
-    "per-detector performance."
 )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, _HELP_TEXT)
-
-
-async def cmd_track_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, _TRACK_RECORD_STUB)
-
-
-async def _reply(update: Update, text: str) -> None:
     if update.effective_message is None:
         return
-    await update.effective_message.reply_html(text)
+    await update.effective_message.reply_html(_HELP_TEXT)
 
 
-__all__ = ["cmd_help", "cmd_track_record"]
+__all__ = ["cmd_help"]
