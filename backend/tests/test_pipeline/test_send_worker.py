@@ -140,6 +140,233 @@ class TestFormatSignalMessage:
         assert "Signal date: 2026-04-23" in msg
         assert "expires:" not in msg
 
+    # -----------------------------------------------------------------------
+    # Stage 7-P9 additions — regime + news_context blocks. Both render only
+    # when the matching trigger_data key is present, so older signals (built
+    # before the v2 prompt) format identically to pre-Stage-7.
+    # -----------------------------------------------------------------------
+
+    def test_regime_block_renders_when_trigger_data_has_regime_at_creation(self):
+        signal = _signal_with_ai(
+            trigger_data={
+                "streak_length": 4,
+                "regime_at_creation": {
+                    "regime": "distribution",
+                    "signal_posture": "cautious",
+                    "confidence": 7,
+                    "macro_events_nearby": ["FOMC meeting"],
+                },
+            }
+        )
+        msg = format_signal_message(signal)
+
+        assert "<b>Market regime:</b>" in msg
+        assert "Regime:</i> distribution" in msg
+        assert "Posture:</i> cautious" in msg
+        assert "Conf:</i> 7/10" in msg
+        assert "Macro nearby:" in msg
+        assert "FOMC meeting" in msg
+
+    def test_regime_block_omitted_when_absent(self):
+        """Signals built before Stage 7-P6 have no `regime_at_creation` key
+        — message must format without the regime block, no placeholder."""
+        signal = _signal_with_ai(trigger_data={"streak_length": 4})
+        msg = format_signal_message(signal)
+
+        assert "<b>Market regime:</b>" not in msg
+        assert "Regime:" not in msg
+
+    def test_regime_block_tolerates_partial_blob(self):
+        """A future writer that drops one of the keys must not 500 the send.
+        Posture-only blob renders just the posture bit."""
+        signal = _signal_with_ai(
+            trigger_data={
+                "regime_at_creation": {"signal_posture": "paused"},
+            }
+        )
+        msg = format_signal_message(signal)
+
+        assert "Posture:</i> paused" in msg
+        assert "Regime:</i>" not in msg
+
+    def test_regime_block_html_escaped(self):
+        """JSONB blob is technically writeable; escape every dynamic value."""
+        signal = _signal_with_ai(
+            trigger_data={
+                "regime_at_creation": {
+                    "regime": "<script>x</script>",
+                    "macro_events_nearby": ["FOMC & CPI"],
+                },
+            }
+        )
+        msg = format_signal_message(signal)
+
+        assert "<script>x</script>" not in msg
+        assert "&lt;script&gt;" in msg
+        assert "FOMC &amp; CPI" in msg
+
+    def test_news_block_renders_with_title_and_summary(self):
+        signal = _signal_with_ai(
+            trigger_data={
+                "news_context": [
+                    {
+                        "title": "BTC breakout above 70k",
+                        "summary": "Spot inflows accelerated this morning.",
+                        "category": 1,
+                        "published_iso": "2026-04-23T08:00:00Z",
+                    }
+                ],
+            }
+        )
+        msg = format_signal_message(signal)
+
+        assert "<b>News context:</b>" in msg
+        assert "BTC breakout above 70k" in msg
+        assert "Spot inflows accelerated" in msg
+
+    def test_news_block_caps_to_three_items(self):
+        """`gather_news_context` can return 10+ items on busy days; the
+        formatter caps to 3 to stay well under Telegram's 4000-char limit."""
+        signal = _signal_with_ai(
+            trigger_data={
+                "news_context": [
+                    {
+                        "title": f"Item {i}",
+                        "summary": f"Summary {i}",
+                        "category": 1,
+                        "published_iso": "x",
+                    }
+                    for i in range(10)
+                ],
+            }
+        )
+        msg = format_signal_message(signal)
+
+        assert "Item 0" in msg
+        assert "Item 1" in msg
+        assert "Item 2" in msg
+        # Items 3+ must not appear — caller would need to follow the link
+        # to /signals/:id for the full list.
+        assert "Item 3" not in msg
+        assert "Item 9" not in msg
+
+    def test_news_block_trims_long_summary(self):
+        """A 500-char summary must be trimmed to keep the message terse."""
+        signal = _signal_with_ai(
+            trigger_data={
+                "news_context": [
+                    {
+                        "title": "Long",
+                        "summary": "A" * 500,
+                        "category": 1,
+                        "published_iso": "x",
+                    }
+                ],
+            }
+        )
+        msg = format_signal_message(signal)
+
+        # Trimmed to 180-1 chars + ellipsis, so 500 A's must NOT all appear.
+        assert "A" * 500 not in msg
+        assert "…" in msg
+
+    def test_news_block_omitted_when_absent(self):
+        signal = _signal_with_ai(trigger_data={"streak_length": 4})
+        msg = format_signal_message(signal)
+
+        assert "News context:" not in msg
+
+    def test_news_block_skips_items_with_no_title_or_summary(self):
+        """Items where both title and summary are null/empty contribute
+        nothing useful — they must be skipped, not rendered as bullets."""
+        signal = _signal_with_ai(
+            trigger_data={
+                "news_context": [
+                    {"title": None, "summary": None, "category": 1, "published_iso": "x"},
+                    {
+                        "title": "Real headline",
+                        "summary": None,
+                        "category": 1,
+                        "published_iso": "x",
+                    },
+                ],
+            }
+        )
+        msg = format_signal_message(signal)
+
+        assert "Real headline" in msg
+        # The empty item must not produce a stray "• " bullet.
+        # (Counting the "Real headline" bullet — exactly one news bullet.)
+        assert msg.count("• <b>Real headline</b>") == 1
+
+    def test_no_ai_trigger_dump_filters_before_slicing(self):
+        """The 6-key cap on the trigger-data dump must apply to *rendered*
+        keys, not iterated ones. Regression: an earlier version sliced
+        `[:6]` BEFORE the regime/news skip filter, so a trigger_data whose
+        first 6 insertion-order keys included `regime_at_creation` and
+        `news_context` would silently drop real detector keys past index 6."""
+        # Insertion order: regime + news first (mimicking an old writer
+        # that prepended them), then 6 detector keys. Without the fix, only
+        # 4 detector keys would render. With the fix, all 6 render.
+        signal = _signal_with_ai(
+            ai_analysis=None,
+            confidence=None,
+            trigger_data={
+                "regime_at_creation": {"regime": "markup"},
+                "news_context": [
+                    {"title": "x", "summary": "y", "category": 1, "published_iso": "z"}
+                ],
+                "detector_a": 1,
+                "detector_b": 2,
+                "detector_c": 3,
+                "detector_d": 4,
+                "detector_e": 5,
+                "detector_f": 6,
+            },
+        )
+        msg = format_signal_message(signal)
+
+        for key in (
+            "detector_a",
+            "detector_b",
+            "detector_c",
+            "detector_d",
+            "detector_e",
+            "detector_f",
+        ):
+            assert key in msg, f"trigger-dump cap should not have dropped {key}"
+
+    def test_no_ai_still_renders_regime_and_news_blocks(self):
+        """Regime + news context are captured at build-time independent of
+        AI success. A no-AI signal must still carry these reads."""
+        signal = _signal_with_ai(
+            ai_analysis=None,
+            confidence=None,
+            trigger_data={
+                "streak_length": 4,
+                "regime_at_creation": {"regime": "markup", "signal_posture": "normal"},
+                "news_context": [
+                    {
+                        "title": "Macro update",
+                        "summary": "details",
+                        "category": 1,
+                        "published_iso": "x",
+                    }
+                ],
+            },
+        )
+        msg = format_signal_message(signal)
+
+        assert "AI analysis unavailable" in msg
+        assert "Regime:</i> markup" in msg
+        assert "Macro update" in msg
+        # The trigger_data dump must NOT echo the regime/news keys (they're
+        # already rendered as their own blocks).
+        assert "regime_at_creation:" not in msg
+        assert "news_context:" not in msg
+        # Other trigger_data keys still appear in the dump.
+        assert "streak_length" in msg
+
 
 # ---------------------------------------------------------------------------
 # send_pending_deliveries — integration

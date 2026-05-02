@@ -215,9 +215,130 @@ async def _match_groups(session: AsyncSession, signal: Signal) -> list[int]:
 # Handles NULL ai_analysis with a trigger-data fallback, HTML-escapes every
 # dynamic field to prevent injection from LLM output or user-configured
 # trigger data, and truncates to Telegram's safe body size.
+#
+# Stage 7-P9: extended with two optional sections sourced from
+# `trigger_data` — `regime_at_creation` (one compact line + macro-events
+# list) and `news_context` (capped summary list). Both render only when
+# the matching key is present, so signals built before the v2 prompt
+# (no regime + no news in trigger_data) still format identically to
+# pre-Stage-7. Web detail page (`/signals/:id`) shows the same data —
+# this is parity, not divergence.
 # ---------------------------------------------------------------------------
 
 _TELEGRAM_TEXT_CAP = 4000  # Telegram's hard limit is 4096; headroom for safety.
+
+# News-context truncation: a v2 signal can carry 10+ headlines. Inlining
+# all of them blows past the 4000-char cap on busy days. Cap to the most
+# recent 3 (gather_news_context returns ordered desc) and trim each
+# summary so the section stays well under 800 chars even at the limit.
+_NEWS_MAX_ITEMS = 3
+_NEWS_SUMMARY_CAP = 180
+
+# Trigger-data dump (no-AI branch) caps and the keys we deliberately
+# exclude — the regime + news blocks render their own sections, so dumping
+# them again as raw key:value would be redundant AND ugly.
+_TRIGGER_DUMP_LIMIT = 6
+_TRIGGER_DUMP_SKIP_KEYS = frozenset({"regime_at_creation", "news_context"})
+
+
+def _format_regime_block(trigger_data: dict[str, Any]) -> str | None:
+    """Render the `regime_at_creation` JSONB blob as one HTML block, or None.
+
+    Persisted shape (`pipeline/signal_builder.build_signal`):
+        {
+            "regime": "<MarketRegime.value>",
+            "signal_posture": "<SignalPosture.value>",
+            "confidence": int,
+            "macro_events_nearby": list[str],
+        }
+
+    Tolerant of partial blobs — any missing key just hides that bit so a
+    future writer change can't crash the formatter. Returns None when the
+    key is absent (legacy signal predating Stage 7-P6) so the caller skips
+    the section entirely rather than rendering a "Regime: —" stub.
+    """
+    raw = trigger_data.get("regime_at_creation")
+    if not isinstance(raw, dict):
+        return None
+
+    regime = raw.get("regime")
+    posture = raw.get("signal_posture")
+    confidence = raw.get("confidence")
+    events = raw.get("macro_events_nearby") or []
+
+    line_bits: list[str] = []
+    if isinstance(regime, str) and regime:
+        line_bits.append(f"<i>Regime:</i> {html.escape(regime)}")
+    if isinstance(posture, str) and posture:
+        line_bits.append(f"<i>Posture:</i> {html.escape(posture)}")
+    if isinstance(confidence, int):
+        line_bits.append(f"<i>Conf:</i> {confidence}/10")
+
+    if not line_bits:
+        return None
+
+    block = "\n<b>Market regime:</b> " + " · ".join(line_bits)
+
+    if isinstance(events, list) and events:
+        # str() is defense-in-depth — today only strings flow in (classifier
+        # writes list[str]), but a non-string leak would 500 the send rather
+        # than rendering "42". Same approach as `/api/regime` (see
+        # api/routes/regime.py).
+        bullets = "\n".join(f"• {html.escape(str(item))}" for item in events)
+        block += f"\n<i>Macro nearby:</i>\n{bullets}"
+
+    return block
+
+
+def _format_news_block(trigger_data: dict[str, Any]) -> str | None:
+    """Render the `news_context` JSONB list as a capped HTML block, or None.
+
+    Persisted shape per item (`pipeline/news_context.NewsContextItem`):
+        {"title": str|None, "category": int, "published_iso": str, "summary": str|None}
+
+    Caps at `_NEWS_MAX_ITEMS` (most recent 3) and trims each summary to
+    `_NEWS_SUMMARY_CAP` chars — Telegram's 4000-char cap is a real ceiling
+    on busy news days, and a long news block would push the AI reasoning
+    off the screen. Items with no title AND no summary are skipped (nothing
+    useful to render).
+
+    Returns None when:
+        - the key is absent (legacy signal pre-Stage-7-P6), OR
+        - the key is present but every item was malformed/empty.
+    """
+    raw = trigger_data.get("news_context")
+    if not isinstance(raw, list):
+        return None
+
+    rendered_items: list[str] = []
+    for entry in raw[:_NEWS_MAX_ITEMS]:
+        if not isinstance(entry, dict):
+            continue
+        title = entry.get("title")
+        summary = entry.get("summary")
+        title_str = html.escape(title) if isinstance(title, str) and title else ""
+        summary_str = ""
+        if isinstance(summary, str) and summary:
+            if len(summary) <= _NEWS_SUMMARY_CAP:
+                trimmed = summary
+            else:
+                trimmed = summary[: _NEWS_SUMMARY_CAP - 1].rstrip() + "…"
+            summary_str = html.escape(trimmed)
+
+        if not title_str and not summary_str:
+            continue
+
+        if title_str and summary_str:
+            rendered_items.append(f"• <b>{title_str}</b> — {summary_str}")
+        elif title_str:
+            rendered_items.append(f"• <b>{title_str}</b>")
+        else:
+            rendered_items.append(f"• {summary_str}")
+
+    if not rendered_items:
+        return None
+
+    return "\n<b>News context:</b>\n" + "\n".join(rendered_items)
 
 
 def format_signal_message(signal: Signal) -> str:
@@ -226,9 +347,25 @@ def format_signal_message(signal: Signal) -> str:
     Every dynamic field goes through `html.escape()` so LLM output containing
     `<` / `>` / `&` can't break Telegram's HTML parser or (worst case) inject
     tags. Falls back to a trigger-data summary if `ai_analysis` is NULL.
+
+    Section order (mirrors `/signals/:id` on the web for parity):
+        1. Title line — "<asset> <signal_type> signal"
+        2. Headline (when AI succeeded)
+        3. Meta line — Suggested action · Confidence · Horizon
+        4. Regime block (when `trigger_data.regime_at_creation` present)
+        5. Reasoning bullets
+        6. News context (when `trigger_data.news_context` present)
+        7. Risks bullets
+        8. Footer — signal date · expires
+    Sections 4 and 6 are Stage 7-P9 additions — older signals just render
+    without them, no rule branch needed at the call site.
     """
     asset = html.escape(signal.asset)
     signal_type = html.escape(signal.signal_type.replace("_", " "))
+    # Bind once — `signal.trigger_data` is JSONB-nullable and several
+    # downstream callers want a dict to .get() against. `or {}` four times
+    # would just be noise.
+    trigger_data: dict[str, Any] = signal.trigger_data or {}
 
     parts: list[str] = [f"<b>{asset} {signal_type} signal</b>"]
 
@@ -250,10 +387,18 @@ def format_signal_message(signal: Signal) -> str:
         if meta_bits:
             parts.append("\n" + " · ".join(meta_bits))
 
+        regime_block = _format_regime_block(trigger_data)
+        if regime_block:
+            parts.append(regime_block)
+
         reasoning = analysis.get("reasoning") or []
         if reasoning:
             bullets = "\n".join(f"• {html.escape(str(r))}" for r in reasoning)
             parts.append(f"\n<b>Reasoning:</b>\n{bullets}")
+
+        news_block = _format_news_block(trigger_data)
+        if news_block:
+            parts.append(news_block)
 
         risks = analysis.get("risks") or []
         if risks:
@@ -261,11 +406,28 @@ def format_signal_message(signal: Signal) -> str:
             parts.append(f"\n<b>Risks:</b>\n{bullets}")
     else:
         # No AI — surface what we have from trigger_data so the signal is
-        # still actionable rather than a bare headline.
+        # still actionable rather than a bare headline. Regime + news context
+        # blocks still render here when present (they were captured at
+        # build-time independent of AI success), so a no-AI signal still
+        # carries the regime/news read.
+        regime_block = _format_regime_block(trigger_data)
+        if regime_block:
+            parts.append(regime_block)
+
         parts.append("\n<b>Trigger data:</b>")
-        if signal.trigger_data:
-            for k, v in list(signal.trigger_data.items())[:6]:
+        if trigger_data:
+            # Filter BEFORE slicing so the cap applies to rendered keys, not
+            # iterated keys — otherwise a trigger_data with regime/news in
+            # the first 6 positions would silently drop real detector keys
+            # past index 6.
+            visible = [(k, v) for k, v in trigger_data.items() if k not in _TRIGGER_DUMP_SKIP_KEYS]
+            for k, v in visible[:_TRIGGER_DUMP_LIMIT]:
                 parts.append(f"• <i>{html.escape(str(k))}:</i> {html.escape(str(v))}")
+
+        news_block = _format_news_block(trigger_data)
+        if news_block:
+            parts.append(news_block)
+
         parts.append("\n<i>AI analysis unavailable — raw detector output only.</i>")
 
     footer_bits: list[str] = [f"Signal date: {signal.signal_date.isoformat()}"]
