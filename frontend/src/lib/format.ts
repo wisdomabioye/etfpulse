@@ -5,7 +5,7 @@
  * formatters on the hot path, hand-rolled is smaller than any dep.
  */
 
-import type { SignalType } from '../api/types';
+import type { MarketRegime, SignalPosture, SignalType } from '../api/types';
 
 /** Human-readable signal type: "flow_anomaly" → "Flow Anomaly". */
 export function formatSignalType(type: SignalType): string {
@@ -51,4 +51,102 @@ export function confidenceColor(c: number | null | undefined): string {
  * Decision locked in Stage 6 planning: frontend truncates, backend returns full. */
 export function truncateFingerprint(fp: string): string {
   return fp.slice(0, 8);
+}
+
+/** Title-case a single Wyckoff regime: "accumulation" → "Accumulation".
+ * Mirrors `formatSignalType` styling — no shared helper since regime values
+ * never carry an underscore (single-word enum). */
+export function formatRegime(r: MarketRegime): string {
+  return r[0].toUpperCase() + r.slice(1);
+}
+
+/** Title-case a single posture value, matching `formatRegime` styling. */
+export function formatPosture(p: SignalPosture): string {
+  return p[0].toUpperCase() + p.slice(1);
+}
+
+/** Color token for a Wyckoff regime. Mirrors classifier semantics:
+ *   accumulation → pos (bullish base building)
+ *   markup       → pos (active uptrend)
+ *   distribution → warn (topping)
+ *   markdown     → neg (active downtrend)
+ *   uncertain    → muted (no high-confidence read)
+ *
+ * Keep in sync with `pipeline/regime_monitor.py`'s MarketRegime enum;
+ * any new regime value must extend both this map AND the MarketRegime
+ * union in `api/types.ts`. */
+export function regimeColor(r: MarketRegime): string {
+  switch (r) {
+    case 'accumulation':
+    case 'markup':
+      return 'var(--color-pos)';
+    case 'distribution':
+      return 'var(--color-warn)';
+    case 'markdown':
+      return 'var(--color-neg)';
+    case 'uncertain':
+      return 'var(--color-text-4)';
+  }
+}
+
+/** Color token for a posture: how aggressively the engine should fire.
+ *   aggressive → pos     (lower bar for new signals)
+ *   normal     → info    (default operating mode)
+ *   cautious   → warn    (raise the bar; macro/news risk elevated)
+ *   paused     → neg     (no new signals fanned out)
+ *
+ * Used by the home regime tile + RegimeBadge in TopNav. Keep parallel
+ * to `regimeColor` so both helpers stay together when extending. */
+export function postureColor(p: SignalPosture): string {
+  switch (p) {
+    case 'aggressive':
+      return 'var(--color-pos)';
+    case 'normal':
+      return 'var(--color-info)';
+    case 'cautious':
+      return 'var(--color-warn)';
+    case 'paused':
+      return 'var(--color-neg)';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Enum narrowers — `DashboardStats.current_regime` and `signal_posture` are
+// `string | null` (Pydantic widens to str at the JSON boundary, even though
+// the column is CHECK-constrained). Both consumers (TopNav, Home) need to
+// safely narrow before passing to the strictly-typed badge components.
+// One helper each so we never drift on which values are valid.
+// ---------------------------------------------------------------------------
+
+const REGIME_VALUES: ReadonlySet<string> = new Set<MarketRegime>([
+  'accumulation',
+  'markup',
+  'distribution',
+  'markdown',
+  'uncertain',
+]);
+
+const POSTURE_VALUES: ReadonlySet<string> = new Set<SignalPosture>([
+  'aggressive',
+  'normal',
+  'cautious',
+  'paused',
+]);
+
+/** Narrow an unknown-shaped string into `MarketRegime` or null. Returns
+ *  null on null/undefined input AND on any string outside the enum —
+ *  defensive against a future backend stamping a value that frontend
+ *  hasn't been redeployed for. Callers render a "not yet classified"
+ *  fallback rather than crashing. */
+export function narrowRegime(value: string | null | undefined): MarketRegime | null {
+  return value !== null && value !== undefined && REGIME_VALUES.has(value)
+    ? (value as MarketRegime)
+    : null;
+}
+
+/** Sibling of `narrowRegime` for `SignalPosture`. Same semantics. */
+export function narrowPosture(value: string | null | undefined): SignalPosture | null {
+  return value !== null && value !== undefined && POSTURE_VALUES.has(value)
+    ? (value as SignalPosture)
+    : null;
 }

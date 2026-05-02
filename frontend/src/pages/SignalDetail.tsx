@@ -3,6 +3,7 @@ import { useSignal } from '../api/queries';
 import {
   AssetBadge,
   ConfidenceBadge,
+  NewsContextSection,
   OutcomeCard,
   SignalTypeBadge,
   SuggestedActionPanel,
@@ -75,6 +76,19 @@ export function SignalDetail() {
 function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
   const analysis = s.ai_analysis;
 
+  // Sequential section numbering — drives the SectionLabel `n` so gaps
+  // never form when conditional sections (AI Reasoning, News Context,
+  // Risks) are absent. The closure is fresh per render — order of `next()`
+  // calls below maps 1:1 to render order. Don't reorder without rechecking.
+  let sectionN = 0;
+  const next = () => String(++sectionN).padStart(2, '0');
+
+  // News context is a Stage 7-P6 addition — older signals (built under
+  // the v1 prompt before the gatherer existed) lack `trigger_data.news_context`
+  // entirely. The Array.isArray check distinguishes "key absent" from
+  // "empty list" so we only render the section heading when the gatherer ran.
+  const showNewsContext = Array.isArray(s.trigger_data.news_context);
+
   return (
     <>
       <div className="flex items-center gap-2 mb-3.5">
@@ -109,7 +123,7 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
 
       {analysis && analysis.reasoning.length > 0 && (
         <section className="mt-10">
-          <SectionLabel n="01">AI Reasoning</SectionLabel>
+          <SectionLabel n={next()}>AI Reasoning</SectionLabel>
           <ul className="m-0 p-0 list-none">
             {analysis.reasoning.map((r, i) => (
               <li
@@ -134,14 +148,21 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
         </section>
       )}
 
+      {showNewsContext && (
+        <section className="mt-10">
+          <SectionLabel n={next()}>News Context</SectionLabel>
+          <NewsContextSection triggerData={s.trigger_data} />
+        </section>
+      )}
+
       <section className="mt-10">
-        <SectionLabel n="02">Trigger Data</SectionLabel>
+        <SectionLabel n={next()}>Trigger Data</SectionLabel>
         <TriggerDataTable data={s.trigger_data} />
       </section>
 
       {analysis && analysis.risks.length > 0 && (
         <section className="mt-10">
-          <SectionLabel n="03">Risks</SectionLabel>
+          <SectionLabel n={next()}>Risks</SectionLabel>
           <div className="flex flex-col gap-2">
             {analysis.risks.map((r, i) => (
               <Callout key={i} tone="warn">
@@ -153,7 +174,7 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
       )}
 
       <section className="mt-10">
-        <SectionLabel n="04">Outcome</SectionLabel>
+        <SectionLabel n={next()}>Outcome</SectionLabel>
         <OutcomeCard outcome={s.outcome} expiresAt={s.expires_at} />
       </section>
 

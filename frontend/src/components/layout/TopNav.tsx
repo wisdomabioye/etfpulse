@@ -1,4 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { useDashboardStats } from '../../api/queries';
+import { narrowRegime } from '../../lib/format';
+import { RegimeBadge } from '../regime/RegimeBadge';
 import { Logo } from './Logo';
 
 interface NavItem {
@@ -10,12 +13,24 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Signals', to: '/signals', matches: ['/signals'] },
+  // Track Record is Stage 8 (depends on SignalOutcome rows). Stays a
+  // "coming soon" stub until #44 lands.
   { label: 'Track Record', to: null },
-  { label: 'Regime', to: null },
+  // Regime went live in Stage 7-P8 — RegimeBadge below the link surfaces
+  // the current classification inline so users can see the regime without
+  // navigating. The "Regime" string itself is also a link to /regime.
+  { label: 'Regime', to: '/regime', matches: ['/regime'] },
 ];
 
 export function TopNav() {
   const location = useLocation();
+  const stats = useDashboardStats();
+
+  // Narrow the unknown-shaped string from the dashboard endpoint into the
+  // strict MarketRegime literal — see `narrowRegime` for semantics. Cold
+  // boot (no snapshot yet) and out-of-enum drift both collapse to null,
+  // which hides the badge rather than crashing the navbar.
+  const currentRegime = narrowRegime(stats.data?.current_regime);
 
   const isActive = (item: NavItem): boolean => {
     if (!item.to) return false;
@@ -40,15 +55,24 @@ export function TopNav() {
             );
           }
           const active = isActive(item);
+          // Inline regime badge sits to the RIGHT of the "Regime" link
+          // text (not on top of the label, so the click target stays the
+          // link text itself). When regime data hasn't loaded yet OR the
+          // backend reports null, the badge is omitted — no skeleton
+          // shimmer in the navbar. The `currentRegime !== null` check is
+          // load-bearing for TS narrowing inside the JSX expression.
           return (
             <NavLink
               key={item.label}
               to={item.to}
-              className={`text-[13px] px-3 py-1.5 rounded-md font-medium transition-colors ${
+              className={`inline-flex items-center gap-2 text-[13px] px-3 py-1.5 rounded-md font-medium transition-colors ${
                 active ? 'text-text-1 bg-bg-3' : 'text-text-3 hover:text-text-1'
               }`}
             >
               {item.label}
+              {item.label === 'Regime' && currentRegime !== null && (
+                <RegimeBadge regime={currentRegime} size="sm" />
+              )}
             </NavLink>
           );
         })}

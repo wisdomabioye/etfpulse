@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useDashboardStats, useSignals } from '../api/queries';
 import { HeroHitRatePanel } from '../components/home/HeroHitRatePanel';
 import { HowItWorks } from '../components/home/HowItWorks';
+import { RegimeTile } from '../components/home/RegimeTile';
 import { SignalCard } from '../components/signals';
 import {
   Button,
@@ -10,19 +11,29 @@ import {
   SectionHeader,
   SkeletonGrid,
 } from '../components/ui';
+import { narrowPosture, narrowRegime } from '../lib/format';
 
 /** Home — HomeV3 (Data-forward) variant.
  *
- * Three sections, dividers via border-b / border-t:
+ * Four sections, dividers via border-b / border-t:
  *   1. Hero (split: copy left, hit-rate panel right)
- *   2. Most recent (3-col signal grid)
- *   3. How it works (3-cell connected)
+ *   2. Regime tile (Stage 7-P8 — current Wyckoff phase + posture)
+ *   3. Most recent (3-col signal grid)
+ *   4. How it works (3-cell connected)
  *
  * Horizontal padding is a single pattern: px-6 sm:px-8. No breakpoint chains.
  */
 export function Home() {
   const stats = useDashboardStats();
   const recent = useSignals({ limit: 3 });
+
+  // Defensive enum narrowing — see `narrowRegime`/`narrowPosture` in
+  // lib/format. RegimeTile renders its own "not yet classified" caption
+  // when both are null. Loading is treated as unavailable too — no shimmer
+  // in this slot, the caption fits both states honestly.
+  const currentRegime = narrowRegime(stats.data?.current_regime);
+  const currentPosture = narrowPosture(stats.data?.signal_posture);
+  const regimeUnavailable = stats.isError || (!stats.isLoading && currentRegime === null);
 
   return (
     <>
@@ -59,6 +70,14 @@ export function Home() {
             totalSignals={stats.data?.total_signals ?? (stats.isError ? null : 0)}
           />
         </div>
+      </section>
+
+      <section className="border-b border-border-2 px-6 sm:px-8 py-10 md:py-12">
+        <RegimeTile
+          regime={currentRegime}
+          posture={currentPosture}
+          unavailable={regimeUnavailable}
+        />
       </section>
 
       <section className="px-6 sm:px-8 py-14 md:py-16">

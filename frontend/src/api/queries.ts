@@ -11,10 +11,11 @@
  */
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { apiGet } from './client';
+import { ApiError, apiGet } from './client';
 import type {
   DashboardStats,
   PaginatedSignals,
+  RegimeResponse,
   SignalDetail,
   SignalFilters,
 } from './types';
@@ -49,6 +50,28 @@ export function useInfiniteSignals(filters?: SignalFilters) {
       }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+}
+
+/** Latest market-regime classification (Stage 7-P7).
+ *
+ * 503 from the endpoint = "no snapshot yet" (cold-boot OR legacy pre-Stage-7
+ * row). That is NOT a transient error — retrying won't make a snapshot
+ * appear, so we short-circuit. Any other error (network blip, 502 from the
+ * proxy) gets the TanStack default of one retry. The page also exposes a
+ * manual retry button via `query.refetch()`.
+ *
+ * Same 30s staleTime default as `useDashboardStats` — they refetch on the
+ * same cadence so the home page's regime tile and the dedicated /regime
+ * page stay coherent within a tab session. */
+export function useRegime() {
+  return useQuery({
+    queryKey: ['regime'],
+    queryFn: () => apiGet<RegimeResponse>('/api/regime'),
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && error.status === 503) return false;
+      return failureCount < 1;
+    },
   });
 }
 

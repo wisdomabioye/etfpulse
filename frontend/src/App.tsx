@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Footer, TopNav } from './components/layout';
 import { Home } from './pages/Home';
+import { Regime } from './pages/Regime';
 import { SignalDetail } from './pages/SignalDetail';
 import { Signals } from './pages/Signals';
 
@@ -15,6 +16,7 @@ function App() {
               <Route path="/" element={<Home />} />
               <Route path="/signals" element={<Signals />} />
               <Route path="/signals/:id" element={<SignalDetail />} />
+              <Route path="/regime" element={<Regime />} />
             </Routes>
           </main>
           <Footer />

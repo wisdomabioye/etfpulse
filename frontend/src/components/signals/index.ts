@@ -1,6 +1,7 @@
 export { AssetBadge } from './AssetBadge';
 export { ConfidenceBadge } from './ConfidenceBadge';
 export { FilterBar } from './FilterBar';
+export { NewsContextSection } from './NewsContextSection';
 export { OutcomeCard } from './OutcomeCard';
 export { SignalCard } from './SignalCard';
 export { SignalTypeBadge } from './SignalTypeBadge';
