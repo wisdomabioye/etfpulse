@@ -21,6 +21,7 @@ from etfpulse.pipeline.prices import PriceBar
 from etfpulse.pipeline.track_record import (
     _compute_metrics,
     evaluate_pending_outcomes,
+    get_stats_by_confidence_floor,
 )
 
 # ---------------------------------------------------------------------------
@@ -624,3 +625,127 @@ class TestEvaluatePendingOutcomes:
         # One outcome row exists — for the good signal.
         outcomes = (await db_session.execute(select(SignalOutcome))).scalars().all()
         assert len(outcomes) == 1
+
+
+# ---------------------------------------------------------------------------
+# get_stats_by_confidence_floor + TrackRecordStat (Stage 8-P8)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_outcome_only(
+    db_session,
+    *,
+    confidence: int,
+    hit_target: bool | None,
+    key: str,
+    evaluated_at: datetime | None = None,
+) -> None:
+    """Tiny helper for the per-floor stats tests — seeds Signal + Outcome
+    in one call. Distinct from `_make_signal` (used by the eval-loop tests)
+    because here we never call the eval loop; we just need the rows present."""
+    signal = _make_signal(created_at=datetime.now(UTC) - timedelta(hours=80), fingerprint_extra=key)
+    db_session.add(signal)
+    await db_session.flush()
+    db_session.add(
+        SignalOutcome(
+            signal_id=signal.id,
+            asset="BTC",
+            signal_type="flow_anomaly",
+            direction="long",
+            confidence=confidence,
+            target_price=Decimal("89500"),
+            price_at_signal=Decimal("84200"),
+            hit_target=hit_target,
+            evaluated_at=evaluated_at or datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+
+
+class TestGetStatsByConfidenceFloor:
+    async def test_empty_db_returns_all_zero_floors(self, db_session):
+        stat = await get_stats_by_confidence_floor(db_session)
+        # All 10 floors present, all (0, 0).
+        for floor in range(1, 11):
+            assert stat.by_floor[floor] == (0, 0)
+            assert stat.hit_rate_pct(floor) is None
+
+    async def test_cumulative_across_floors(self, db_session):
+        """3 hits at conf 8, 1 miss at conf 7, 2 hits at conf 9, 1 miss at conf 5.
+        At floor 7+: targeted=7, hits=5 → 71% (rounded). Floor 9+: targeted=2, hits=2 → 100%.
+        Floor 5+: targeted=7, hits=5 → 71%."""
+        await _seed_outcome_only(db_session, confidence=8, hit_target=True, key="a")
+        await _seed_outcome_only(db_session, confidence=8, hit_target=True, key="b")
+        await _seed_outcome_only(db_session, confidence=8, hit_target=True, key="c")
+        await _seed_outcome_only(db_session, confidence=7, hit_target=False, key="d")
+        await _seed_outcome_only(db_session, confidence=9, hit_target=True, key="e")
+        await _seed_outcome_only(db_session, confidence=9, hit_target=True, key="f")
+        await _seed_outcome_only(db_session, confidence=5, hit_target=False, key="g")
+
+        stat = await get_stats_by_confidence_floor(db_session)
+        # Floor 9 → only conf 9: 2 hits / 2 targeted = 100%
+        assert stat.by_floor[9] == (2, 2)
+        assert stat.hit_rate_pct(9) == 100
+        # Floor 8 → conf 8+9: 5 hits / 5 targeted = 100%
+        assert stat.by_floor[8] == (5, 5)
+        assert stat.hit_rate_pct(8) == 100
+        # Floor 7 → +1 miss at 7: 5 hits / 6 targeted ≈ 83%
+        assert stat.by_floor[7] == (6, 5)
+        assert stat.hit_rate_pct(7) == 83
+        # Floor 5 → +1 miss at 5: 5 hits / 7 targeted ≈ 71%
+        assert stat.by_floor[5] == (7, 5)
+        assert stat.hit_rate_pct(5) == 71
+        # Floor 1 → same as floor 5 (nothing at confidences 2-4 here)
+        assert stat.by_floor[1] == (7, 5)
+
+    async def test_excludes_no_target_signals_from_targeted_count(self, db_session):
+        """A signal with hit_target IS NULL (AI declined) doesn't count
+        toward the targeted denominator — same rationale as `/api/track-record`
+        and `/api/dashboard/stats`."""
+        await _seed_outcome_only(db_session, confidence=8, hit_target=True, key="t")
+        await _seed_outcome_only(db_session, confidence=8, hit_target=None, key="n1")
+        await _seed_outcome_only(db_session, confidence=8, hit_target=None, key="n2")
+
+        stat = await get_stats_by_confidence_floor(db_session)
+        # 1 hit / 1 targeted = 100% (the two None-target signals don't count)
+        assert stat.by_floor[8] == (1, 1)
+        assert stat.hit_rate_pct(8) == 100
+        # `targeted_count` mirrors `by_floor[N][0]`.
+        assert stat.targeted_count(8) == 1
+
+    async def test_excludes_unevaluated_outcomes(self, db_session):
+        """Defensive — `evaluated_at IS NOT NULL` filter parity with
+        the dashboard + track-record endpoints."""
+        signal = _make_signal(
+            created_at=datetime.now(UTC) - timedelta(hours=80), fingerprint_extra="unev"
+        )
+        db_session.add(signal)
+        await db_session.flush()
+        db_session.add(
+            SignalOutcome(
+                signal_id=signal.id,
+                asset="BTC",
+                signal_type="flow_anomaly",
+                direction="long",
+                confidence=8,
+                target_price=Decimal("89500"),
+                price_at_signal=Decimal("84200"),
+                hit_target=True,
+                evaluated_at=None,  # explicitly unevaluated
+            )
+        )
+        await db_session.flush()
+
+        stat = await get_stats_by_confidence_floor(db_session)
+        assert stat.by_floor[8] == (0, 0)
+        assert stat.hit_rate_pct(8) is None
+
+    async def test_hit_rate_pct_rounds_to_nearest_integer(self, db_session):
+        """3/7 = 42.857% → rounds to 43, not 42 or 42.86."""
+        for i in range(3):
+            await _seed_outcome_only(db_session, confidence=7, hit_target=True, key=f"h{i}")
+        for i in range(4):
+            await _seed_outcome_only(db_session, confidence=7, hit_target=False, key=f"m{i}")
+
+        stat = await get_stats_by_confidence_floor(db_session)
+        assert stat.hit_rate_pct(7) == 43

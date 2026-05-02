@@ -46,9 +46,11 @@ from __future__ import annotations
 
 import html
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import structlog
+from cachetools import TTLCache
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +70,10 @@ from etfpulse.models import (
     SignalStatus,
     TelegramGroup,
     User,
+)
+from etfpulse.pipeline.track_record import (
+    TrackRecordStat,
+    get_stats_by_confidence_floor,
 )
 
 log = structlog.get_logger()
@@ -240,6 +246,119 @@ _NEWS_SUMMARY_CAP = 180
 _TRIGGER_DUMP_LIMIT = 6
 _TRIGGER_DUMP_SKIP_KEYS = frozenset({"regime_at_creation", "news_context"})
 
+# Stage 8-P8 — track-record snapshot cache. Refreshed by the send worker
+# via `_get_track_record_stat` which falls through to a DB query on miss.
+# 10-min TTL keeps the stat fresh enough for "we hit 64% of the time"
+# language (the underlying number changes once per outcome-eval cycle, ~1h)
+# without re-querying on every signal in a tick. Single-key cache: there's
+# only one global track record at a time.
+_TRACK_RECORD_CACHE_TTL_SEC = 600
+_TRACK_RECORD_CACHE_KEY = "current"
+_track_record_cache: TTLCache[str, TrackRecordStat] = TTLCache(
+    maxsize=1, ttl=_TRACK_RECORD_CACHE_TTL_SEC
+)
+
+
+async def _get_track_record_stat(session: AsyncSession) -> TrackRecordStat:
+    """Memoised per-process snapshot. Caller — `send_pending_deliveries` —
+    invokes this ONCE per tick, then passes the same TrackRecordStat to
+    every `format_signal_message` call so a 100-message tick still pays
+    one DB query for the cohort stats.
+
+    Cache miss: one GROUP BY query against `signal_outcomes`. Cache hit:
+    no DB roundtrip at all. Tests can clear the cache via `_track_record_cache.clear()`.
+    """
+    cached = _track_record_cache.get(_TRACK_RECORD_CACHE_KEY)
+    if cached is not None:
+        return cached
+    fresh = await get_stats_by_confidence_floor(session)
+    _track_record_cache[_TRACK_RECORD_CACHE_KEY] = fresh
+    return fresh
+
+
+def _format_action_block(signal: Signal) -> str | None:
+    """Render the AI-suggested entry/stop/target as one HTML block, or None.
+
+    Stage 8-P8. Reads off the `Signal.entry_price/stop_price/target_price`
+    columns (P1 added these). Returns None when the AI declined to set
+    any of the three (or when this is a legacy v1/v2 signal that never
+    had them) — clearer than rendering "Suggested: $— · Stop: $— · Target: $—".
+
+    R:R derived inline as `|target - entry| / |entry - stop|`, magnitude
+    only (caller doesn't switch on long/short; the convention "1:N" is
+    uniform). Skipped when any leg is missing OR when risk distance is 0
+    (would divide by zero on bad data — same guard as the frontend
+    `SuggestedActionPanel.computeRiskReward`).
+    """
+    entry = signal.entry_price
+    stop = signal.stop_price
+    target = signal.target_price
+    if entry is None and stop is None and target is None:
+        return None
+
+    # The all-None early return above guarantees at least one of the three
+    # is non-None, so `bits` is provably non-empty after this block.
+    bits: list[str] = []
+    if entry is not None:
+        bits.append(f"<i>Entry:</i> {_format_usd(entry)}")
+    if stop is not None:
+        bits.append(f"<i>Stop:</i> {_format_usd(stop)}")
+    if target is not None:
+        bits.append(f"<i>Target:</i> {_format_usd(target)}")
+
+    block = "\n<b>Action levels:</b> " + " · ".join(bits)
+
+    if entry is not None and stop is not None and target is not None:
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        if risk > 0:
+            rr = round((float(reward) / float(risk)) * 10) / 10
+            # "1:1.7" — magnitude form, direction-agnostic.
+            block += f" · <i>R:R</i> 1:{rr}"
+
+    return block
+
+
+def _format_track_record_stat_line(signal: Signal, stat: TrackRecordStat | None) -> str | None:
+    """Render the killer "Our signals at confidence ≥N hit target Y% of the
+    time (over M signals)" stat line, or None when not applicable.
+
+    Skips when:
+      - `stat` not provided (legacy callers / pure-formatter tests)
+      - `signal.confidence` is NULL (AI failed at build time — no cohort
+        applies because the signal isn't even in the cohort denominator)
+      - the cohort at this floor has zero targeted signals (fresh deploy
+        with no outcomes yet — better than rendering "0% over 0 signals")
+
+    The stat is intentionally the LAST piece of the message body (just
+    before the footer) so the alert ends on the proof point — same
+    placement as the Stage 8 design doc spec.
+    """
+    if stat is None or signal.confidence is None:
+        return None
+    confidence = signal.confidence
+    pct = stat.hit_rate_pct(confidence)
+    if pct is None:
+        return None
+    cohort = stat.targeted_count(confidence)
+    return (
+        f"\n<i>Our signals at confidence ≥{confidence} hit target "
+        f"{pct}% of the time (over {cohort} evaluated).</i>"
+    )
+
+
+def _format_usd(d: Decimal) -> str:
+    """Compact USD formatter for prices in the action block. Renders with
+    thousands separators via `f"{n:,}"` once cast to float. Same shape as
+    the frontend's `lib/format.formatUsdPrice`.
+
+    Caller MUST None-check upstream — this function expects a real Decimal.
+    Per-call float() is safe here because we render as visible text only;
+    no arithmetic happens after this point. Two-decimal cap matches the
+    frontend formatter exactly so a Telegram alert and the web page show
+    the same dollar value to the cent."""
+    return f"${float(d):,.2f}"
+
 
 def _format_regime_block(trigger_data: dict[str, Any]) -> str | None:
     """Render the `regime_at_creation` JSONB blob as one HTML block, or None.
@@ -341,7 +460,9 @@ def _format_news_block(trigger_data: dict[str, Any]) -> str | None:
     return "\n<b>News context:</b>\n" + "\n".join(rendered_items)
 
 
-def format_signal_message(signal: Signal) -> str:
+def format_signal_message(
+    signal: Signal, *, track_record_stat: TrackRecordStat | None = None
+) -> str:
     """Render a Signal as an HTML message (parse_mode=HTML compatible).
 
     Every dynamic field goes through `html.escape()` so LLM output containing
@@ -352,13 +473,20 @@ def format_signal_message(signal: Signal) -> str:
         1. Title line — "<asset> <signal_type> signal"
         2. Headline (when AI succeeded)
         3. Meta line — Suggested action · Confidence · Horizon
-        4. Regime block (when `trigger_data.regime_at_creation` present)
-        5. Reasoning bullets
-        6. News context (when `trigger_data.news_context` present)
-        7. Risks bullets
-        8. Footer — signal date · expires
-    Sections 4 and 6 are Stage 7-P9 additions — older signals just render
+        4. Action block — Entry/Stop/Target/R:R (Stage 8-P8, when AI set prices)
+        5. Regime block (when `trigger_data.regime_at_creation` present)
+        6. Reasoning bullets
+        7. News context (when `trigger_data.news_context` present)
+        8. Risks bullets
+        9. Track-record stat line (Stage 8-P8, when track_record_stat is
+           supplied AND the cohort at this confidence floor has data)
+        10. Footer — signal date · expires
+    Sections 4, 5, 7, 9 are conditional — older / partial signals render
     without them, no rule branch needed at the call site.
+
+    `track_record_stat` is opt-in. The pure-formatter test surface omits
+    it (legacy + simpler tests). The send worker pre-fetches it once per
+    tick and threads it through.
     """
     asset = html.escape(signal.asset)
     signal_type = html.escape(signal.signal_type.replace("_", " "))
@@ -386,6 +514,10 @@ def format_signal_message(signal: Signal) -> str:
             meta_bits.append(f"<i>Horizon:</i> {horizon}")
         if meta_bits:
             parts.append("\n" + " · ".join(meta_bits))
+
+        action_block = _format_action_block(signal)
+        if action_block:
+            parts.append(action_block)
 
         regime_block = _format_regime_block(trigger_data)
         if regime_block:
@@ -430,6 +562,13 @@ def format_signal_message(signal: Signal) -> str:
 
         parts.append("\n<i>AI analysis unavailable — raw detector output only.</i>")
 
+    # Track-record stat — last body element, just before the footer. Renders
+    # only when the caller supplied a stat AND this signal's confidence floor
+    # has cohort data (helper handles all the skip cases).
+    stat_line = _format_track_record_stat_line(signal, track_record_stat)
+    if stat_line:
+        parts.append(stat_line)
+
     footer_bits: list[str] = [f"Signal date: {signal.signal_date.isoformat()}"]
     if signal.expires_at:
         footer_bits.append(f"expires: {signal.expires_at.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -472,6 +611,13 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
         "skipped_no_target": 0,
     }
 
+    # Stage 8-P8 — pre-fetch the track-record stat ONCE per tick. The cache
+    # short-circuits the DB query within the 10-min TTL; on miss the
+    # snapshot lands in the cache for the next tick. Threaded into every
+    # `format_signal_message` call below so a 100-message tick still costs
+    # ≤1 DB query for the cohort stats.
+    track_stat = await _get_track_record_stat(session)
+
     # Single query: delivery + signal + (channel OR group target). LEFT JOINs
     # on channel and group because each delivery has exactly one of them.
     stmt = (
@@ -500,7 +646,7 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
             summary["skipped_no_target"] += 1
             continue
 
-        message = format_signal_message(signal)
+        message = format_signal_message(signal, track_record_stat=track_stat)
 
         try:
             sent = await telegram_client.send_message(chat_id, message, parse_mode="HTML")

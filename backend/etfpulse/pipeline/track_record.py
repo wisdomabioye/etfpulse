@@ -49,7 +49,7 @@ from decimal import Decimal
 from typing import Literal, cast
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.models import Signal, SignalDirection, SignalOutcome
@@ -219,6 +219,77 @@ def _narrow_asset(asset: str) -> _KnownAsset | None:
     if asset in _KNOWN_ASSETS:
         return cast(_KnownAsset, asset)
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class TrackRecordStat:
+    """Cumulative hit-rate stats keyed by confidence floor.
+
+    Stage 8-P8 — feeds the Telegram formatter's "Our signals at confidence
+    ≥N hit target Y% of the time" stat line. Computed by
+    `get_stats_by_confidence_floor` and cached per-process at the
+    delivery-worker layer (~10min TTL) so a tick rendering 100 messages
+    pays for one DB roundtrip, not 100.
+
+    `by_floor[N]` is `(targeted, hits)` — both COUNTs CUMULATIVE across
+    all signals with confidence >= N (i.e. floor=7 sums confidence 7+8+9+10).
+    Targeted is the denominator (signals where AI set a target);
+    hits is the numerator (signals that hit it).
+
+    `hit_rate_pct(N)` returns the integer percent for floor N, or None
+    when no signal in that cohort had a target — same null-vs-zero
+    convention as `/api/track-record.summary.hit_rate_pct`.
+    """
+
+    by_floor: dict[int, tuple[int, int]]
+
+    def hit_rate_pct(self, confidence_floor: int) -> int | None:
+        targeted, hits = self.by_floor.get(confidence_floor, (0, 0))
+        if targeted == 0:
+            return None
+        return round((hits / targeted) * 100)
+
+    def targeted_count(self, confidence_floor: int) -> int:
+        """Cohort size — count of signals with confidence >= floor that had
+        a target set. Useful for callers that want to render "N signals" too."""
+        targeted, _ = self.by_floor.get(confidence_floor, (0, 0))
+        return targeted
+
+
+async def get_stats_by_confidence_floor(session: AsyncSession) -> TrackRecordStat:
+    """Build the cumulative-by-floor snapshot in ONE GROUP BY query.
+
+    Reads `signal_outcomes` (filtered to `evaluated_at IS NOT NULL` —
+    same defensive filter as `/api/track-record` and `/api/dashboard/stats`).
+    Cumulates in Python — Postgres window functions could do this in SQL
+    but the Python loop is 10 iterations max (confidence is 1..10) and
+    keeps the SQL trivially auditable.
+    """
+    stmt = (
+        select(
+            SignalOutcome.confidence,
+            func.count().filter(SignalOutcome.hit_target.is_not(None)).label("targeted"),
+            func.count().filter(SignalOutcome.hit_target.is_(True)).label("hits"),
+        )
+        .select_from(SignalOutcome)
+        .where(SignalOutcome.evaluated_at.is_not(None))
+        .group_by(SignalOutcome.confidence)
+    )
+    rows = (await session.execute(stmt)).all()
+    raw: dict[int, tuple[int, int]] = {row.confidence: (row.targeted, row.hits) for row in rows}
+
+    by_floor: dict[int, tuple[int, int]] = {}
+    cum_targeted = 0
+    cum_hits = 0
+    # Walk 10 → 1 so each floor's tuple is the sum of itself + everything above.
+    for c in range(10, 0, -1):
+        if c in raw:
+            t, h = raw[c]
+            cum_targeted += t
+            cum_hits += h
+        by_floor[c] = (cum_targeted, cum_hits)
+
+    return TrackRecordStat(by_floor=by_floor)
 
 
 async def evaluate_pending_outcomes(session: AsyncSession) -> dict[str, int]:

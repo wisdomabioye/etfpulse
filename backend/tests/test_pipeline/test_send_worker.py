@@ -36,6 +36,7 @@ from etfpulse.models import (
 )
 from etfpulse.pipeline.delivery import format_signal_message, send_pending_deliveries
 from etfpulse.pipeline.detectors import compute_fingerprint
+from etfpulse.pipeline.track_record import TrackRecordStat
 
 # ---------------------------------------------------------------------------
 # format_signal_message — pure function
@@ -336,6 +337,98 @@ class TestFormatSignalMessage:
         ):
             assert key in msg, f"trigger-dump cap should not have dropped {key}"
 
+    # -----------------------------------------------------------------------
+    # Stage 8-P8 — action block (entry/stop/target) + track-record stat line
+    # -----------------------------------------------------------------------
+
+    def test_action_block_renders_when_signal_has_entry_stop_target(self):
+        signal = _signal_with_ai(
+            entry_price=Decimal("84200.00"),
+            stop_price=Decimal("82000.00"),
+            target_price=Decimal("89500.00"),
+        )
+        msg = format_signal_message(signal)
+        assert "<b>Action levels:</b>" in msg
+        assert "Entry:</i> $84,200.00" in msg
+        assert "Stop:</i> $82,000.00" in msg
+        assert "Target:</i> $89,500.00" in msg
+
+    def test_action_block_includes_risk_reward_when_all_three_set(self):
+        # |89500 - 84200| / |84200 - 82000| = 5300 / 2200 ≈ 2.4
+        signal = _signal_with_ai(
+            entry_price=Decimal("84200.00"),
+            stop_price=Decimal("82000.00"),
+            target_price=Decimal("89500.00"),
+        )
+        msg = format_signal_message(signal)
+        assert "R:R</i> 1:2.4" in msg
+
+    def test_action_block_omits_risk_reward_when_any_leg_missing(self):
+        signal = _signal_with_ai(
+            entry_price=Decimal("84200.00"),
+            stop_price=None,
+            target_price=Decimal("89500.00"),
+        )
+        msg = format_signal_message(signal)
+        # Action block still shows the parts that ARE set, but no R:R.
+        assert "<b>Action levels:</b>" in msg
+        assert "Entry:</i>" in msg
+        assert "Target:</i>" in msg
+        assert "R:R" not in msg
+
+    def test_action_block_omits_risk_reward_when_stop_equals_entry(self):
+        """Risk distance == 0 would divide by zero — defensive guard mirrors
+        frontend `SuggestedActionPanel.computeRiskReward`."""
+        signal = _signal_with_ai(
+            entry_price=Decimal("84200"),
+            stop_price=Decimal("84200"),
+            target_price=Decimal("89500"),
+        )
+        msg = format_signal_message(signal)
+        assert "<b>Action levels:</b>" in msg
+        assert "R:R" not in msg
+
+    def test_action_block_omitted_when_no_levels_set(self):
+        """Legacy v1/v2 signal with no AI-suggested prices — section absent."""
+        signal = _signal_with_ai()  # no entry/stop/target overrides
+        msg = format_signal_message(signal)
+        assert "Action levels:" not in msg
+
+    def test_track_record_stat_renders_when_stat_supplied_and_cohort_has_data(self):
+        signal = _signal_with_ai()  # confidence=7
+        stat = TrackRecordStat(
+            by_floor={
+                7: (15, 9),  # 9/15 → 60%
+                **{floor: (0, 0) for floor in [1, 2, 3, 4, 5, 6, 8, 9, 10]},
+            }
+        )
+        msg = format_signal_message(signal, track_record_stat=stat)
+        assert "Our signals at confidence ≥7 hit target 60% of the time" in msg
+        assert "(over 15 evaluated)" in msg
+
+    def test_track_record_stat_omitted_when_stat_not_supplied(self):
+        """Default kwarg — legacy callers and the pure-formatter test surface
+        get the message without the stat line."""
+        signal = _signal_with_ai()
+        msg = format_signal_message(signal)
+        assert "Our signals at confidence" not in msg
+
+    def test_track_record_stat_omitted_when_signal_has_null_confidence(self):
+        """No confidence → can't pick a cohort floor → skip the line cleanly
+        rather than rendering 'confidence ≥None hit target X%'."""
+        signal = _signal_with_ai(ai_analysis=None, confidence=None)
+        stat = TrackRecordStat(by_floor={floor: (10, 6) for floor in range(1, 11)})
+        msg = format_signal_message(signal, track_record_stat=stat)
+        assert "Our signals at confidence" not in msg
+
+    def test_track_record_stat_omitted_when_cohort_is_empty(self):
+        """Fresh deploy: no signals scored at this floor yet → null hit_rate
+        → line skipped (better than rendering '0% over 0 evaluated')."""
+        signal = _signal_with_ai()  # confidence=7
+        stat = TrackRecordStat(by_floor={floor: (0, 0) for floor in range(1, 11)})
+        msg = format_signal_message(signal, track_record_stat=stat)
+        assert "Our signals at confidence" not in msg
+
     def test_no_ai_still_renders_regime_and_news_blocks(self):
         """Regime + news context are captured at build-time independent of
         AI success. A no-AI signal must still carry these reads."""
@@ -462,6 +555,18 @@ def stub_send(monkeypatch):
     stub = AsyncMock(return_value=SentMessage(message_id=42, chat_id=999, sent_at=sent_at))
     monkeypatch.setattr("etfpulse.pipeline.delivery.telegram_client.send_message", stub)
     return stub
+
+
+@pytest.fixture(autouse=True)
+def reset_track_record_cache():
+    """Stage 8-P8 — `delivery._track_record_cache` is module-level state.
+    Clear between tests so a stale cohort snapshot from one test can't
+    leak into another's expectations."""
+    from etfpulse.pipeline.delivery import _track_record_cache
+
+    _track_record_cache.clear()
+    yield
+    _track_record_cache.clear()
 
 
 class TestSendPendingDeliveries:
@@ -640,3 +745,53 @@ async def test_send_worker_with_decimal_price(db_session, stub_send):
 
     summary = await send_pending_deliveries(db_session)
     assert summary["sent"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Stage 8-P8 — track-record stat is pre-fetched once per send tick
+# ---------------------------------------------------------------------------
+
+
+class TestTrackRecordStatPrefetch:
+    async def test_send_worker_calls_get_stats_exactly_once_per_tick(
+        self, db_session, stub_send, monkeypatch
+    ):
+        """A 3-message tick should issue ONE get_stats_by_confidence_floor
+        call, not three. Pins the cache + per-tick prefetch contract."""
+        # Seed 3 deliveries.
+        for i in range(3):
+            await _seed_user_delivery(db_session, chat_id=f"500{i}", confidence=7)
+
+        call_count = {"n": 0}
+        original = TrackRecordStat(by_floor={floor: (10, 7) for floor in range(1, 11)})
+
+        async def _stub(session):
+            call_count["n"] += 1
+            return original
+
+        monkeypatch.setattr("etfpulse.pipeline.delivery.get_stats_by_confidence_floor", _stub)
+
+        await send_pending_deliveries(db_session)
+        assert call_count["n"] == 1, "stat fetcher must be called once per tick, not per signal"
+
+    async def test_cached_stat_skips_db_on_second_tick(self, db_session, stub_send, monkeypatch):
+        """Two consecutive ticks within the TTL share one fetch — the second
+        tick reads the cached snapshot."""
+        await _seed_user_delivery(db_session, chat_id="601", confidence=7)
+        await db_session.flush()
+
+        call_count = {"n": 0}
+
+        async def _stub(session):
+            call_count["n"] += 1
+            return TrackRecordStat(by_floor={floor: (5, 3) for floor in range(1, 11)})
+
+        monkeypatch.setattr("etfpulse.pipeline.delivery.get_stats_by_confidence_floor", _stub)
+
+        await send_pending_deliveries(db_session)
+        # Seed a second delivery so the second tick has work to do.
+        # Distinct chat_id → distinct fingerprint per the helper's contract.
+        await _seed_user_delivery(db_session, chat_id="602", confidence=7)
+        await send_pending_deliveries(db_session)
+
+        assert call_count["n"] == 1, "cache must absorb the second tick's stat lookup"
