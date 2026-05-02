@@ -189,3 +189,73 @@ async def get_daily_klines_with_source(
 
     log.error("klines_both_sources_failed", asset=asset)
     return None
+
+
+async def get_daily_klines_from_source(
+    asset: Asset,
+    source: PriceSource,
+    *,
+    start_time_ms: int | None = None,
+    end_time_ms: int | None = None,
+    limit: int = 100,
+) -> list[PriceBar] | None:
+    """Fetch daily OHLC bars from EXACTLY ONE source — no fallback.
+
+    Stage 8-P2 outcome evaluator pins kline fetches to the same source
+    that produced `Signal.price_at_creation` (recorded in `Signal.price_source`)
+    so 24h/72h returns aren't compared against an apples-to-oranges price
+    feed. Falling back to the other provider would re-introduce the
+    micro-skew this pinning is designed to avoid.
+
+    Returns None on:
+        - the requested source raising its own error family
+        (SoSoValueError / BinanceError) — caller treats as a transient
+        skip and tries again next eval tick.
+        - empty result from the source — same treatment as failure (no
+        fallback). The signal is left unevaluated; future eval ticks
+        retry once kline history catches up.
+
+    Anything else (KeyError, network library bugs, etc.) propagates per
+    the same convention as `get_daily_klines_with_source`.
+    """
+    if source == "sosovalue":
+        try:
+            soso = await sosovalue_client.get_daily_klines(
+                asset,
+                start_time_ms=start_time_ms,
+                end_time_ms=end_time_ms,
+                limit=limit,
+            )
+        except SoSoValueError as exc:
+            log.warning(
+                "klines_pinned_sosovalue_failed",
+                asset=asset,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return None
+        if not soso:
+            log.warning("klines_pinned_sosovalue_empty", asset=asset)
+            return None
+        return [PriceBar.from_sosovalue(k) for k in soso]
+
+    # source == "binance" — exhaustive over the PriceSource Literal.
+    try:
+        binance = await binance_client.get_daily_klines(
+            asset,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+        )
+    except BinanceError as exc:
+        log.warning(
+            "klines_pinned_binance_failed",
+            asset=asset,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return None
+    if not binance:
+        log.warning("klines_pinned_binance_empty", asset=asset)
+        return None
+    return [PriceBar.from_binance(k) for k in binance]
