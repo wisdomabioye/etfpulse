@@ -314,20 +314,23 @@ function OutcomeRow({ item }: { item: TrackRecordItem }) {
           ? <span className="text-text-4">— no target</span>
           : <span className="text-text-3">— neither</span>;
 
-  // Returns over the window — show the more interesting of 24h/72h.
-  // Use 72h close vs price_at_signal as the representative pct.
+  // Returns over the window — 72h close vs the canonical entry baseline.
+  // Use `entry_price` (AI-suggested) when set, else `price_at_signal` —
+  // SAME fallback as the backend evaluator's `entry_for_metrics` (see
+  // `pipeline/track_record.py:_evaluate_one`) AND as `OutcomeCard`'s
+  // `entryBaseline`. Diverging would mean this list cell shows a
+  // different number than the detail page's `+72h` row for the same
+  // outcome AND would contradict the verdict's hit_target math when
+  // entry_price ≠ price_at_signal.
+  const baseline = item.entry_price ?? item.price_at_signal;
   const pctReturn =
-    item.price_after_72h !== null && item.price_at_signal > 0
-      ? ((item.price_after_72h - item.price_at_signal) / item.price_at_signal) * 100
+    item.price_after_72h !== null && baseline > 0
+      ? ((item.price_after_72h - baseline) / baseline) * 100
       : null;
-  const pctText = pctReturn !== null
-    ? `${pctReturn >= 0 ? '+' : ''}${pctReturn.toFixed(2)}%`
-    : '—';
-  const pctClass = pctReturn === null
-    ? 'text-text-4'
-    : pctReturn >= 0
-      ? 'text-pos'
-      : 'text-neg';
+  const pctText =
+    pctReturn !== null ? `${pctReturn >= 0 ? '+' : ''}${pctReturn.toFixed(2)}%` : '—';
+  const pctClass =
+    pctReturn === null ? 'text-text-4' : pctReturn >= 0 ? 'text-pos' : 'text-neg';
 
   return (
     <li

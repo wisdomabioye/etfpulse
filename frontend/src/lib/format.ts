@@ -53,6 +53,17 @@ export function truncateFingerprint(fp: string): string {
   return fp.slice(0, 8);
 }
 
+/** Plain USD price formatter — `$84,200.50`. Up to 2 decimals, locale-grouped.
+ *  Use this for spot prices, entry/stop/target levels, +24h/+72h prices.
+ *
+ *  NOT to be confused with `RegimeReasoning`'s compact `$X.XB` formatter,
+ *  which takes a Decimal-as-string and emits magnitude suffixes for the
+ *  flow-trend-millions/billions display. Different consumer, different
+ *  signature, different module. */
+export function formatUsdPrice(n: number): string {
+  return `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+}
+
 /** Title-case a single Wyckoff regime: "accumulation" → "Accumulation".
  * Mirrors `formatSignalType` styling — no shared helper since regime values
  * never carry an underscore (single-word enum). */
