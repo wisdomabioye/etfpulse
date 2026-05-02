@@ -18,20 +18,26 @@ import { StatusDot } from '../ui';
  *   │  └─────────────┴─────────────┘          │
  *   └─────────────────────────────────────────┘
  *
- * Hit-rate data isn't available until Stage 8 (SignalOutcome). For now the
- * big number renders "—" with a muted "Evaluation pending (Stage 08)"
- * caption. Structure stays intact; when outcome rows arrive, the backend
- * adds `hit_rate_72h` + `evaluated_count` to DashboardStats and this
- * component swaps placeholders for real values — no layout change.
+ * Stage 8-P5 — `hit_rate_72h` + `evaluated_count` now come live from
+ * `/api/dashboard/stats` (closes open_issues #44). Empty-DB state still
+ * shows "—" + "Evaluation pending" until the first signal ages past the
+ * 72h eval delay AND has a target hit/missed.
+ *
+ * `hitRate72h` prop is in PERCENT (0..100) — same unit as the API field
+ * (`DashboardStats.hit_rate_72h`) and `/api/track-record.summary.hit_rate_pct`.
+ * One canonical unit across the stack means the panel doesn't multiply or
+ * divide; the API number renders verbatim.
  */
 
 interface HeroHitRatePanelProps {
   /** null = stats fetch errored (render "—" rather than a misleading 0). */
   signalsToday: number | null;
   totalSignals: number | null;
-  /** Optional — null until Stage 08 plumbs it through. */
+  /** Hit rate as PERCENT (0..100). Null when no signal with a target has
+   *  been scored yet — caption swaps to the pending state. */
   hitRate72h?: number | null;
-  /** Optional — null until Stage 08. */
+  /** Total evaluated outcome rows. 0 before any signal ages past the 72h
+   *  eval delay. */
   evaluatedCount?: number | null;
 }
 
@@ -42,7 +48,9 @@ export function HeroHitRatePanel({
   evaluatedCount = null,
 }: HeroHitRatePanelProps) {
   const hasHitRate = hitRate72h !== null && hitRate72h !== undefined;
-  const pctString = hasHitRate ? Math.round(hitRate72h! * 100).toString() : '—';
+  // hitRate72h is already in percent — render as integer for the headline,
+  // no `* 100` conversion (the API serialises percent, not fraction).
+  const pctString = hasHitRate ? Math.round(hitRate72h!).toString() : '—';
 
   return (
     <div className="border border-border-2 rounded-[10px] bg-bg-2 overflow-hidden">
@@ -71,7 +79,7 @@ export function HeroHitRatePanel({
         <div className="text-text-2 text-[13px] mt-2 mb-6">
           {hasHitRate
             ? `on ${evaluatedCount ?? 0} evaluated signals`
-            : 'Evaluation pending (Stage 08 — signal outcomes)'}
+            : 'Evaluation pending — first outcomes land 72h after a signal fires'}
         </div>
 
         {/* 2-col split: signals today + total */}

@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     # 30s is well under any signal's swing/scalp half-life and keeps Telegram
     # latency invisible to users.
     delivery_worker_interval_seconds: int = Field(default=30, ge=5)
+    # Stage 08-P3 — outcome evaluator. Outcomes are scored against DAILY
+    # OHLC bars (Stage 08-P2 design); checking more often than once an hour
+    # is wasted work because no new bars become available between ticks.
+    # 60s floor protects against accidental sub-minute configs in tests.
+    outcome_eval_interval_seconds: int = Field(default=3600, ge=60)
     # Default user preferences applied on /start registration. Comma-separated
     # asset list parsed via `delivery_default_assets_list` property.
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)

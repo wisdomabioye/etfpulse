@@ -53,8 +53,9 @@ log = structlog.get_logger()
 #     - extend _ASSETS tuple + Literal
 #   backend/etfpulse/pipeline/prices.py
 #     - extend the `Asset` Literal alias
-#   backend/etfpulse/api/routes/signals.py
-#     - extend the `AssetQuery` Literal alias
+#   backend/etfpulse/api/schemas/signals.py
+#     - extend the `AssetLiteral` Literal alias (shared by routes/signals.py
+#       AND routes/track_record.py — single source of truth since Stage 8-P6)
 #   backend/etfpulse/bot/handlers/_common.py
 #     - add to _VALID_ASSETS set
 #   backend/fixtures/

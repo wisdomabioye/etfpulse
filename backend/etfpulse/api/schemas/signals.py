@@ -24,6 +24,18 @@ from etfpulse.models import Signal, SignalOutcome
 # exists), not a DB enum value — see `_derive_display_status` below.
 DisplayStatus = Literal["pending", "alerted", "evaluated", "expired"]
 
+# Shared FastAPI Query() Literals — multiple route modules
+# (`routes/signals.py`, `routes/track_record.py`) accept the same asset +
+# signal_type filter values. Hosting them HERE (next to the canonical
+# `Signal`-shape DTOs) means a new asset / signal type is a one-line edit
+# in one file, not a coordinated multi-file change. Stage 8-P6 cross-cut
+# review extracted these from the per-route declarations they had drifted
+# into.
+AssetLiteral = Literal["BTC", "ETH"]
+SignalTypeLiteral = Literal[
+    "flow_anomaly", "magnitude", "acceleration", "divergence", "regime_shift"
+]
+
 
 class AIAnalysisOut(BaseModel):
     """Nested AI analysis in the detail response.

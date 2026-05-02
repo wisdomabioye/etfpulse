@@ -13,9 +13,11 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Signals', to: '/signals', matches: ['/signals'] },
-  // Track Record is Stage 8 (depends on SignalOutcome rows). Stays a
-  // "coming soon" stub until #44 lands.
-  { label: 'Track Record', to: null },
+  // Track Record went live in Stage 8-P6 (closes issue #44 + the
+  // SignalOutcome chain through P1–P5). The page surfaces the same
+  // hit_rate_72h carried on the home tile, plus per-asset/per-type
+  // filtered views.
+  { label: 'Track Record', to: '/track-record', matches: ['/track-record'] },
   // Regime went live in Stage 7-P8 — RegimeBadge below the link surfaces
   // the current classification inline so users can see the regime without
   // navigating. The "Regime" string itself is also a link to /regime.

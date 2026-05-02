@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -19,6 +20,7 @@ from etfpulse.models import (
     MarketRegime,
     RegimeSnapshot,
     Signal,
+    SignalOutcome,
     SignalPosture,
 )
 from etfpulse.pipeline.detectors import compute_fingerprint
@@ -77,6 +79,10 @@ class TestDashboardStats:
             # Stage 7-P7: regime fields null until the first cycle runs.
             "current_regime": None,
             "signal_posture": None,
+            # Stage 8-P5 (closes #44): hit-rate null + 0 evaluated until
+            # signals age past 72h AND have a target hit/missed.
+            "hit_rate_72h": None,
+            "evaluated_count": 0,
         }
 
     async def test_total_signals_counts_all(self, db_session, client):
@@ -169,6 +175,8 @@ class TestDashboardStats:
             "last_signal_at",
             "current_regime",
             "signal_posture",
+            "hit_rate_72h",
+            "evaluated_count",
         }
 
     async def test_current_regime_populated_when_snapshot_exists(self, db_session, client):
@@ -227,3 +235,135 @@ class TestDashboardStats:
         body = r.json()
         assert body["current_regime"] is None
         assert body["signal_posture"] is None
+
+
+# ---------------------------------------------------------------------------
+# Stage 8-P5 — hit_rate_72h + evaluated_count (closes #44)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_outcome(
+    db_session,
+    *,
+    confidence: int = 7,
+    hit_target: bool | None = True,
+    key: str = "x",
+) -> SignalOutcome:
+    """Seed a Signal + matching SignalOutcome — what `/api/dashboard/stats`
+    aggregates over for hit_rate_72h. Mirrors the helper in test_track_record."""
+    signal = Signal(
+        signal_type="flow_anomaly",
+        asset="BTC",
+        trigger_data={},
+        ai_analysis={"suggested_action": "consider long", "headline": "x"},
+        confidence=confidence,
+        status="alerted",
+        price_at_creation=Decimal("84200"),
+        price_source="binance",
+        ai_prompt_version="v3",
+        fingerprint=compute_fingerprint("dashboard-hit-rate", key),
+        signal_date=date(2026, 4, 25),
+    )
+    db_session.add(signal)
+    await db_session.flush()
+
+    outcome = SignalOutcome(
+        signal_id=signal.id,
+        asset="BTC",
+        signal_type="flow_anomaly",
+        direction="long",
+        confidence=confidence,
+        entry_price=Decimal("84200"),
+        target_price=Decimal("89500"),
+        price_at_signal=Decimal("84200"),
+        hit_target=hit_target,
+        evaluated_at=datetime.now(UTC),
+    )
+    db_session.add(outcome)
+    await db_session.flush()
+    return outcome
+
+
+class TestHitRate72h:
+    async def test_hit_rate_computed_as_percent(self, db_session, client):
+        """3 hits + 1 miss out of 4 with-target outcomes = 75%. PERCENT
+        unit (0..100), not fraction (0..1) — same as track-record API so
+        the FE never converts."""
+        for i in range(3):
+            await _seed_outcome(db_session, hit_target=True, key=f"hit{i}")
+        await _seed_outcome(db_session, hit_target=False, key="miss")
+
+        body = (await client.get("/api/dashboard/stats")).json()
+        assert body["hit_rate_72h"] == 75.0
+        assert body["evaluated_count"] == 4
+
+    async def test_hit_rate_excludes_no_target_signals_from_denominator(self, db_session, client):
+        """Same rationale as `/api/track-record` — signals where AI declined
+        a target (hit_target IS NULL) shouldn't dilute the rate."""
+        await _seed_outcome(db_session, hit_target=True, key="hit")
+        await _seed_outcome(db_session, hit_target=None, key="no-target-1")
+        await _seed_outcome(db_session, hit_target=None, key="no-target-2")
+
+        body = (await client.get("/api/dashboard/stats")).json()
+        # 1 hit / 1 with-target = 100%, NOT 1/3 = 33%
+        assert body["hit_rate_72h"] == 100.0
+        # All three outcome rows count toward `evaluated_count` though.
+        assert body["evaluated_count"] == 3
+
+    async def test_hit_rate_none_when_no_targets_set(self, db_session, client):
+        """All outcomes have NULL hit_target → no signal had a target →
+        hit_rate is undefined → null. Better than rendering '0%' on the
+        home tile for an empty cohort."""
+        await _seed_outcome(db_session, hit_target=None, key="n1")
+        await _seed_outcome(db_session, hit_target=None, key="n2")
+
+        body = (await client.get("/api/dashboard/stats")).json()
+        assert body["hit_rate_72h"] is None
+        assert body["evaluated_count"] == 2
+
+    async def test_hit_rate_returned_as_float(self, db_session, client):
+        """Pin the wire type — frontend expects `number | null`. A string
+        would silently break the panel's `Math.round` call."""
+        await _seed_outcome(db_session, hit_target=True, key="t")
+
+        body = (await client.get("/api/dashboard/stats")).json()
+        assert isinstance(body["hit_rate_72h"], float)
+
+    async def test_outcome_with_null_evaluated_at_excluded(self, db_session, client):
+        """Defensive — `evaluated_at IS NOT NULL` in the WHERE matches
+        the track-record endpoint's filter, so a future writer leaking a
+        NULL evaluated_at row doesn't pollute the home tile."""
+        # Manually insert a Signal + outcome with evaluated_at=None.
+        signal = Signal(
+            signal_type="flow_anomaly",
+            asset="BTC",
+            trigger_data={},
+            ai_analysis={"suggested_action": "consider long", "headline": "x"},
+            confidence=7,
+            status="alerted",
+            price_at_creation=Decimal("84200"),
+            price_source="binance",
+            ai_prompt_version="v3",
+            fingerprint=compute_fingerprint("dashboard-hit-rate", "no-eval"),
+            signal_date=date(2026, 4, 25),
+        )
+        db_session.add(signal)
+        await db_session.flush()
+        db_session.add(
+            SignalOutcome(
+                signal_id=signal.id,
+                asset="BTC",
+                signal_type="flow_anomaly",
+                direction="long",
+                confidence=7,
+                target_price=Decimal("89500"),
+                price_at_signal=Decimal("84200"),
+                hit_target=True,
+                evaluated_at=None,  # explicitly unevaluated
+            )
+        )
+        await db_session.flush()
+
+        body = (await client.get("/api/dashboard/stats")).json()
+        assert body["evaluated_count"] == 0
+        assert body["hit_rate_72h"] is None

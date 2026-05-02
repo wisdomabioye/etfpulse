@@ -520,3 +520,135 @@ class TestFanOutPendingWorker:
         result = await _fan_out_pending_with_session()
         assert result is None
         fake_session.rollback.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# outcome_eval scheduler job + wrapper (Stage 08-P3)
+# ---------------------------------------------------------------------------
+
+
+class TestOutcomeEvalJobRegistration:
+    async def test_outcome_eval_registered_when_run_scheduler_true(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """Job registers regardless of bot status — track record is web-facing."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            job_ids = {j.id for j in app.state.scheduler.get_jobs()}
+            assert "outcome_eval" in job_ids
+
+    async def test_outcome_eval_registered_even_when_bot_disabled(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """Distinct from the delivery jobs (which ARE bot-gated). Track-record
+        evaluation must happen regardless of whether Telegram is wired up,
+        because the public web UI consumes SignalOutcome rows directly."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        # Don't apply enable_bot_fields — is_bot_enabled stays False.
+        app = FastAPI()
+        async with start_scheduler(app):
+            job_ids = {j.id for j in app.state.scheduler.get_jobs()}
+            assert "outcome_eval" in job_ids
+            # Sanity — the bot-gated delivery jobs are NOT registered here.
+            assert "delivery_send" not in job_ids
+            assert "fan_out_pending" not in job_ids
+
+    async def test_outcome_eval_interval_matches_config(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        monkeypatch.setattr(settings, "outcome_eval_interval_seconds", 1800)
+        app = FastAPI()
+        async with start_scheduler(app):
+            job = app.state.scheduler.get_job("outcome_eval")
+            assert job is not None
+            assert int(job.trigger.interval.total_seconds()) == 1800
+
+    async def test_outcome_eval_max_instances_one_and_coalesce(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """D19 — slow eval ticks must not stack. coalesce=True drops queued
+        runs so a backlog of pending fires collapses to one."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            job = app.state.scheduler.get_job("outcome_eval")
+            assert job is not None
+            assert job.max_instances == 1
+            assert job.coalesce is True
+
+    async def test_outcome_eval_not_registered_when_run_scheduler_false(self, monkeypatch):
+        """The whole scheduler is disabled — `app.state.scheduler` doesn't
+        even exist. Pin this so a regression can't half-disable the scheduler
+        and accidentally run only outcome_eval."""
+        monkeypatch.setattr(settings, "run_scheduler", False)
+        app = FastAPI()
+        async with start_scheduler(app):
+            assert not hasattr(app.state, "scheduler")
+
+
+class TestOutcomeEvalWrapper:
+    async def test_returns_summary_on_success(self, monkeypatch):
+        """Happy path — wrapper awaits evaluate_pending_outcomes, commits,
+        returns the summary dict verbatim."""
+        from etfpulse.pipeline.scheduler import _outcome_eval_with_session
+
+        expected = {
+            "candidates": 3,
+            "evaluated": 2,
+            "skipped_no_direction": 1,
+            "skipped_unknown_asset": 0,
+            "skipped_no_klines": 0,
+            "skipped_no_bars_in_window": 0,
+            "errored": 0,
+        }
+
+        async def _stub(session):
+            return expected
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.evaluate_pending_outcomes", _stub)
+
+        result = await _outcome_eval_with_session()
+        assert result == expected
+
+    async def test_returns_none_on_exception(self, monkeypatch):
+        """Exception in the orchestrator must NOT propagate — APScheduler
+        would mark the job failed and stop firing it. Wrapper swallows,
+        logs, returns None so the next interval still ticks."""
+        from etfpulse.pipeline.scheduler import _outcome_eval_with_session
+
+        async def _stub(session):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.evaluate_pending_outcomes", _stub)
+
+        result = await _outcome_eval_with_session()
+        assert result is None
+
+    async def test_rollback_called_on_exception(self, monkeypatch):
+        """Verify the wrapper actually rolls back on failure rather than
+        leaving the session in a poisoned state for the next caller."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from etfpulse.pipeline.scheduler import _outcome_eval_with_session
+
+        fake_session = MagicMock()
+        fake_session.commit = AsyncMock()
+        fake_session.rollback = AsyncMock()
+
+        @asynccontextmanager
+        async def _yielder():
+            yield fake_session
+
+        async def _stub(session):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.async_session", _yielder)
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.evaluate_pending_outcomes", _stub)
+
+        result = await _outcome_eval_with_session()
+        assert result is None
+        fake_session.rollback.assert_awaited()
+        fake_session.commit.assert_not_awaited()

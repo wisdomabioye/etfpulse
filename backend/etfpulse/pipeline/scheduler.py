@@ -56,6 +56,7 @@ from etfpulse.db import async_session
 from etfpulse.models import ETFFlow, Signal, SignalStatus
 from etfpulse.pipeline.delivery import fan_out_signal, send_pending_deliveries
 from etfpulse.pipeline.signal_builder import run_daily_cycle
+from etfpulse.pipeline.track_record import evaluate_pending_outcomes
 
 log = structlog.get_logger()
 
@@ -63,6 +64,7 @@ _DAILY_JOB_ID = "daily_cycle"
 _CATCHUP_JOB_ID = "catchup"
 _DELIVERY_SEND_JOB_ID = "delivery_send"
 _FAN_OUT_PENDING_JOB_ID = "fan_out_pending"
+_OUTCOME_EVAL_JOB_ID = "outcome_eval"
 _CATCHUP_DELAY_SECONDS = 1  # tiny delay so the scheduler picks it up cleanly
 
 
@@ -179,6 +181,45 @@ async def _fan_out_pending_with_session() -> dict[str, int] | None:
             return None
 
 
+async def _outcome_eval_with_session() -> dict[str, int] | None:
+    """Outcome evaluator wrapper — scores aged signals into SignalOutcome rows.
+
+    Stage 08-P3. Same transaction-boundary contract as the other wrappers
+    (D14, D18): `evaluate_pending_outcomes` does NOT commit; this wrapper
+    does. Returns None on rollback so an exception doesn't stop the
+    APScheduler job from firing on subsequent ticks.
+
+    Runs every `settings.outcome_eval_interval_seconds` (default 3600s = 1h).
+    Per-signal resilience (one bad signal doesn't kill the cycle) lives
+    inside `evaluate_pending_outcomes` itself; this wrapper only catches
+    catastrophic failures the orchestrator can't handle in-loop
+    (DB connection dropped mid-eval, asyncpg timeout, query-builder bug
+    that raises before the per-signal try/except even runs).
+
+    NOT gated on `is_bot_enabled` — the public track record exists
+    independently of Telegram delivery (frontend `/track-record` + the
+    home-page hit-rate tile both consume SignalOutcome regardless of
+    whether the bot is wired up). Only `run_scheduler` gates this job.
+    """
+    async with async_session() as session:
+        try:
+            summary = await evaluate_pending_outcomes(session)
+            await session.commit()
+            # Quiet on no-op ticks — most hourly runs find no new candidates.
+            if summary.get("candidates", 0) > 0:
+                log.info("outcome_eval_committed", **summary)
+            return summary
+        except Exception as exc:
+            await session.rollback()
+            log.error(
+                "outcome_eval_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            return None
+
+
 async def _send_with_session() -> dict[str, int] | None:
     """Delivery-send wrapper — drains PENDING SignalDelivery rows via Telegram.
 
@@ -253,6 +294,24 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
             max_instances=1,
         )
         log.info("scheduler_catchup_scheduled", delay_seconds=_CATCHUP_DELAY_SECONDS)
+
+    # Outcome evaluator (Stage 08-P3) — scores aged signals into SignalOutcome
+    # rows for the public track record + dashboard hit-rate tile. Runs every
+    # `outcome_eval_interval_seconds` (default 1h). NOT gated on the bot —
+    # SignalOutcome powers the web UI regardless of Telegram delivery.
+    # `max_instances=1` per D19. `coalesce=True` is set explicitly here
+    # (the 30s delivery jobs deliberately don't) because outcome_eval is
+    # the longest-running interval job: a backlog of unevaluated signals +
+    # network-paced kline fetches can take minutes per tick. Coalescing
+    # collapses queued fires into one rather than letting them stack and
+    # serialise behind each other.
+    scheduler.add_job(
+        _outcome_eval_with_session,
+        trigger=IntervalTrigger(seconds=settings.outcome_eval_interval_seconds),
+        id=_OUTCOME_EVAL_JOB_ID,
+        max_instances=1,
+        coalesce=True,
+    )
 
     # Delivery pipeline — two jobs gated on `is_bot_enabled`:
     #   `fan_out_pending`: turns PENDING Signals → SignalDelivery rows

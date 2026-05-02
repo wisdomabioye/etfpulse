@@ -1,0 +1,204 @@
+"""Public track-record API — paginated outcomes + same-filter summary.
+
+Stage 8-P4. Reads from `signal_outcomes` rows produced by the
+`outcome_eval` scheduler job (Stage 8-P3). No auth (Wave 1 scope per
+open_issues #43, same as `/api/signals` and `/api/regime`).
+
+Three deliberate parallels with `routes/signals.py`:
+    1. Same query-param shape (asset, signal_type, confidence_min) and
+       semantics — frontend filter components are reusable.
+    2. Same pagination — cursor + page modes mutually exclusive, both
+       populate `total / next_cursor / page / total_pages` so the client
+       picks the mode it needs.
+    3. Same `_apply_filters` generic-on-Select pattern so the row query
+       and the summary aggregate share one WHERE-builder. Drift between
+       the two would mean "summary says 12 hits, list shows 14" bugs.
+
+Why summary mirrors filters (not global): the dashboard's headline tile
+(P5 — `/api/dashboard/stats`) carries the GLOBAL number. When the user
+opens `/track-record` and filters to `asset=BTC`, they want to see the
+BTC-specific hit rate next to the BTC-specific list. Two different
+consumers, two different endpoints — clean separation.
+"""
+
+from __future__ import annotations
+
+from typing import Any, TypeVar
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
+
+from etfpulse.api.deps import get_db_session
+from etfpulse.api.schemas.signals import (
+    AssetLiteral,
+    SignalTypeLiteral,
+    format_cursor,
+    parse_cursor,
+)
+from etfpulse.api.schemas.track_record import (
+    PaginatedTrackRecord,
+    TrackRecordItemOut,
+    TrackRecordSummary,
+)
+from etfpulse.models import SignalOutcome
+
+# Generic so `_apply_filters` returns the same Select shape it accepts —
+# keeps the row query and the aggregate query sharing one WHERE-builder.
+_S = TypeVar("_S", bound=Select[Any])
+
+log = structlog.get_logger()
+router = APIRouter(prefix="/track-record", tags=["track-record"])
+
+
+@router.get("", response_model=PaginatedTrackRecord)
+async def get_track_record(
+    asset: AssetLiteral | None = Query(default=None),
+    signal_type: SignalTypeLiteral | None = Query(default=None),
+    confidence_min: int | None = Query(default=None, ge=1, le=10),
+    cursor: str | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> PaginatedTrackRecord:
+    """Return summary stats + a paginated slice of evaluated outcomes.
+
+    Sort order is fixed — newest evaluated first (`evaluated_at DESC, id DESC`).
+    A second sort axis isn't useful here: the track record is a chronological
+    transparency document, not a feed users browse by alphabetical asset.
+
+    Pagination modes (mutually exclusive — `page` wins if both supplied):
+      - `cursor` → keyset over `(evaluated_at, id)`, returns `next_cursor`.
+      - `page` (1-based) → offset, returns `page / total_pages`.
+    `total` is populated in BOTH modes via a single COUNT(*) — same trade-off
+    as `/api/signals`.
+    """
+
+    # WHERE-clause builder shared by row + summary queries. `evaluated_at
+    # IS NOT NULL` is defensive — the orchestrator always sets it on insert,
+    # but the column is nullable, so a future writer (e.g. a manual seed)
+    # could leak NULLs into the public surface. Filter at SQL so the FE
+    # never sees them.
+    def _apply_filters(q: _S) -> _S:
+        q = q.where(SignalOutcome.evaluated_at.is_not(None))
+        if asset is not None:
+            q = q.where(SignalOutcome.asset == asset)
+        if signal_type is not None:
+            q = q.where(SignalOutcome.signal_type == signal_type)
+        if confidence_min is not None:
+            q = q.where(SignalOutcome.confidence >= confidence_min)
+        return q
+
+    # ------------------------------------------------------------------
+    # Summary aggregate — single FILTER query (mirrors `dashboard.py`).
+    # Counts `targeted_count` separately because hit_rate_pct divides by
+    # it, NOT by total_evaluated. See the schema docstring for why.
+    # ------------------------------------------------------------------
+    summary_stmt = _apply_filters(
+        select(
+            func.count().label("total_evaluated"),
+            func.count().filter(SignalOutcome.hit_target.is_(True)).label("targets_hit"),
+            func.count().filter(SignalOutcome.hit_stop.is_(True)).label("stops_hit"),
+            func.count().filter(SignalOutcome.hit_target.is_not(None)).label("targeted_count"),
+            func.avg(SignalOutcome.confidence)
+            .filter(SignalOutcome.hit_target.is_(True))
+            .label("avg_conf_hits"),
+            func.avg(SignalOutcome.confidence)
+            .filter(SignalOutcome.hit_target.is_(False))
+            .label("avg_conf_misses"),
+        ).select_from(SignalOutcome)
+    )
+    summary_row = (await session.execute(summary_stmt)).one()
+
+    # Postgres AVG returns Decimal (or NULL) — cast for clean JSON. NULL
+    # passes through to None. Same pattern as `dashboard.py`.
+    avg_hits = summary_row.avg_conf_hits
+    avg_misses = summary_row.avg_conf_misses
+    targeted = summary_row.targeted_count
+    hit_rate = round((summary_row.targets_hit / targeted) * 100, 2) if targeted > 0 else None
+
+    summary = TrackRecordSummary(
+        total_evaluated=summary_row.total_evaluated,
+        targets_hit=summary_row.targets_hit,
+        stops_hit=summary_row.stops_hit,
+        targeted_count=targeted,
+        hit_rate_pct=hit_rate,
+        avg_confidence_hits=float(avg_hits) if avg_hits is not None else None,
+        avg_confidence_misses=float(avg_misses) if avg_misses is not None else None,
+    )
+
+    # ------------------------------------------------------------------
+    # Paginated list — cursor or page mode.
+    # ------------------------------------------------------------------
+    base_stmt = select(SignalOutcome).order_by(
+        SignalOutcome.evaluated_at.desc(), SignalOutcome.id.desc()
+    )
+    base_stmt = _apply_filters(base_stmt)
+
+    # Total over the same WHERE — populated in BOTH modes so the client
+    # always has a "Showing N of M" header. Reuses summary.total_evaluated
+    # to avoid an extra COUNT roundtrip.
+    total = summary.total_evaluated
+
+    if page is not None:
+        # Offset path — used by the numbered pager UI.
+        offset = (page - 1) * limit
+        rows = (await session.execute(base_stmt.offset(offset).limit(limit))).scalars().all()
+        page_rows = list(rows)
+        has_more = (offset + len(page_rows)) < total
+        current_page: int | None = page
+    else:
+        # Cursor path — keyset over (evaluated_at, id) DESC. `+1` row probes
+        # has-more cheaply.
+        stmt = base_stmt.limit(limit + 1)
+        if cursor is not None:
+            parsed = parse_cursor(cursor)
+            if parsed is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="invalid cursor",
+                )
+            cursor_ts, cursor_id = parsed
+            # DESC sort → "next page" is older rows → `(evaluated_at, id) <
+            # cursor`. Explicit OR (not `tuple_`) for the same SQLAlchemy-
+            # row-value-comparison reasons documented in `routes/signals.py`.
+            stmt = stmt.where(
+                or_(
+                    SignalOutcome.evaluated_at < cursor_ts,
+                    and_(
+                        SignalOutcome.evaluated_at == cursor_ts,
+                        SignalOutcome.id < cursor_id,
+                    ),
+                )
+            )
+        rows = (await session.execute(stmt)).scalars().all()
+        has_more = len(rows) > limit
+        page_rows = list(rows[:limit])
+        current_page = None  # cursor traversal has no honest page number
+
+    items = [TrackRecordItemOut.model_validate(row) for row in page_rows]
+
+    next_cursor: str | None = None
+    if has_more and items:
+        last = page_rows[-1]
+        # Defensive — the WHERE clause filters NULL evaluated_at out, so
+        # this branch can't fire with a None timestamp; the assert pins
+        # the invariant for mypy + a future change of the WHERE.
+        assert last.evaluated_at is not None  # noqa: S101 — guarded by .where above
+        next_cursor = format_cursor(last.evaluated_at, last.id)
+
+    # Ceiling division — total_pages = ceil(total / limit). Empty result
+    # → 0 pages so the pager renders nothing rather than "Page 1 of 1 ·
+    # 0 results".
+    total_pages = (total + limit - 1) // limit if total > 0 else 0
+
+    return PaginatedTrackRecord(
+        summary=summary,
+        items=items,
+        next_cursor=next_cursor,
+        total=total,
+        page=current_page,
+        total_pages=total_pages,
+    )

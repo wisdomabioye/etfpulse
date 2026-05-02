@@ -21,6 +21,7 @@ from etfpulse.api.routes.health import router as health_router
 from etfpulse.api.routes.regime import router as regime_router
 from etfpulse.api.routes.signals import router as signals_router
 from etfpulse.api.routes.telegram import router as telegram_router
+from etfpulse.api.routes.track_record import router as track_record_router
 
 ALL_ROUTERS: list[APIRouter] = [
     health_router,
@@ -29,4 +30,5 @@ ALL_ROUTERS: list[APIRouter] = [
     signals_router,
     dashboard_router,
     regime_router,
+    track_record_router,
 ]

@@ -4,6 +4,7 @@ import { Home } from './pages/Home';
 import { Regime } from './pages/Regime';
 import { SignalDetail } from './pages/SignalDetail';
 import { Signals } from './pages/Signals';
+import { TrackRecord } from './pages/TrackRecord';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
               <Route path="/signals" element={<Signals />} />
               <Route path="/signals/:id" element={<SignalDetail />} />
               <Route path="/regime" element={<Regime />} />
+              <Route path="/track-record" element={<TrackRecord />} />
             </Routes>
           </main>
           <Footer />

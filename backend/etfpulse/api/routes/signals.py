@@ -41,9 +41,11 @@ from sqlalchemy.sql import Select
 
 from etfpulse.api.deps import get_db_session
 from etfpulse.api.schemas.signals import (
+    AssetLiteral,
     PaginatedSignals,
     SignalDetail,
     SignalListItem,
+    SignalTypeLiteral,
     format_cursor,
     parse_cursor,
 )
@@ -57,15 +59,13 @@ log = structlog.get_logger()
 router = APIRouter(prefix="/signals", tags=["signals"])
 
 
-AssetQuery = Literal["BTC", "ETH"]
-SignalTypeQuery = Literal["flow_anomaly", "magnitude", "acceleration", "divergence", "regime_shift"]
 SortQuery = Literal["newest", "oldest"]
 
 
 @router.get("", response_model=PaginatedSignals)
 async def list_signals(
-    asset: AssetQuery | None = Query(default=None),
-    signal_type: SignalTypeQuery | None = Query(default=None),
+    asset: AssetLiteral | None = Query(default=None),
+    signal_type: SignalTypeLiteral | None = Query(default=None),
     confidence_min: int | None = Query(default=None, ge=1, le=10),
     include_expired: bool = Query(default=False),
     sort: SortQuery = Query(default="newest"),

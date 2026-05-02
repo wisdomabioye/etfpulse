@@ -15,9 +15,11 @@ import { ApiError, apiGet } from './client';
 import type {
   DashboardStats,
   PaginatedSignals,
+  PaginatedTrackRecord,
   RegimeResponse,
   SignalDetail,
   SignalFilters,
+  TrackRecordFilters,
 } from './types';
 
 /** Home page headline tiles. Refetches every 30s (TanStack staleTime default). */
@@ -72,6 +74,22 @@ export function useRegime() {
       if (error instanceof ApiError && error.status === 503) return false;
       return failureCount < 1;
     },
+  });
+}
+
+/** Paginated track-record list + same-filter summary stats (Stage 8-P4).
+ *
+ * Mirrors `useSignals` shape — single page per call, filters live in the
+ * queryKey so changing them invalidates the cache cleanly. The track-record
+ * page uses page-mode pagination (numbered pager); cursor mode is also
+ * supported by the endpoint but not used by any caller today.
+ *
+ * Empty-DB / cold-boot returns `summary` with all zeros + null hit_rate
+ * — the page handles that as the empty state, not an error. */
+export function useTrackRecord(filters?: TrackRecordFilters) {
+  return useQuery({
+    queryKey: ['track-record', filters ?? {}],
+    queryFn: () => apiGet<PaginatedTrackRecord>('/api/track-record', filters),
   });
 }
 

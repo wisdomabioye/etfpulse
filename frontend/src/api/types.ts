@@ -156,6 +156,17 @@ export interface DashboardStats {
    * the stack. */
   current_regime: string | null;
   signal_posture: string | null;
+  /** Stage 8-P5 (closes issue #44) — global 72h hit rate as PERCENT (0..100).
+   * Same unit as `/api/track-record.summary.hit_rate_pct` so consumers
+   * never convert. Null when no signal with a target was scored —
+   * HeroHitRatePanel renders "—" + "Evaluation pending" caption.
+   * Denominator is signals where AI set a target, NOT all evaluated
+   * signals (mirrors track-record endpoint semantics). */
+  hit_rate_72h: number | null;
+  /** Total SignalOutcome rows scored — captioned next to hit_rate_72h
+   *  ("on N evaluated signals"). 0 before any signal ages past the 72h
+   *  eval delay. */
+  evaluated_count: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +183,86 @@ export type MarketRegime =
 
 /** How aggressively to fire signals given the regime + macro context. */
 export type SignalPosture = 'aggressive' | 'normal' | 'cautious' | 'paused';
+
+// ---------------------------------------------------------------------------
+// Track record (Stage 8-P4)
+// ---------------------------------------------------------------------------
+
+/** Aggregate stats over the SAME filter set as the paginated `items` —
+ *  see `api/routes/track_record.py` for why summary mirrors filters
+ *  (the dashboard endpoint carries the global number). All counts run
+ *  over evaluated SignalOutcome rows.
+ *
+ *  `hit_rate_pct` divides `targets_hit / targeted_count`, NOT
+ *  `targets_hit / total_evaluated` — signals where AI declined a target
+ *  shouldn't dilute the rate. Same rationale as the dashboard's
+ *  `hit_rate_72h`. */
+export interface TrackRecordSummary {
+  total_evaluated: number;
+  targets_hit: number;
+  stops_hit: number;
+  /** Subset of `total_evaluated` where the AI set a target — denominator
+   *  for `hit_rate_pct`. */
+  targeted_count: number;
+  /** 0..100. Null when `targeted_count === 0`. */
+  hit_rate_pct: number | null;
+  avg_confidence_hits: number | null;
+  avg_confidence_misses: number | null;
+}
+
+/** One row in `PaginatedTrackRecord.items`. Mirrors `TrackRecordItemOut`
+ *  on the backend — denormalized from Signal so each row is renderable
+ *  on its own without a JOIN. */
+export interface TrackRecordItem {
+  id: number;
+  signal_id: number;
+  asset: AssetSymbol;
+  signal_type: SignalType;
+  direction: string;
+  confidence: number;
+
+  entry_price: number | null;
+  stop_price: number | null;
+  target_price: number | null;
+  price_at_signal: number;
+  price_after_24h: number | null;
+  price_after_72h: number | null;
+
+  /** Tri-state — `true` hit, `false` did not hit, `null` no level set. */
+  hit_target: boolean | null;
+  hit_stop: boolean | null;
+
+  /** Unsigned fractions of entry (0.032 = 3.2%). */
+  max_favorable: number | null;
+  max_adverse: number | null;
+
+  evaluated_at: string;
+}
+
+export interface PaginatedTrackRecord {
+  summary: TrackRecordSummary;
+  items: TrackRecordItem[];
+  next_cursor: string | null;
+  total: number;
+  page: number | null;
+  total_pages: number;
+}
+
+/** Query params for `GET /api/track-record`. Subset of `SignalFilters`
+ *  (no `sort` / `include_expired`) — the track-record endpoint sorts
+ *  fixed by `evaluated_at DESC` and only ever returns evaluated rows. */
+export interface TrackRecordFilters {
+  asset?: AssetSymbol;
+  signal_type?: SignalType;
+  confidence_min?: number;
+  limit?: number;
+  /** 1-based page number for offset pagination. Omit to use cursor mode. */
+  page?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Regime
+// ---------------------------------------------------------------------------
 
 /** Response from `GET /api/regime`. The `reasoning` JSONB is pass-through —
  * see `pipeline/regime_monitor.py` for the structured score-breakdown shape

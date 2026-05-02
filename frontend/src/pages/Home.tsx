@@ -68,6 +68,8 @@ export function Home() {
           <HeroHitRatePanel
             signalsToday={stats.data?.signals_today ?? (stats.isError ? null : 0)}
             totalSignals={stats.data?.total_signals ?? (stats.isError ? null : 0)}
+            hitRate72h={stats.data?.hit_rate_72h ?? null}
+            evaluatedCount={stats.data?.evaluated_count ?? null}
           />
         </div>
       </section>
