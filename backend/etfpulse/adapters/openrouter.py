@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -75,13 +76,32 @@ class OpenRouterQuotaError(OpenRouterError):
 # Prompt templates
 # ---------------------------------------------------------------------------
 
+# Stage 8-P1 — the v3 system prompt teaches the LLM the entry/stop/target
+# rules. The "current spot" anchor referenced below is fed in as its own
+# prompt section by `_build_messages` when the caller passes `current_price`
+# (`signal_builder` threads `price_at_creation` here so the model has a
+# real number to anchor to instead of guessing from training data).
 _SYSTEM_PROMPT = (
     "You are a crypto-market analyst evaluating an ETF flow signal. "
     "Respond ONLY with a JSON object matching the provided schema — no prose, "
     "no markdown fences, no commentary. Be concise and grounded in the "
     "supplied evidence; do not invent numbers. When market regime or recent "
     "news is provided, factor it into your reasoning + risks; when omitted, "
-    "rely on trigger data alone."
+    "rely on trigger data alone.\n\n"
+    "PRICE LEVELS: when suggested_action is 'consider long' or "
+    "'consider short', also provide entry_price, stop_price, and target_price "
+    "as positive decimals in the asset's USD quote. Rules:\n"
+    "  - entry_price: at or within 1% of the 'Current spot price' below "
+    "(if provided); pick a nearby support/resistance level inside that band "
+    "when one is obvious. If no spot price is supplied, return null.\n"
+    "  - stop_price: BELOW entry for longs, ABOVE entry for shorts. Sized so "
+    "that risk per trade is roughly 1-2% of entry — tighter for 'scalp', "
+    "looser for 'position'.\n"
+    "  - target_price: aims for a risk:reward of at least 1:1.5. ABOVE entry "
+    "for longs, BELOW entry for shorts.\n"
+    "  - When suggested_action is 'wait', set all three to null. Schema "
+    "validators will null them anyway, but explicit nulls keep your output "
+    "self-consistent."
 )
 
 
@@ -91,26 +111,39 @@ def _build_messages(
     trigger_data: dict[str, Any],
     regime: RegimeClassification | None = None,
     news_context: list[NewsContextItem] | None = None,
+    current_price: Decimal | None = None,
 ) -> list[dict[str, str]]:
-    """Compose the v2 prompt — trigger data + optional regime + optional news.
+    """Compose the v3 prompt — trigger data + optional regime/news/spot price.
 
     Sections appear in fixed order so prompt diffs are reproducible:
         1. Signal identity (type, asset)
-        2. Trigger data (always)
-        3. Regime classification (optional)
-        4. Recent news (optional, max items already capped at gather time)
-        5. Output schema
+        2. Current spot price (optional — Stage 8-P1; required for the v3
+           system prompt's entry/stop/target rules to anchor on real
+           numbers rather than the LLM's training-data ballpark)
+        3. Trigger data (always)
+        4. Regime classification (optional)
+        5. Recent news (optional, max items already capped at gather time)
+        6. Output schema (now includes entry/stop/target Decimal fields — Stage 8-P1)
 
     The regime block surfaces `regime`, `signal_posture`, `confidence`, and
     `macro_events_nearby` only — not the full `reasoning` JSONB, which would
     bloat the prompt and double-count the signals already in trigger_data.
+
+    Schema embedding uses `AISignalAnalysis.model_json_schema()` so adding
+    fields to the Pydantic class automatically updates the prompt — no
+    manual schema-string drift between the validator and the prompt.
     """
     sections: list[str] = [
         f"Signal type: {signal_type}",
         f"Asset: {asset}",
-        "Trigger data:",
-        json.dumps(trigger_data, indent=2, default=str),
     ]
+    if current_price is not None:
+        # Plain string (not JSON-wrapped) — the system prompt references it
+        # by the literal label "Current spot price" so the LLM can find it
+        # regardless of which trigger_data shape is also in the prompt.
+        sections.append(f"Current spot price (USD): {current_price}")
+    sections.append("Trigger data:")
+    sections.append(json.dumps(trigger_data, indent=2, default=str))
 
     if regime is not None:
         regime_block = {
@@ -223,6 +256,7 @@ class OpenRouterClient:
         trigger_data: dict[str, Any],
         regime: RegimeClassification | None = None,
         news_context: list[NewsContextItem] | None = None,
+        current_price: Decimal | None = None,
     ) -> AISignalAnalysis | None:
         """Generate a typed analysis for a detector hit, or None on any failure.
 
@@ -231,6 +265,11 @@ class OpenRouterClient:
         default to None for backward-compat with callers that haven't been
         updated; the system prompt instructs the model to fall back to
         trigger-data-only reasoning when they're absent.
+
+        `current_price` is the Stage 8-P1 anchor for the entry/stop/target
+        rules in the v3 system prompt. When omitted (legacy callers, or
+        spot-price-fetch failure), the system prompt instructs the model to
+        return null entry/stop/target rather than guess from training data.
 
         Resolution R6 — never raises. Failure modes (all → None, all logged):
             - Empty API key (config missing)
@@ -256,7 +295,7 @@ class OpenRouterClient:
 
         try:
             raw_content = await self._call_chat_completions(
-                signal_type, asset, trigger_data, regime, news_context
+                signal_type, asset, trigger_data, regime, news_context, current_price
             )
         except OpenRouterError as exc:
             log.warning(
@@ -306,6 +345,7 @@ class OpenRouterClient:
         trigger_data: dict[str, Any],
         regime: RegimeClassification | None,
         news_context: list[NewsContextItem] | None,
+        current_price: Decimal | None,
     ) -> str:
         """POST one chat completion. Returns the raw content string from the
         first choice. Raises OpenRouterError on any HTTP/transport failure
@@ -313,7 +353,9 @@ class OpenRouterClient:
         """
         body = {
             "model": self.model,
-            "messages": _build_messages(signal_type, asset, trigger_data, regime, news_context),
+            "messages": _build_messages(
+                signal_type, asset, trigger_data, regime, news_context, current_price
+            ),
             "response_format": {"type": "json_object"},
             "max_tokens": _MAX_TOKENS,
         }

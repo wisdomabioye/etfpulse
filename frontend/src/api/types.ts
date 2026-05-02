@@ -65,6 +65,15 @@ export interface AIAnalysis {
   risks: string[];
   suggested_action: SuggestedAction;
   time_horizon: TimeHorizon;
+  /** Stage 8-P1 — AI-suggested price levels. All three are null when
+   *  `suggested_action === 'wait'` (validator drops them) OR when the AI
+   *  declined to volunteer specific levels. The same values are mirrored
+   *  onto `Signal.entry_price/stop_price/target_price` columns server-side
+   *  for the outcome evaluator; the API exposes them here on `ai_analysis`
+   *  to keep the "what the AI said" shape natural for the frontend. */
+  entry_price: number | null;
+  stop_price: number | null;
+  target_price: number | null;
 }
 
 export interface SignalOutcome {

@@ -246,6 +246,84 @@ class TestBuildSignal:
         assert signal is not None
         assert signal.ai_prompt_version == AI_PROMPT_VERSION
 
+    async def test_mirrors_price_levels_to_signal_columns(self, db_session, monkeypatch):
+        """Stage 8-P1 — when AI returns entry/stop/target, build_signal
+        must copy them onto Signal.entry_price/stop_price/target_price
+        columns (not just leave them in ai_analysis JSONB). Outcome
+        evaluator reads the columns; JSONB is the audit trail."""
+
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="Test",
+                reasoning=["r"],
+                confidence=8,
+                risks=["risk"],
+                suggested_action="consider long",
+                time_horizon="swing",
+                entry_price=Decimal("84200.00"),
+                stop_price=Decimal("82000.00"),
+                target_price=Decimal("89500.00"),
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        hit = _make_hit()
+        signal = await build_signal(db_session, hit)
+
+        assert signal is not None
+        assert signal.entry_price == Decimal("84200.00")
+        assert signal.stop_price == Decimal("82000.00")
+        assert signal.target_price == Decimal("89500.00")
+        # Audit trail in JSONB carries the same values (as strings — Decimal
+        # serializes that way in mode="json").
+        assert signal.ai_analysis is not None
+        assert signal.ai_analysis["entry_price"] == "84200.00"
+        assert signal.ai_analysis["stop_price"] == "82000.00"
+        assert signal.ai_analysis["target_price"] == "89500.00"
+
+    async def test_wait_suggestion_leaves_price_columns_null(self, db_session, monkeypatch):
+        """A 'wait' suggestion is the AI declining to recommend a trade —
+        the validator drops any volunteered prices, so the columns must
+        also be NULL on the persisted Signal."""
+
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="Wait for confirmation",
+                reasoning=["r"],
+                confidence=4,
+                risks=["risk"],
+                suggested_action="wait",
+                time_horizon="scalp",
+                # The schema-level model_validator will null these out
+                # regardless of what we pass — verify the column propagation.
+                entry_price=Decimal("84200"),
+                stop_price=Decimal("82000"),
+                target_price=Decimal("89500"),
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        signal = await build_signal(db_session, _make_hit())
+        assert signal is not None
+        assert signal.entry_price is None
+        assert signal.stop_price is None
+        assert signal.target_price is None
+
+    async def test_ai_failure_leaves_price_columns_null(self, db_session, monkeypatch):
+        """When AI returns None, the columns stay NULL (no fall-back to
+        trigger_data values — those aren't AI-suggested levels)."""
+
+        async def _ai(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        signal = await build_signal(db_session, _make_hit())
+        assert signal is not None
+        assert signal.entry_price is None
+        assert signal.stop_price is None
+        assert signal.target_price is None
+
     async def test_regime_and_news_context_persist_to_trigger_data(
         self, db_session, monkeypatch, stub_ai
     ):
@@ -309,6 +387,58 @@ class TestBuildSignal:
 
         assert captured_kwargs["regime"] is regime
         assert captured_kwargs["news_context"] == news
+
+    async def test_price_at_creation_forwarded_as_current_price(self, db_session, monkeypatch):
+        """Stage 8-P1 — the spot price we already fetched for
+        `Signal.price_at_creation` must be threaded through to the AI as
+        `current_price` so the v3 entry/stop/target rules have a real
+        anchor instead of guessing from the model's training data."""
+        captured_kwargs: dict = {}
+
+        async def _ai(**kwargs):
+            captured_kwargs.update(kwargs)
+            return AISignalAnalysis(
+                headline="x",
+                reasoning=["r"],
+                confidence=7,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        await build_signal(
+            db_session,
+            _make_hit(),
+            price_at_creation=Decimal("84250.50"),
+            price_source="binance",
+        )
+
+        assert captured_kwargs["current_price"] == Decimal("84250.50")
+
+    async def test_no_price_means_current_price_is_none(self, db_session, monkeypatch):
+        """When both price providers failed (`price_at_creation=None`), the
+        AI receives current_price=None and the v3 system prompt instructs
+        it to return null entry/stop/target rather than guess."""
+        captured_kwargs: dict = {}
+
+        async def _ai(**kwargs):
+            captured_kwargs.update(kwargs)
+            return AISignalAnalysis(
+                headline="x",
+                reasoning=["r"],
+                confidence=7,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        await build_signal(db_session, _make_hit())  # default price_at_creation=None
+
+        assert captured_kwargs["current_price"] is None
 
 
 # ---------------------------------------------------------------------------

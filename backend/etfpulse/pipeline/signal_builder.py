@@ -164,11 +164,28 @@ async def build_signal(
         trigger_data=hit.trigger_data,
         regime=regime,
         news_context=news_context,
+        # Stage 8-P1 — anchor the v3 entry/stop/target rules on the real
+        # spot price we already fetched for `Signal.price_at_creation`.
+        # When None (both providers failed), the system prompt instructs
+        # the model to return null entry/stop/target rather than guess.
+        current_price=price_at_creation,
     )
     if analysis is not None:
-        signal.ai_analysis = analysis.model_dump()
+        # `mode="json"` so the JSONB column gets a JSON-friendly dict
+        # (Decimal → str), while the column-level fields below get the
+        # native Decimal directly off the schema. Same value flowing into
+        # two destinations — JSONB for audit, columns for queryable
+        # canonical projection. Mirrors the `confidence` pattern.
+        signal.ai_analysis = analysis.model_dump(mode="json")
         signal.confidence = analysis.confidence
         signal.expires_at = compute_expires_at(analysis.time_horizon)
+        # Stage 8-P1 — mirror the AI-suggested levels onto dedicated columns
+        # for the outcome evaluator + indexable queries. Each is None when
+        # the AI suggested "wait" OR declined to volunteer a level (the
+        # validator drops non-positive + wait-mode prices).
+        signal.entry_price = analysis.entry_price
+        signal.stop_price = analysis.stop_price
+        signal.target_price = analysis.target_price
 
     log.info(
         "signal_built",

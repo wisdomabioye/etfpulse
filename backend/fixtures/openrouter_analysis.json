@@ -12,7 +12,10 @@
       "ETH flows remain positive — divergence may resolve by ETH weakening, not BTC strengthening short."
     ],
     "suggested_action": "consider short",
-    "time_horizon": "swing"
+    "time_horizon": "swing",
+    "entry_price": "84200.00",
+    "stop_price": "85800.00",
+    "target_price": "81500.00"
   },
   "magnitude": {
     "headline": "BTC ETF inflows cross $500M threshold for the first time this quarter",
@@ -27,7 +30,10 @@
       "Macro calendar shows CPI in 48h — outsized flow may be front-running known event."
     ],
     "suggested_action": "consider long",
-    "time_horizon": "position"
+    "time_horizon": "position",
+    "entry_price": "84500.00",
+    "stop_price": "82000.00",
+    "target_price": "89500.00"
   },
   "acceleration": {
     "headline": "Flow acceleration ambiguous — wait for confirmation",
@@ -40,7 +46,10 @@
       "Acting on weak acceleration signals historically underperforms net of fees."
     ],
     "suggested_action": "wait",
-    "time_horizon": "scalp"
+    "time_horizon": "scalp",
+    "entry_price": null,
+    "stop_price": null,
+    "target_price": null
   },
   "divergence": {
     "headline": "Institutional buying through a price drawdown — early-accumulation read",
@@ -55,7 +64,10 @@
       "Divergences can persist longer than expected if a single seller dominates spot."
     ],
     "suggested_action": "consider long",
-    "time_horizon": "swing"
+    "time_horizon": "swing",
+    "entry_price": "2480.00",
+    "stop_price": "2390.00",
+    "target_price": "2640.00"
   },
   "regime_shift": {
     "headline": "Regime transition: accumulation → markup — posture moves to normal",
@@ -70,6 +82,9 @@
       "Single-asset breakouts can drag the combined score across without broad participation."
     ],
     "suggested_action": "consider long",
-    "time_horizon": "position"
+    "time_horizon": "position",
+    "entry_price": "2520.00",
+    "stop_price": "2380.00",
+    "target_price": "2810.00"
   }
 }

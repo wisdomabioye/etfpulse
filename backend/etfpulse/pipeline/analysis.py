@@ -26,9 +26,10 @@ Prompt versioning (issue #32, closed by Stage 7-P6):
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Time horizon → signal validity window. Resolution R16. These set
 # `Signal.expires_at` so the dashboard can hide stale signals.
@@ -51,7 +52,11 @@ _RISKS_MAX_ITEMS = 3
 
 # Stamped onto Signal.ai_prompt_version at insert time. See module docstring
 # for the bump policy. Match the regex `^v[0-9]+$` (DB CHECK constraint).
-AI_PROMPT_VERSION = "v2"
+#
+# v1 → v2 (Stage 7-P6): added regime + news_context sections.
+# v2 → v3 (Stage 8-P1): added entry_price/stop_price/target_price to the
+#                       response schema.
+AI_PROMPT_VERSION = "v3"
 
 
 class AISignalAnalysis(BaseModel):
@@ -66,6 +71,17 @@ class AISignalAnalysis(BaseModel):
     risks: list[str]
     suggested_action: Literal["consider long", "consider short", "wait"]
     time_horizon: Literal["scalp", "swing", "position"]
+    # Stage 8-P1 — AI-suggested price levels. Decimal not float to match
+    # the Signal columns (Numeric) and dodge JSON-roundtrip precision drift
+    # that would corrupt downstream hit/stop comparisons. All three are
+    # nullable: a "wait" suggestion has no entry/stop/target, and the model
+    # may legitimately decline to suggest specific levels on weak signals.
+    # Validators below FORCE all three to None when suggested_action="wait"
+    # (cleans up models that suggest "wait" but still volunteer numbers)
+    # and clamp non-positive values to None (negative price = nonsense).
+    entry_price: Decimal | None = None
+    stop_price: Decimal | None = None
+    target_price: Decimal | None = None
 
     @field_validator("confidence", mode="before")
     @classmethod
@@ -100,6 +116,44 @@ class AISignalAnalysis(BaseModel):
     @classmethod
     def _clean_risks(cls, v: list[str]) -> list[str]:
         return _strip_drop_truncate(v, _RISKS_MAX_ITEMS)
+
+    @field_validator("entry_price", "stop_price", "target_price", mode="before")
+    @classmethod
+    def _coerce_price(cls, v: object) -> Decimal | None:
+        """Forgive LLM price encodings: `"84200.5"` strings, ints, or floats
+        all coerce to Decimal. Non-positive becomes None (not a ValidationError —
+        the rest of the analysis is still useful). Unparseable becomes None.
+
+        NaN/Infinity also become None — both are valid `Decimal()` constructor
+        inputs but Postgres NUMERIC rejects them on INSERT, AND `NaN <= 0`
+        raises `decimal.InvalidOperation` (would crash this validator if not
+        caught upstream). `is_finite()` short-circuits both before we reach
+        the comparison.
+        """
+        if v is None:
+            return None
+        try:
+            d = v if isinstance(v, Decimal) else Decimal(str(v))
+        except (TypeError, ValueError, ArithmeticError):
+            return None
+        if not d.is_finite() or d <= 0:
+            return None
+        return d
+
+    @model_validator(mode="after")
+    def _drop_prices_on_wait(self) -> AISignalAnalysis:
+        """A `wait` suggestion implies no actionable trade — drop any prices
+        the model volunteered. Otherwise the Telegram formatter would render
+        "Suggested: WAIT at $84,200" which is contradictory.
+
+        Done at model_validator (not on suggested_action's field validator)
+        because the price fields are validated independently — we need both
+        sides resolved before we can decide to clear."""
+        if self.suggested_action == "wait":
+            self.entry_price = None
+            self.stop_price = None
+            self.target_price = None
+        return self
 
 
 def _strip_drop_truncate(items: list[str], cap: int) -> list[str]:

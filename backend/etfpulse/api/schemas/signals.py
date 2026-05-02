@@ -31,6 +31,11 @@ class AIAnalysisOut(BaseModel):
     Fields are optional because an LLM failure at signal-build time leaves
     `Signal.ai_analysis = NULL`. `SignalDetail.ai_analysis` itself becomes
     None in that case; this model is for when it IS populated.
+
+    Stage 8-P1 added entry/stop/target — these mirror the columns now on
+    `Signal` (kept here for the natural "what the AI said" detail shape on
+    the frontend; the columns are for outcome-evaluator queries). Float
+    serialization matches `SignalOutcomeOut` for frontend type-uniformity.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -41,6 +46,9 @@ class AIAnalysisOut(BaseModel):
     risks: list[str] = Field(default_factory=list)
     suggested_action: str
     time_horizon: str
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 class SignalOutcomeOut(BaseModel):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -314,3 +315,86 @@ async def test_v2_prompt_omits_optional_blocks_when_none(httpx_mock, live_client
     user_msg = body["messages"][1]["content"]
     assert "Market regime classification" not in user_msg
     assert "Recent relevant news" not in user_msg
+
+
+# ---- v3 prompt (Stage 8-P1) ----------------------------------------------
+
+
+async def test_v3_system_prompt_describes_price_levels(httpx_mock, live_client):
+    """Stage 8-P1 — the system prompt must teach the LLM the rules for
+    entry/stop/target. Without the rules the model often returns the
+    fields but with arbitrary values, defeating the validator's clamping
+    (negative-or-zero → None) and producing many-NULL signals."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {})
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    system_msg = body["messages"][0]["content"]
+    assert "PRICE LEVELS" in system_msg
+    assert "entry_price" in system_msg
+    assert "stop_price" in system_msg
+    assert "target_price" in system_msg
+    # The "wait → null all three" rule is critical — verify it's mentioned.
+    assert "'wait'" in system_msg
+
+
+async def test_v3_user_prompt_schema_includes_price_fields(httpx_mock, live_client):
+    """The embedded JSON schema (built from `AISignalAnalysis.model_json_schema`)
+    must surface the new fields so the LLM sees the response shape. This pins
+    the auto-generated schema embedding — a refactor that drops the embedding
+    or stops calling model_json_schema would silently regress the prompt."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {})
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    user_msg = body["messages"][1]["content"]
+    # The schema appears as the trailing JSON block; assert all three fields
+    # are textually present (the schema has property names verbatim).
+    assert '"entry_price"' in user_msg
+    assert '"stop_price"' in user_msg
+    assert '"target_price"' in user_msg
+
+
+async def test_v3_response_with_price_levels_validates_through(httpx_mock, live_client):
+    """End-to-end: a v3-shaped response (entry/stop/target included) flows
+    through the adapter without losing the price fields."""
+    response = {
+        **_VALID_ANALYSIS,
+        "suggested_action": "consider long",
+        "entry_price": "84200.00",
+        "stop_price": "82000.00",
+        "target_price": "89500.00",
+    }
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(response))
+
+    result = await live_client.analyze("flow_anomaly", "BTC", {})
+    assert result is not None
+    assert result.entry_price is not None
+    assert str(result.entry_price) == "84200.00"
+    assert str(result.stop_price) == "82000.00"
+    assert str(result.target_price) == "89500.00"
+
+
+async def test_v3_prompt_includes_current_price_when_supplied(httpx_mock, live_client):
+    """Stage 8-P1 — when `current_price` is passed, the user prompt embeds
+    a 'Current spot price' line so the LLM has a real anchor for the
+    entry/stop/target rules instead of guessing from training data."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {}, current_price=Decimal("84250.50"))
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    user_msg = body["messages"][1]["content"]
+    assert "Current spot price (USD): 84250.50" in user_msg
+
+
+async def test_v3_prompt_omits_current_price_when_none(httpx_mock, live_client):
+    """Backward-compat — when `current_price` is omitted (legacy callers,
+    or both providers failed at fetch time), the prompt simply skips that
+    section. The system prompt's price-level rules instruct the model to
+    return null entry/stop/target in that case."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    await live_client.analyze("flow_anomaly", "BTC", {})
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    user_msg = body["messages"][1]["content"]
+    assert "Current spot price" not in user_msg

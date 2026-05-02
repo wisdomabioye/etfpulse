@@ -56,6 +56,17 @@ class Signal(Base):
     # (both providers failed). Stage 8 uses this to decide whether 24h/72h klines
     # come from the same source as entry — mixing providers risks micro-skew.
     price_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Stage 08-P1 — AI-suggested entry/stop/target price levels mirrored from
+    # `ai_analysis` JSONB onto dedicated columns for indexable queries
+    # (track-record summaries, outcome evaluator) without parsing JSONB on
+    # every read. NULL when the AI suggested "wait" OR when AI failed at
+    # build time (see `pipeline.signal_builder`). Same pattern as
+    # `confidence` above — JSONB is the audit trail, columns are the
+    # canonical projection. Outcome evaluator (`pipeline.track_record`)
+    # reads from these columns, never from JSONB.
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     # Hardcoded "v1" prior to Stage 07; bumped only on prompt-structure changes
     # that affect AI calibration (not wording edits). Used by the track-record
     # query to compare apples-to-apples across prompt revisions (issue #32).
