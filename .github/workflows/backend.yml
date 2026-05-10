@@ -64,5 +64,5 @@ jobs:
       - name: Type check
         run: uv run mypy etfpulse/
 
-      - name: Test
-        run: uv run pytest
+      - name: Test + coverage
+        run: uv run poe cov

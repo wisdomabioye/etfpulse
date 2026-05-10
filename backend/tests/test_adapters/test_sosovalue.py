@@ -123,7 +123,7 @@ async def test_429_with_unknown_message_routes_to_retry_path(httpx_mock, monkeyp
     the retry path. Worst case is one wasted retry on a real monthly
     event — adapter never crashes on wording drift.
 
-    Live probe (scripts/probe_rate_limit_429.py) couldn't trip per-minute
+    Live probe (scripts/dev/probe_rate_limit_429.py) couldn't trip per-minute
     on the upgraded tier with 35 parallel calls/1.88s — this test pins
     the routing contract so wording drift is detected in CI rather than
     in production.

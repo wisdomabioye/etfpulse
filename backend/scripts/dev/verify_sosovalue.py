@@ -4,7 +4,7 @@ Hits each endpoint we depend on exactly once with a small page size so we
 spend ~6 calls of monthly quota. Dumps raw JSON + DTO comparison so any
 shape drift since the spike is obvious.
 
-Run: SOSOVALUE_USE_FIXTURES=false uv run python scripts/verify_sosovalue.py
+Run: SOSOVALUE_USE_FIXTURES=false uv run python scripts/dev/verify_sosovalue.py
 """
 
 from __future__ import annotations

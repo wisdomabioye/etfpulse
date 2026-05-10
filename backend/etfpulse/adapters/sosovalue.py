@@ -352,7 +352,7 @@ class SoSoValueClient:
                 # (The new-tier per-minute floor is high enough that the
                 # documented "20 req/min" never actually triggers in
                 # production; we'd never see a 429 unless we changed our
-                # call patterns. See scripts/probe_rate_limit_429.py for
+                # call patterns. See scripts/dev/probe_rate_limit_429.py for
                 # the verification record.)
                 try:
                     body_for_log = response.json()
@@ -406,7 +406,7 @@ class SoSoValueClient:
         `code` (both 429 paths share code=402901). Substring `"Monthly quota"`
         is verified against `fixtures/sosovalue_error_monthly_quota.json`.
         Per-minute wording on the new tier was not live-verifiable
-        (see scripts/probe_rate_limit_429.py — 35 parallel calls/1.88s
+        (see scripts/dev/probe_rate_limit_429.py — 35 parallel calls/1.88s
         all returned 200, so the per-minute floor is well above ~1100/min
         and we'd never trip it in production).
 
