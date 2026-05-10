@@ -15,7 +15,7 @@ in `scripts/` — currently `backfill_signal_prices.py` and `seed_demo.py`.
 | `verify_sosovalue.py` | Hits each SoSoValue endpoint once, prints parsed DTO + raw shape. Confirms adapter parsing matches live response. | ~6 calls |
 | `verify_sector_spotlight.py` | Captures `/currencies/sector-spotlight` body to a fixture file. | 1 call |
 | `verify_fixtures_parse.py` | Loads every `sosovalue_*.json` fixture through the adapter (offline). Confirms refreshed fixtures still parse. | 0 |
-| `capture_fixtures.py` | Refreshes all 9 SoSoValue fixtures from live API. **Will break pinned test assertions** — see CLAUDE.md fixture refresh notes. | 9 calls |
+| `capture_fixtures.py` | Refreshes all 14 fixtures (10 SoSoValue + 4 Binance) from live APIs. **Will break pinned test assertions** — see CLAUDE.md fixture refresh notes. | ~10 SoSoValue + 4 Binance calls |
 | `probe_sector_spotlight.py` | Hard verification of the sector-spotlight endpoint contract: param decorativeness, auth, field types, body equality across calls. | 5 calls |
 | `probe_rate_limit_429.py` | Bursts ~35 parallel calls to confirm per-minute 429 wording. Used to verify `_classify_and_raise_429` substring routing on the upgraded tier. | up to 35 calls |
 | `smoke_e2e.py` | End-to-end smoke against real Postgres + fixture-mode adapters: ingest → detectors → signal builder → regime → outcome eval. Prints persisted state and exercises every Stage 06+ read path. | 0 (fixture mode) |
