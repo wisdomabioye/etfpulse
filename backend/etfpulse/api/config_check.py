@@ -99,6 +99,24 @@ def check_config_health() -> ConfigHealth:
             "intentionally disabled but cannot be operated"
         )
 
+    # `frontend_url` empty in prod = signal alerts ship without the
+    # "View on web" button (issue #38). Not fatal — the alert text still
+    # delivers — but operators almost certainly want the deep link.
+    # `localhost` in prod is the worse failure: users get a button that
+    # tries to open their own machine. Warn loudly on both.
+    if not settings.frontend_url:
+        warnings.append(
+            "frontend_url is empty — signal alerts will ship without the "
+            "'View on web' inline keyboard button (#38). Set FRONTEND_URL "
+            "to the public SPA origin."
+        )
+    elif "localhost" in settings.frontend_url or "127.0.0.1" in settings.frontend_url:
+        warnings.append(
+            f"frontend_url points at a local address ({settings.frontend_url!r}) — "
+            "signal alert buttons will be broken for every recipient. Set "
+            "FRONTEND_URL to the public SPA origin."
+        )
+
     # Partial Telegram config is a pit: `is_bot_enabled` silently returns
     # False, so the operator thinks the bot is on but it isn't. Surface
     # it loudly. All-four-empty (genuinely off) is fine and not a warning.

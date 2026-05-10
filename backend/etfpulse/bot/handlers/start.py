@@ -11,30 +11,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from etfpulse.bot.handlers._common import get_or_create_target
+from etfpulse.bot.i18n import resolve_lang, t
 from etfpulse.db import async_session
 
 log = structlog.get_logger()
-
-
-_DM_WELCOME = (
-    "👋 <b>Welcome to ETFPulse</b>\n\n"
-    "You'll receive crypto ETF flow signals here when our detectors fire. "
-    "Default preferences: <code>BTC, ETH</code>, confidence ≥ 6.\n\n"
-    "Commands:\n"
-    "• <code>/prefs assets BTC,ETH</code> — set which assets to watch\n"
-    "• <code>/prefs confidence 7</code> — set minimum confidence (1-10)\n"
-    "• <code>/unsubscribe</code> / <code>/subscribe</code> — pause / resume\n"
-    "• <code>/help</code> — this list again"
-)
-
-_GROUP_WELCOME = (
-    "👋 <b>ETFPulse is now monitoring this group</b>\n\n"
-    "Signals will be posted here when our detectors fire. Any member can "
-    "configure with:\n"
-    "• <code>/prefs assets BTC,ETH</code>\n"
-    "• <code>/prefs confidence 7</code>\n"
-    "• <code>/help</code> for the full command list"
-)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -47,14 +27,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         target.obj.pref_paused = False
         await session.commit()
 
+    lang = resolve_lang(update)
     log.info(
         "bot_start_handled",
         kind=target.kind,
         id=target.obj.id,
         chat_id=update.effective_chat.id if update.effective_chat else None,
+        lang=lang,
     )
-    welcome = _DM_WELCOME if target.kind == "user" else _GROUP_WELCOME
-    await _reply(update, welcome)
+    # Interpolate the target's ACTUAL prefs into the welcome — for a
+    # returning user this is more accurate than the global defaults
+    # (their /prefs may have customised things since first /start).
+    # The `welcome.group` key has no `{...}` placeholders today, so the
+    # kwargs are ignored there; passing them uniformly keeps the call
+    # site DRY across kind="user" and kind="group".
+    key = "welcome.dm" if target.kind == "user" else "welcome.group"
+    assets_str = ", ".join(target.obj.pref_assets) if target.obj.pref_assets else "all"
+    await _reply(
+        update,
+        t(
+            key,
+            lang=lang,
+            assets=assets_str,
+            confidence=target.obj.pref_min_confidence,
+        ),
+    )
 
 
 async def _reply(update: Update, text: str) -> None:

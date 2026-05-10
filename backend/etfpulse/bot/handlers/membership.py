@@ -34,6 +34,7 @@ from telegram import Chat, ChatMember, Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
+from etfpulse.bot.i18n import resolve_lang, t
 from etfpulse.config import settings
 from etfpulse.db import async_session
 from etfpulse.models import TelegramGroup
@@ -50,14 +51,6 @@ _PRESENT_STATUSES = frozenset(
         ChatMember.OWNER,
         ChatMember.RESTRICTED,
     }
-)
-
-_GROUP_WELCOME = (
-    "👋 <b>ETFPulse is now monitoring this group</b>\n\n"
-    "Signals will be posted here when our detectors fire. Configure with:\n"
-    "• <code>/prefs assets BTC,ETH</code>\n"
-    "• <code>/prefs confidence 7</code>\n"
-    "• <code>/help</code> for the full command list"
 )
 
 
@@ -142,10 +135,12 @@ async def _on_added(chat: Chat, update: Update) -> None:
         created=created,
     )
 
-    # Welcome AFTER commit — see module docstring.
+    # Welcome AFTER commit — see module docstring. Reuses the same
+    # `welcome.group` i18n key as the /start group handler so the bot
+    # speaks consistently across both registration paths.
     if update.effective_message is not None:
         try:
-            await update.effective_message.reply_html(_GROUP_WELCOME)
+            await update.effective_message.reply_html(t("welcome.group", lang=resolve_lang(update)))
         except TelegramError as exc:
             # Welcome failed (no send permission, rate limit, etc) — log
             # and move on. The group is already registered; signals will

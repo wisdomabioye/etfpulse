@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import structlog
-from telegram import Bot
+from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import BadRequest, Forbidden
 from telegram.error import TelegramError as PTBTelegramError
 
@@ -122,13 +122,25 @@ class TelegramClient:
         chat_id: int | str,
         text: str,
         parse_mode: str = "HTML",
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> SentMessage:
-        """Send one message. Raises on any failure — no internal retry (D4)."""
+        """Send one message. Raises on any failure — no internal retry (D4).
+
+        `reply_markup` attaches an InlineKeyboardMarkup to the message —
+        used by signal alerts (issue #38) for "View on web" deep links
+        and by /prefs for quick-toggle buttons. None preserves the
+        plain-text behaviour for callers that don't want a keyboard.
+        """
         if not self.token:
             raise TelegramError("telegram_bot_token not configured")
 
         try:
-            msg = await self._bot().send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            msg = await self._bot().send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
         except Forbidden as exc:
             log.warning("telegram_send_blocked", chat_id=chat_id, error=str(exc))
             raise TelegramBlockedError(str(exc)) from exc

@@ -49,24 +49,32 @@ def patch_session(monkeypatch, db_session):
         monkeypatch.setattr(f"{mod}.async_session", _yielder)
 
 
-def _dm_update(chat_id: int = 42, username: str = "alice") -> MagicMock:
+def _dm_update(
+    chat_id: int = 42, username: str = "alice", language_code: str | None = None
+) -> MagicMock:
     update = MagicMock()
     update.effective_chat.id = chat_id
     update.effective_chat.type = Chat.PRIVATE
     update.effective_chat.title = None
     update.effective_user.id = chat_id
     update.effective_user.username = username
+    # Pin explicitly so MagicMock's default-truthy attr doesn't leak
+    # through `resolve_lang` (i18n) as a non-string sentinel.
+    update.effective_user.language_code = language_code
     update.effective_message.reply_html = AsyncMock()
     return update
 
 
-def _group_update(chat_id: int = -100, title: str = "Test Group") -> MagicMock:
+def _group_update(
+    chat_id: int = -100, title: str = "Test Group", language_code: str | None = None
+) -> MagicMock:
     update = MagicMock()
     update.effective_chat.id = chat_id
     update.effective_chat.type = Chat.GROUP
     update.effective_chat.title = title
     update.effective_user.id = 999
     update.effective_user.username = "admin"
+    update.effective_user.language_code = language_code
     update.effective_message.reply_html = AsyncMock()
     return update
 
@@ -127,6 +135,26 @@ class TestCmdStart:
             await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -100500))
         ).scalar_one()
         assert group.title == "Alpha"
+
+    async def test_dm_welcome_translated_when_language_code_set(self, db_session, patch_session):
+        """Issue #37 — /start respects `effective_user.language_code`.
+        A Spanish-locale client should see the es welcome string."""
+        update = _dm_update(chat_id=150, username="maria", language_code="es-MX")
+        await cmd_start(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        # Spanish-specific token from the welcome.dm translation.
+        assert "Bienvenido a ETFPulse" in reply_text
+        # And NOT the English version.
+        assert "Welcome to ETFPulse" not in reply_text
+
+    async def test_dm_welcome_unknown_language_falls_back_to_english(
+        self, db_session, patch_session
+    ):
+        update = _dm_update(chat_id=151, language_code="ja")
+        await cmd_start(update, _ctx())
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        assert "Welcome to ETFPulse" in reply_text
 
 
 # ---- /unsubscribe + /subscribe --------------------------------------------
@@ -590,6 +618,7 @@ def _membership_update(
     title: str = "Alpha Traders",
     old_status: str,
     new_status: str,
+    language_code: str | None = None,
 ) -> MagicMock:
     """Build a fake my_chat_member Update.
 
@@ -600,6 +629,7 @@ def _membership_update(
     update.effective_chat.type = chat_type
     update.effective_chat.title = title
     update.effective_user = MagicMock()
+    update.effective_user.language_code = language_code
     update.effective_message.reply_html = AsyncMock()
 
     event = MagicMock()
@@ -802,6 +832,27 @@ class TestMyChatMember:
     # transaction. The code is short, parallel to the well-worn
     # `_resolve_or_create_group` shape, and the same race in production
     # exercises it.
+
+    async def test_added_welcome_translated(self, db_session, patch_session):
+        """Issue #37 — membership welcome reuses the `welcome.group` key
+        from i18n so /start and my_chat_member registration speak the
+        same language. Verifies the DRY-fix landed and works end-to-end."""
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+
+        upd = _membership_update(
+            chat_id=-101300,
+            title="Grupo Cripto",
+            old_status=ChatMember.LEFT,
+            new_status=ChatMember.MEMBER,
+            language_code="es",
+        )
+        await handle_my_chat_member(upd, _ctx())
+
+        body = upd.effective_message.reply_html.await_args.args[0]
+        # Spanish-specific token from welcome.group.
+        assert "ahora monitoriza este grupo" in body
 
     async def test_welcome_send_failure_does_not_undo_registration(self, db_session, patch_session):
         """If reply_html raises (no send permission), the group is still

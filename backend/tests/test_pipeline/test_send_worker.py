@@ -795,3 +795,48 @@ class TestTrackRecordStatPrefetch:
         await send_pending_deliveries(db_session)
 
         assert call_count["n"] == 1, "cache must absorb the second tick's stat lookup"
+
+
+# ---------------------------------------------------------------------------
+# build_signal_keyboard (issue #38)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSignalKeyboard:
+    def test_none_when_frontend_url_unset(self, monkeypatch):
+        """Empty `frontend_url` → no button. Caller passes None to the
+        adapter, which sends the message without any reply_markup."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "")
+        signal = _signal_with_ai()
+        signal.id = 42
+        assert build_signal_keyboard(signal) is None
+
+    def test_renders_deep_link_when_configured(self, monkeypatch):
+        """Configured `frontend_url` → InlineKeyboardMarkup with one button
+        pointing at `/signals/<id>` on the configured origin."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
+        signal = _signal_with_ai()
+        signal.id = 42
+        kb = build_signal_keyboard(signal)
+        assert kb is not None
+        button = kb.inline_keyboard[0][0]
+        assert button.url == "https://etfpulse.example.com/signals/42"
+        assert "View on web" in button.text
+
+    def test_trailing_slash_is_stripped(self, monkeypatch):
+        """A trailing slash in `frontend_url` shouldn't produce `//signals/`."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com/")
+        signal = _signal_with_ai()
+        signal.id = 7
+        kb = build_signal_keyboard(signal)
+        assert kb is not None
+        assert kb.inline_keyboard[0][0].url == "https://etfpulse.example.com/signals/7"

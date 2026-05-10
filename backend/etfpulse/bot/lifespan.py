@@ -40,16 +40,11 @@ from telegram.error import TelegramError as PTBTelegramError
 from telegram.ext import Application
 
 from etfpulse.adapters.telegram import telegram_client
+from etfpulse.bot.constants import ALLOWED_UPDATES
 from etfpulse.bot.handlers import register_handlers
 from etfpulse.config import settings
 
 log = structlog.get_logger()
-
-# Matches Decision D1c — we only care about `message` (commands + text) and
-# `my_chat_member` (for auto-detecting when bot is added/removed from groups).
-# Filtering here reduces both bandwidth and attack surface (Telegram won't
-# send us update types we don't handle).
-_ALLOWED_UPDATES = ["message", "my_chat_member"]
 
 
 def _webhook_url() -> str:
@@ -106,7 +101,7 @@ async def start_bot(app: FastAPI) -> AsyncIterator[None]:
         await telegram_client.set_webhook(
             url=webhook_url,
             secret_token=settings.telegram_webhook_secret,
-            allowed_updates=_ALLOWED_UPDATES,
+            allowed_updates=ALLOWED_UPDATES,
         )
     except PTBTelegramError as exc:
         # Don't block app startup on a transient Telegram outage. The webhook
@@ -131,7 +126,7 @@ async def start_bot(app: FastAPI) -> AsyncIterator[None]:
     # once would otherwise race on the widen/shrink protocol and end up
     # with app.state desync'd from what Telegram signs with.
     app.state.telegram_webhook_rotate_lock = asyncio.Lock()
-    log.info("bot_started", webhook_url=webhook_url, allowed_updates=_ALLOWED_UPDATES)
+    log.info("bot_started", webhook_url=webhook_url, allowed_updates=ALLOWED_UPDATES)
 
     try:
         yield

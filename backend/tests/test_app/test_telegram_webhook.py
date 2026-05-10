@@ -208,7 +208,12 @@ def test_rotate_generates_secret_and_updates_state(enable_bot, mock_application,
         live_client.set_webhook.assert_awaited_once()
         kwargs = live_client.set_webhook.await_args.kwargs
         assert kwargs["secret_token"] == new_secret
-        assert kwargs["allowed_updates"] == ["message", "my_chat_member"]
+        # Both the boot path (bot/lifespan.py) and the rotation path share
+        # `bot/constants.ALLOWED_UPDATES` — see the DRY consolidation that
+        # caught the prior 2-element vs 3-element drift.
+        from etfpulse.bot.constants import ALLOWED_UPDATES
+
+        assert kwargs["allowed_updates"] == ALLOWED_UPDATES
 
         # OLD secret should now be rejected by the webhook route.
         r_old = client.post(

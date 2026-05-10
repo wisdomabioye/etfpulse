@@ -20,14 +20,16 @@ from telegram import User as TgUser
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
+from etfpulse.bot.constants import VALID_ASSETS
 from etfpulse.config import settings
 from etfpulse.models import ChannelType, NotificationChannel, TelegramGroup, User
 
 log = structlog.get_logger()
 
-# Assets we accept in /prefs. Matches what detectors emit and what the
-# ingestion adapter pulls for.
-_VALID_ASSETS = {"BTC", "ETH"}
+# Set form of VALID_ASSETS for O(1) membership in `parse_asset_list`.
+# Single source of truth lives in `bot/constants.py`; this is a derived
+# view, not a duplicate.
+_VALID_ASSETS_SET = frozenset(VALID_ASSETS)
 
 # ChatMember statuses that grant admin powers in a group/supergroup.
 # `RESTRICTED` and `MEMBER` are NOT included — regular members can read
@@ -153,10 +155,11 @@ def parse_asset_list(raw: str) -> list[str]:
     parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
     if not parts:
         raise ValueError("no assets provided")
-    invalid = [p for p in parts if p not in _VALID_ASSETS]
+    invalid = [p for p in parts if p not in _VALID_ASSETS_SET]
     if invalid:
         raise ValueError(
-            f"invalid asset(s): {', '.join(invalid)}. Supported: {', '.join(sorted(_VALID_ASSETS))}"
+            f"invalid asset(s): {', '.join(invalid)}. "
+            f"Supported: {', '.join(sorted(_VALID_ASSETS_SET))}"
         )
     # Dedup while preserving order.
     seen: set[str] = set()

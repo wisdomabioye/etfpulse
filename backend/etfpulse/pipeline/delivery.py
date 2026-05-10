@@ -54,6 +54,7 @@ from cachetools import TTLCache
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from etfpulse.adapters.telegram import (
     TelegramBlockedError,
@@ -61,6 +62,7 @@ from etfpulse.adapters.telegram import (
     TelegramError,
     telegram_client,
 )
+from etfpulse.config import settings
 from etfpulse.models import (
     ChannelType,
     DeliveryStatus,
@@ -460,6 +462,25 @@ def _format_news_block(trigger_data: dict[str, Any]) -> str | None:
     return "\n<b>News context:</b>\n" + "\n".join(rendered_items)
 
 
+def build_signal_keyboard(signal: Signal) -> InlineKeyboardMarkup | None:
+    """Inline keyboard attached to a signal alert (issue #38).
+
+    Single "View on web" button deep-linking to `/signals/:id` on the
+    SPA. Returns None when `frontend_url` is unset → caller passes None
+    to the adapter, which sends the message without any reply_markup.
+    Telegram strips a None reply_markup cleanly.
+
+    Lives in this module (not `bot/keyboards.py`) so `pipeline/` doesn't
+    have to import from `bot/` — delivery already owns the rest of the
+    outbound message rendering, and this keyboard is part of that.
+    """
+    base = settings.frontend_url.rstrip("/")
+    if not base:
+        return None
+    url = f"{base}/signals/{signal.id}"
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📊 View on web", url=url)]])
+
+
 def format_signal_message(
     signal: Signal, *, track_record_stat: TrackRecordStat | None = None
 ) -> str:
@@ -647,9 +668,14 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
             continue
 
         message = format_signal_message(signal, track_record_stat=track_stat)
+        # Inline "View on web" keyboard (issue #38). Returns None when
+        # `frontend_url` is unset → adapter sends without reply_markup.
+        keyboard = build_signal_keyboard(signal)
 
         try:
-            sent = await telegram_client.send_message(chat_id, message, parse_mode="HTML")
+            sent = await telegram_client.send_message(
+                chat_id, message, parse_mode="HTML", reply_markup=keyboard
+            )
             delivery.status = DeliveryStatus.DELIVERED.value
             delivery.delivered_at = sent.sent_at
             summary["sent"] += 1

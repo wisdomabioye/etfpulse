@@ -25,6 +25,7 @@ def production(monkeypatch):
     monkeypatch.setattr(settings, "sosovalue_api_key", "soso-key")
     monkeypatch.setattr(settings, "openrouter_api_key", "or-key")
     monkeypatch.setattr(settings, "admin_api_key", "admin-key")
+    monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
     monkeypatch.setattr(settings, "run_bot", False)
 
 
@@ -123,3 +124,20 @@ def test_telegram_partial_skipped_when_run_bot_false(production, monkeypatch):
 
     report = check_config_health()
     assert not any("telegram" in w for w in report.warnings)
+
+
+def test_production_empty_frontend_url_is_warning(production, monkeypatch):
+    """Issue #38 — empty `frontend_url` in prod = signal alerts without
+    the 'View on web' button. Non-fatal but operator should fix."""
+    monkeypatch.setattr(settings, "frontend_url", "")
+    report = check_config_health()
+    assert any("frontend_url is empty" in w for w in report.warnings)
+    assert report.ok is True
+
+
+def test_production_localhost_frontend_url_is_warning(production, monkeypatch):
+    """Worse failure mode: `localhost` in prod sends users links to
+    their own machine. Surface loudly."""
+    monkeypatch.setattr(settings, "frontend_url", "http://localhost:5173")
+    report = check_config_health()
+    assert any("localhost" in w and "frontend_url" in w for w in report.warnings)

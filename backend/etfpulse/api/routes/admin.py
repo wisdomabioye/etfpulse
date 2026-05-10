@@ -34,17 +34,12 @@ from etfpulse.api.schemas.telegram_admin import (
     RotateWebhookSecretRequest,
     RotateWebhookSecretResponse,
 )
+from etfpulse.bot.constants import ALLOWED_UPDATES
 from etfpulse.config import settings
 from etfpulse.models import DeliveryStatus, Signal, SignalDelivery, SignalStatus
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
 from etfpulse.pipeline.scheduler import _run_cycle_with_session
-
-# Allowed updates passed to set_webhook on rotation — kept in sync with
-# `bot/lifespan.py:_ALLOWED_UPDATES`. Duplicated rather than imported to
-# avoid a route → bot import dependency (the bot package depends on api,
-# not the other way around in CLAUDE.md's domain layering).
-_ALLOWED_UPDATES = ["message", "my_chat_member"]
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -300,7 +295,7 @@ async def _do_rotate(
         await telegram_client.set_webhook(
             url=webhook_url,
             secret_token=new_secret,
-            allowed_updates=_ALLOWED_UPDATES,
+            allowed_updates=ALLOWED_UPDATES,
         )
     except TelegramError as exc:
         # Step 4 — revert. Old secret is still what Telegram signs with.

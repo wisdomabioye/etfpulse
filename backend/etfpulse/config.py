@@ -164,6 +164,21 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:5173"
 
+    # Public-facing frontend base URL. Used to build "View on web" deep
+    # links into the SPA from Telegram signal alerts (issue #38 inline
+    # keyboards). Empty string (the default) disables the button — the
+    # alert still sends, just without the link. Distinct from
+    # `telegram_public_url` (which is the bot webhook host, not the
+    # SPA host — different domains on Vercel/Coolify split deployments).
+    #
+    # Default is intentionally empty (not the dev localhost) because a
+    # mis-configured production would otherwise send users links to
+    # `http://localhost:5173`, which would silently break for every
+    # recipient. `api/config_check.py` raises a warning when this is
+    # empty or localhost-ish in production so the preflight surfaces it
+    # before users see broken buttons.
+    frontend_url: str = ""
+
     # Admin
     admin_api_key: str = ""
 

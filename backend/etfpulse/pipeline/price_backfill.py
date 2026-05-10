@@ -28,11 +28,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.constants import SUPPORTED_ASSETS
 from etfpulse.models import Signal
 from etfpulse.pipeline.prices import (
     Asset,
@@ -105,12 +107,18 @@ def group_by_asset(signals: Sequence[Signal]) -> dict[Asset, list[Signal]]:
     asset would make a one-shot rescue script harder to operate. The
     skipped count surfaces in the caller's summary.
     """
-    by_asset: dict[Asset, list[Signal]] = {"BTC": [], "ETH": []}
+    # Bucket initialisation derived from SUPPORTED_ASSETS via cast — the
+    # tuple is the source of truth, but `dict[Asset, ...]` requires the
+    # narrow Literal at the type level. `cast` is the explicit bridge.
+    by_asset: dict[Asset, list[Signal]] = cast(
+        "dict[Asset, list[Signal]]", {asset: [] for asset in SUPPORTED_ASSETS}
+    )
     for sig in signals:
-        if sig.asset == "BTC":
-            by_asset["BTC"].append(sig)
-        elif sig.asset == "ETH":
-            by_asset["ETH"].append(sig)
+        if sig.asset in by_asset:
+            # Narrow `sig.asset` (str) to `Asset` Literal for the
+            # bucket-index assignment. The `in by_asset` check above is
+            # the runtime guarantee; cast is the type-level acknowledgement.
+            by_asset[cast("Asset", sig.asset)].append(sig)
     return by_asset
 
 

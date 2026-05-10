@@ -61,7 +61,9 @@ async def test_send_message_returns_sent_message(mock_bot, with_token):
     assert result.message_id == 42
     assert result.chat_id == 999
     assert result.sent_at is not None
-    mock_bot.send_message.assert_awaited_once_with(chat_id=999, text="hello", parse_mode="HTML")
+    mock_bot.send_message.assert_awaited_once_with(
+        chat_id=999, text="hello", parse_mode="HTML", reply_markup=None
+    )
 
 
 # ---- send_message — error mapping ----------------------------------------

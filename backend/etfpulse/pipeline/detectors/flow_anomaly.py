@@ -28,6 +28,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.constants import SUPPORTED_ASSETS
 from etfpulse.models import ETFFlow, SignalType
 from etfpulse.pipeline.detectors.base import DetectorHit, compute_fingerprint
 
@@ -42,7 +43,7 @@ class FlowAnomalyDetector:
 
     async def detect(self, session: AsyncSession) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
-        for asset in ("BTC", "ETH"):
+        for asset in SUPPORTED_ASSETS:
             stmt = (
                 select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd)
                 .where(ETFFlow.asset == asset)

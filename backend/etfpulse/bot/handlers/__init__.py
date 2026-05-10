@@ -11,8 +11,14 @@ is the composition: listing every command name + handler pair.
 
 from __future__ import annotations
 
-from telegram.ext import Application, ChatMemberHandler, CommandHandler
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    CommandHandler,
+)
 
+from etfpulse.bot.handlers.callbacks import handle_callback
 from etfpulse.bot.handlers.help import cmd_help
 from etfpulse.bot.handlers.membership import handle_my_chat_member
 from etfpulse.bot.handlers.prefs import cmd_prefs
@@ -52,6 +58,14 @@ def register_handlers(application: Application) -> None:
     application.add_handler(
         ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
+
+    # Inline-keyboard callbacks (issue #38). One handler dispatches all
+    # callback_data via the prefix routing in `callbacks.handle_callback`;
+    # adding a new keyboard surface = a new prefix branch, not a new
+    # registered handler. `pattern=None` (default) catches every
+    # CallbackQuery so we keep introspection of "what data did we get?"
+    # in code rather than in PTB's regex registry.
+    application.add_handler(CallbackQueryHandler(handle_callback))
 
 
 __all__ = ["register_handlers"]

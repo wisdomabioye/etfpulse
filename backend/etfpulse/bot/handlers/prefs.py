@@ -11,7 +11,7 @@ Invalid input responds with a help message rather than erroring silently.
 from __future__ import annotations
 
 import structlog
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from etfpulse.bot.handlers._common import (
@@ -20,6 +20,7 @@ from etfpulse.bot.handlers._common import (
     parse_asset_list,
     parse_confidence,
 )
+from etfpulse.bot.keyboards import build_prefs_keyboard
 from etfpulse.db import async_session
 
 log = structlog.get_logger()
@@ -64,7 +65,16 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         if not args:
             await session.commit()  # ensure any get_or_create writes are saved
-            await _reply(update, _format_current_prefs(target.obj))
+            # No-args path also attaches the inline quick-toggle keyboard
+            # (issue #38). Subcommand paths still use plain text replies
+            # — the keyboard is for "show me + let me tweak" UX, not for
+            # confirming a successful explicit /prefs assets / /prefs
+            # confidence command.
+            await _reply(
+                update,
+                _format_current_prefs(target.obj),
+                reply_markup=build_prefs_keyboard(target.obj),
+            )
             return
 
         sub = args[0].lower()
@@ -120,10 +130,15 @@ def _format_current_prefs(obj) -> str:
     )
 
 
-async def _reply(update: Update, text: str) -> None:
+async def _reply(
+    update: Update,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    """Send an HTML reply, optionally with an inline keyboard."""
     if update.effective_message is None:
         return
-    await update.effective_message.reply_html(text)
+    await update.effective_message.reply_html(text, reply_markup=reply_markup)
 
 
 __all__ = ["cmd_prefs"]

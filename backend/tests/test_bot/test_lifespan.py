@@ -99,7 +99,7 @@ async def test_enabled_initializes_and_registers_webhook(
         mock_set_webhook.assert_awaited_once_with(
             url="https://app.example.com/api/telegram/webhook/abc123xyz",
             secret_token="s3cr3t",
-            allowed_updates=["message", "my_chat_member"],
+            allowed_updates=["message", "my_chat_member", "callback_query"],
         )
         # Application stashed on app.state for the webhook receiver.
         assert app.state.bot_application is mock_application
