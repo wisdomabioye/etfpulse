@@ -1,3 +1,4 @@
+import { TELEGRAM_GROUP_URL } from '../../lib/links';
 import { Logo } from './Logo';
 
 export function Footer() {
@@ -9,7 +10,14 @@ export function Footer() {
       </div>
       <div className="flex gap-5">
         <a href="#" className="text-text-2 hover:text-text-1">GitHub</a>
-        <a href="#" className="text-text-2 hover:text-text-1">Telegram</a>
+        <a
+          href={TELEGRAM_GROUP_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-text-2 hover:text-text-1"
+        >
+          Telegram
+        </a>
         <a href="#" className="text-text-2 hover:text-text-1">How it works</a>
       </div>
     </footer>

@@ -52,18 +52,34 @@ ALL_DETECTORS: list[Detector] = []
 #
 # Imports placed at module bottom so `ALL_DETECTORS` and `Detector` are defined
 # before detector modules (which import them via the package) are loaded.
+from etfpulse.config import settings  # noqa: E402
 from etfpulse.pipeline.detectors.acceleration import AccelerationDetector  # noqa: E402
 from etfpulse.pipeline.detectors.divergence import DivergenceDetector  # noqa: E402
 from etfpulse.pipeline.detectors.flow_anomaly import FlowAnomalyDetector  # noqa: E402
 from etfpulse.pipeline.detectors.magnitude import MagnitudeDetector  # noqa: E402
 from etfpulse.pipeline.detectors.regime_shift import RegimeShiftDetector  # noqa: E402
 
+# Detector thresholds (issue #33). Each detector's __init__ accepts
+# overrides; here we wire env-driven defaults so ops can tune without
+# code deploys. Tests that need tight values still construct detectors
+# directly with explicit kwargs — those bypass settings entirely.
 ALL_DETECTORS.extend(
     [
-        FlowAnomalyDetector(),
-        MagnitudeDetector(),
-        AccelerationDetector(),
-        DivergenceDetector(),
+        FlowAnomalyDetector(
+            lookback_days=settings.flow_anomaly_lookback_days,
+            min_streak_length=settings.flow_anomaly_min_streak_length,
+        ),
+        MagnitudeDetector(
+            lookback_days=settings.magnitude_lookback_days,
+            percentile_threshold=settings.magnitude_percentile_threshold,
+            min_history_days=settings.magnitude_min_history_days,
+        ),
+        AccelerationDetector(
+            window=settings.acceleration_window,
+            change_threshold=settings.acceleration_change_threshold,
+            min_prior_usd=settings.acceleration_min_prior_usd,
+        ),
+        DivergenceDetector(lookback_days=settings.divergence_lookback_days),
         RegimeShiftDetector(),
     ]
 )

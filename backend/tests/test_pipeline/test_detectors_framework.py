@@ -107,6 +107,31 @@ class TestRegistry:
         names = [d.name for d in ALL_DETECTORS]
         assert len(names) == len(set(names))
 
+    def test_registry_threshold_values_match_settings(self):
+        """Issue #33 — ALL_DETECTORS must construct from settings, not hardcoded
+        defaults. Test confirms each tunable detector picked up the value
+        from `etfpulse.config.settings`. RegimeShift has no tunables, skipped."""
+        from etfpulse.config import settings
+
+        by_name = {d.name: d for d in ALL_DETECTORS}
+
+        flow = by_name["flow_anomaly"]
+        assert flow.lookback_days == settings.flow_anomaly_lookback_days
+        assert flow.min_streak_length == settings.flow_anomaly_min_streak_length
+
+        mag = by_name["magnitude"]
+        assert mag.lookback_days == settings.magnitude_lookback_days
+        assert mag.percentile_threshold == settings.magnitude_percentile_threshold
+        assert mag.min_history_days == settings.magnitude_min_history_days
+
+        acc = by_name["acceleration"]
+        assert acc.window == settings.acceleration_window
+        assert acc.change_threshold == settings.acceleration_change_threshold
+        assert acc.min_prior_usd == settings.acceleration_min_prior_usd
+
+        div = by_name["divergence"]
+        assert div.lookback_days == settings.divergence_lookback_days
+
     def test_protocol_is_structurally_satisfiable(self):
         # Smoke-test that a minimal detector matches the Protocol shape —
         # this is what `signal_builder` will rely on.

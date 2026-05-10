@@ -19,6 +19,7 @@ import {
 } from '../components/ui';
 import { ApiError } from '../api/client';
 import { formatAgo, truncateFingerprint } from '../lib/format';
+import { TELEGRAM_GROUP_URL } from '../lib/links';
 
 /**
  * /signals/:id — matches wireframe `src/screen-detail.jsx`.
@@ -183,7 +184,14 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
         title="Continue the discussion"
         hint={`Deep-linked to signal #${s.id} in Telegram.`}
         action={
-          <Button as="a" href="#" variant="primary" size="md">
+          <Button
+            as="a"
+            href={TELEGRAM_GROUP_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="primary"
+            size="md"
+          >
             Discuss on Telegram
             <span className="font-mono opacity-70">↗</span>
           </Button>

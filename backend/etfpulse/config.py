@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -129,6 +131,27 @@ class Settings(BaseSettings):
     # asset list parsed via `delivery_default_assets_list` property.
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)
     delivery_default_assets: str = "BTC,ETH"
+
+    # Detector thresholds (issue #33). Defaults match the historical
+    # constructor args in `pipeline/detectors/*` — change behaviour by
+    # setting env vars instead of editing code. Each detector's __init__
+    # still accepts overrides explicitly so unit tests can pass tight
+    # values without touching settings.
+    flow_anomaly_lookback_days: int = Field(default=14, ge=1)
+    flow_anomaly_min_streak_length: int = Field(default=3, ge=1)
+    magnitude_lookback_days: int = Field(default=90, ge=1)
+    # Top-Nth-percentile threshold for "big" days. Strictly fractional —
+    # 0 trivially matches every row, 1 matches none.
+    magnitude_percentile_threshold: float = Field(default=0.80, gt=0.0, lt=1.0)
+    magnitude_min_history_days: int = Field(default=30, ge=1)
+    acceleration_window: int = Field(default=7, ge=1)
+    # Ratio change required to fire — 0.50 = ±50% acceleration. NOT
+    # bounded at 1.0; loose configs may want to demand 2x or 5x.
+    acceleration_change_threshold: float = Field(default=0.50, gt=0.0)
+    # Floor on the prior window's total flow so a near-zero baseline
+    # doesn't produce huge ratios from tiny absolute moves. USD.
+    acceleration_min_prior_usd: Decimal = Field(default=Decimal("1000000"), ge=Decimal("0"))
+    divergence_lookback_days: int = Field(default=3, ge=1)
 
     # CORS
     cors_origins: str = "http://localhost:5173"
