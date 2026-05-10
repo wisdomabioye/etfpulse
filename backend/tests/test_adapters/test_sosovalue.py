@@ -18,17 +18,18 @@ from etfpulse.config import settings
 
 
 async def test_etf_flows_parses_and_dedupes_btc():
-    """BTC fixture has 10 rows spanning 7 unique dates (2026-04-17 × 3, 2026-04-10 × 2)."""
+    """BTC fixture has 28 rows spanning 21 unique dates (multiple rolling-aggregate
+    rows per date — adapter keeps the first row per date)."""
     flows = await sosovalue_client.get_etf_flows("BTC")
 
     dates = [f.date for f in flows]
     assert len(dates) == len(set(dates)), "adapter must dedupe by date"
-    assert len(flows) == 7
+    assert len(flows) == 21
 
     first = flows[0]
-    assert first.date == date(2026, 4, 17)
-    # The first row for 2026-04-17 in the fixture has total_net_inflow=663911366.465
-    assert float(first.total_net_inflow) == pytest.approx(663911366.465, rel=1e-9)
+    assert first.date == date(2026, 5, 8)
+    # The first row for 2026-05-08 in the fixture has total_net_inflow=-145651012.3
+    assert float(first.total_net_inflow) == pytest.approx(-145651012.3, rel=1e-9)
 
 
 async def test_etf_flows_parses_eth():
@@ -58,9 +59,9 @@ async def test_news_parses_fixture_and_strips_html():
 
 async def test_macro_events_parses_fixture():
     events = await sosovalue_client.get_macro_events()
-    assert len(events) == 4
-    assert events[0].date == date(2026, 4, 20)
-    assert events[0].events == ["Retail Sales (MoM)"]
+    assert len(events) == 5
+    assert events[0].date == date(2026, 5, 10)
+    assert events[0].events == ["Existing Home Sales"]
 
 
 # ---- Caching --------------------------------------------------------------
@@ -219,7 +220,7 @@ async def test_spot_price_btc_parses_from_fixture():
     price = await client.get_spot_price("BTC")
     assert isinstance(price, Decimal)
     # Fixture value
-    assert price == Decimal("84120.50")
+    assert price == Decimal("82352.65")
 
 
 async def test_spot_price_eth_parses_from_fixture():
@@ -227,7 +228,7 @@ async def test_spot_price_eth_parses_from_fixture():
 
     client = SoSoValueClient()
     price = await client.get_spot_price("ETH")
-    assert price == Decimal("2480.50")
+    assert price == Decimal("2377.73")
 
 
 async def test_spot_price_raises_on_missing_data_envelope(monkeypatch):
@@ -248,11 +249,13 @@ async def test_klines_parses_from_fixture():
     from decimal import Decimal
 
     client = SoSoValueClient()
+    # Fixture-mode ignores `limit` and returns the full captured series (90 bars).
+    # The `limit` param only shapes the upstream HTTP call.
     bars = await client.get_daily_klines("BTC", limit=3)
-    assert len(bars) == 3
-    assert bars[-1].close == Decimal("84120.50")
+    assert len(bars) == 90
+    assert bars[-1].close == Decimal("82220.14")
     # bar_date is derived from the `timestamp` ms field — confirm it works
-    assert str(bars[-1].bar_date) == "2025-04-23"
+    assert str(bars[-1].bar_date) == "2026-05-10"
 
 
 async def test_klines_raises_on_wrong_shape(monkeypatch):
@@ -268,7 +271,7 @@ async def test_klines_raises_on_wrong_shape(monkeypatch):
 
 
 async def test_sector_spotlight_parses_fixture():
-    """Real-shape fixture: 16 sector + 22 spotlight rows, BTC at 0.5943 dom."""
+    """Real-shape fixture: 16 sector + 22 spotlight rows, BTC at 0.5944 dom."""
     from decimal import Decimal
 
     client = SoSoValueClient()
@@ -279,8 +282,8 @@ async def test_sector_spotlight_parses_fixture():
     # find_sector resolves both BTC and ETH names — verified in the live probe.
     btc = s.find_sector("BTC")
     assert btc is not None
-    assert btc.marketcap_dom == Decimal("0.5943")
-    assert btc.change_pct_24h == Decimal("0.006")
+    assert btc.marketcap_dom == Decimal("0.5944")
+    assert btc.change_pct_24h == Decimal("0.0168")
 
     # Defensive lookup returns None on absent name.
     assert s.find_sector("NotARealSector") is None

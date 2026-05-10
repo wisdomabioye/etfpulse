@@ -1,77 +1,203 @@
 {
-    "code": 0,
-    "message": "success",
-    "data": [
-        {
-            "date": "2026-04-17",
-            "total_net_inflow": 663911366.465,
-            "total_value_traded": 4794943928.27,
-            "total_net_assets": 101452478155.08176,
-            "cum_net_inflow": 57739993739.433
-        },
-        {
-            "date": "2026-04-17",
-            "total_net_inflow": 996375546.47,
-            "total_value_traded": 15394820760.65,
-            "total_net_assets": 101452478155.08176,
-            "cum_net_inflow": 57739993739.433
-        },
-        {
-            "date": "2026-04-17",
-            "total_net_inflow": 1617957506.54,
-            "total_value_traded": 30583687805.4,
-            "total_net_assets": 101452478155.08176,
-            "cum_net_inflow": 57739993739.433
-        },
-        {
-            "date": "2026-04-16",
-            "total_net_inflow": 26051070.559999995,
-            "total_value_traded": 2289394957.7,
-            "total_net_assets": 97904953569.89784,
-            "cum_net_inflow": 57076082372.967995
-        },
-        {
-            "date": "2026-04-15",
-            "total_net_inflow": 186026106.475,
-            "total_value_traded": 2030957865.6,
-            "total_net_assets": 97566360475.8864,
-            "cum_net_inflow": 57050031302.408
-        },
-        {
-            "date": "2026-04-14",
-            "total_net_inflow": 411498098.92,
-            "total_value_traded": 3836966849.32,
-            "total_net_assets": 96563172957.79904,
-            "cum_net_inflow": 56864005195.933
-        },
-        {
-            "date": "2026-04-13",
-            "total_net_inflow": -291111095.95,
-            "total_value_traded": 2442557159.76,
-            "total_net_assets": 94508135622.28032,
-            "cum_net_inflow": 56452507097.013
-        },
-        {
-            "date": "2026-04-10",
-            "total_net_inflow": 240417591.935,
-            "total_value_traded": 1985497118.5,
-            "total_net_assets": 94917655096.43507,
-            "cum_net_inflow": 56743618192.963
-        },
-        {
-            "date": "2026-04-10",
-            "total_net_inflow": 786314651.87,
-            "total_value_traded": 11103106346.19,
-            "total_net_assets": 94917655096.43507,
-            "cum_net_inflow": 56743618192.963
-        },
-        {
-            "date": "2026-04-09",
-            "total_net_inflow": 358170969.42,
-            "total_value_traded": 1987819824,
-            "total_net_assets": 93285682380.63223,
-            "cum_net_inflow": 56503200601.028
-        }
-    ],
-    "details": null
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "date": "2026-05-08",
+      "total_net_inflow": -145651012.3,
+      "total_value_traded": 1453038438.54,
+      "total_net_assets": 106610918466.79996,
+      "cum_net_inflow": 59340306704.693
+    },
+    {
+      "date": "2026-05-08",
+      "total_net_inflow": 622747477.695,
+      "total_value_traded": 11757228382.38,
+      "total_net_assets": 106610918466.79996,
+      "cum_net_inflow": 59340306704.693
+    },
+    {
+      "date": "2026-05-08",
+      "total_net_inflow": 1252482045.455,
+      "total_value_traded": 14537365828.56,
+      "total_net_assets": 106610918466.79996,
+      "cum_net_inflow": 59340306704.693
+    },
+    {
+      "date": "2026-05-07",
+      "total_net_inflow": -277497051.705,
+      "total_value_traded": 1984367977.7,
+      "total_net_assets": 106765504911.43369,
+      "cum_net_inflow": 59485957716.993
+    },
+    {
+      "date": "2026-05-06",
+      "total_net_inflow": 46330552.9,
+      "total_value_traded": 2114780418.9,
+      "total_net_assets": 108756353000.07803,
+      "cum_net_inflow": 59763454768.698
+    },
+    {
+      "date": "2026-05-05",
+      "total_net_inflow": 467350061.8,
+      "total_value_traded": 2609044617.85,
+      "total_net_assets": 108981223896.69429,
+      "cum_net_inflow": 59717124215.798
+    },
+    {
+      "date": "2026-05-04",
+      "total_net_inflow": 532214927,
+      "total_value_traded": 3595996929.39,
+      "total_net_assets": 106436249961.21635,
+      "cum_net_inflow": 59249774153.998
+    },
+    {
+      "date": "2026-05-01",
+      "total_net_inflow": 629734567.76,
+      "total_value_traded": 2780137446.18,
+      "total_net_assets": 103784523737.15904,
+      "cum_net_inflow": 58717559226.998
+    },
+    {
+      "date": "2026-05-01",
+      "total_net_inflow": 153867403.07500002,
+      "total_value_traded": 9505300002.68,
+      "total_net_assets": 103784523737.15904,
+      "cum_net_inflow": 58717559226.998
+    },
+    {
+      "date": "2026-04-30",
+      "total_net_inflow": 14757772.094999999,
+      "total_value_traded": 1396781004.67,
+      "total_net_assets": 100532477967.29028,
+      "cum_net_inflow": 58087824659.238
+    },
+    {
+      "date": "2026-04-30",
+      "total_net_inflow": 1965788426.345,
+      "total_value_traded": 48567032738.62,
+      "total_net_assets": 100532477967.29028,
+      "cum_net_inflow": 58087824659.238
+    },
+    {
+      "date": "2026-04-29",
+      "total_net_inflow": -137766214.8,
+      "total_value_traded": 2040981471.38,
+      "total_net_assets": 99267127177.27415,
+      "cum_net_inflow": 58073066887.143
+    },
+    {
+      "date": "2026-04-28",
+      "total_net_inflow": -89675364.92,
+      "total_value_traded": 1353862289.54,
+      "total_net_assets": 100389805133.02,
+      "cum_net_inflow": 58210833101.943
+    },
+    {
+      "date": "2026-04-27",
+      "total_net_inflow": -263183357.06,
+      "total_value_traded": 1933537790.91,
+      "total_net_assets": 101234424320.76295,
+      "cum_net_inflow": 58300508466.863
+    },
+    {
+      "date": "2026-04-24",
+      "total_net_inflow": 14448891.92499998,
+      "total_value_traded": 1831551350.83,
+      "total_net_assets": 102637045813.8904,
+      "cum_net_inflow": 58563691823.923
+    },
+    {
+      "date": "2026-04-24",
+      "total_net_inflow": 823698084.49,
+      "total_value_traded": 11258182376.72,
+      "total_net_assets": 102637045813.8904,
+      "cum_net_inflow": 58563691823.923
+    },
+    {
+      "date": "2026-04-23",
+      "total_net_inflow": 223207768.19000003,
+      "total_value_traded": 2358873100.34,
+      "total_net_assets": 102793394924.09772,
+      "cum_net_inflow": 58213419946.993
+    },
+    {
+      "date": "2026-04-22",
+      "total_net_inflow": 335822985.005,
+      "total_value_traded": 3028080681.27,
+      "total_net_assets": 104081196969.74588,
+      "cum_net_inflow": 58326035163.808
+    },
+    {
+      "date": "2026-04-21",
+      "total_net_inflow": 11844188.780000001,
+      "total_value_traded": 1864113608.46,
+      "total_net_assets": 99081112403.23631,
+      "cum_net_inflow": 57990212178.803
+    },
+    {
+      "date": "2026-04-20",
+      "total_net_inflow": 238374250.59,
+      "total_value_traded": 2175563635.82,
+      "total_net_assets": 100328856098.1026,
+      "cum_net_inflow": 57978367990.022995
+    },
+    {
+      "date": "2026-04-17",
+      "total_net_inflow": 663911366.465,
+      "total_value_traded": 4794943928.27,
+      "total_net_assets": 101452478155.08176,
+      "cum_net_inflow": 57739993739.433
+    },
+    {
+      "date": "2026-04-17",
+      "total_net_inflow": 996375546.47,
+      "total_value_traded": 15394820760.65,
+      "total_net_assets": 101452478155.08176,
+      "cum_net_inflow": 57739993739.433
+    },
+    {
+      "date": "2026-04-16",
+      "total_net_inflow": 26051070.559999995,
+      "total_value_traded": 2289394957.7,
+      "total_net_assets": 97904953569.89784,
+      "cum_net_inflow": 57076082372.967995
+    },
+    {
+      "date": "2026-04-15",
+      "total_net_inflow": 186026106.475,
+      "total_value_traded": 2030957865.6,
+      "total_net_assets": 97566360475.8864,
+      "cum_net_inflow": 57050031302.408
+    },
+    {
+      "date": "2026-04-14",
+      "total_net_inflow": 411498098.92,
+      "total_value_traded": 3836966849.32,
+      "total_net_assets": 96563172957.79904,
+      "cum_net_inflow": 56864005195.933
+    },
+    {
+      "date": "2026-04-13",
+      "total_net_inflow": -291111095.95,
+      "total_value_traded": 2442557159.76,
+      "total_net_assets": 94508135622.28032,
+      "cum_net_inflow": 56452507097.013
+    },
+    {
+      "date": "2026-04-10",
+      "total_net_inflow": 240417591.935,
+      "total_value_traded": 1985497118.5,
+      "total_net_assets": 94917655096.43507,
+      "cum_net_inflow": 56743618192.963
+    },
+    {
+      "date": "2026-04-10",
+      "total_net_inflow": 786314651.87,
+      "total_value_traded": 11103106346.19,
+      "total_net_assets": 94917655096.43507,
+      "cum_net_inflow": 56743618192.963
+    }
+  ],
+  "details": null
 }

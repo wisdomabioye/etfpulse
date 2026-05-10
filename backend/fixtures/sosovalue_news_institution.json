@@ -1,132 +1,839 @@
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "page": 1,
-        "page_size": 3,
-        "total": "661",
-        "list": [
-            {
-                "id": "2046243439358468096",
-                "source_link": "https://sosovalue.com/research/2046243439358468096?from=888001",
-                "original_link": "https://twitter.com/solana_daily/status/2046242283331428816",
-                "release_time": "1776697152000",
-                "title": null,
-                "content": "\u26a1\ufe0fSolana has added an extra 1.5M daily active users in each of the past 3 months <br><img src=\"https://static.sosovalue.com/2026/04/20/45d0b27b-c4ca-46b1-8988-49b4f4164457.jpg\"/>",
-                "author": "solana_daily",
-                "author_description": null,
-                "author_avatar_url": "https://static.sosovalue.com/2026/04/20/f9abfa4a-759f-4f7e-8e1f-c89af4861270.jpg",
-                "impression_count": "80",
-                "like_count": "0",
-                "reply_count": "0",
-                "retweet_count": "0",
-                "category": 3,
-                "feature_image": null,
-                "nick_name": "Solana Daily",
-                "is_blue_verified": true,
-                "verified_type": "",
-                "matched_currencies": [
-                    {
-                        "currency_id": "1871600836616355842",
-                        "symbol": "MAG7.SSI",
-                        "name": "MAG7.SSI"
-                    },
-                    {
-                        "currency_id": "1673723677362319875",
-                        "symbol": "SOL",
-                        "name": "SOLANA"
-                    }
-                ],
-                "tags": [
-                    "Solana"
-                ],
-                "media_info": [
-                    {
-                        "soso_url": "https://static.sosovalue.com/2026/04/20/0cc73e26-1a08-439b-a891-dd10c8e55e9a.jpg",
-                        "original_url": "https://pbs.twimg.com/media/HGW1mQDb0AEMzob.jpg",
-                        "short_url": "https://t.co/jA4uTNuPt1",
-                        "type": "photo"
-                    }
-                ],
-                "quote_info": {
-                    "content": "\u26a1\ufe0fSolana stablecoin volume is exploding\nCo-Founder @rajgokal said last year\u2019s volume reached $1T, while last month alone was nearly $1T.\nThat\u2019s ~12x YoY growth, highlighting Solana\u2019s accelerating role in payments.",
-                    "impression_count": "1096",
-                    "like_count": "30",
-                    "reply_count": "1096",
-                    "retweet_count": "3",
-                    "created_at": "1776692915000",
-                    "media_info": null,
-                    "original_url": "https://twitter.com/solana_daily/status/2046224512941994118",
-                    "author_avatar_url": "https://static.sosovalue.com/2026/04/20/894b29b8-dfb6-49c5-b1bc-77a62f986963.jpg",
-                    "author": "solana_daily",
-                    "nick_name": "Solana Daily",
-                    "is_blue_verified": true,
-                    "verified_type": ""
-                }
-            },
-            {
-                "id": "2046250314150514688",
-                "source_link": "https://sosovalue.com/research/2046250314150514688?from=888001",
-                "original_link": "https://twitter.com/SECGov/status/2046241049329426768",
-                "release_time": "1776696858000",
-                "title": null,
-                "content": "TODAY \ud83d\udea8: SEC and CFTC Jointly Propose Amendments to Reduce Private Fund Reporting Burdens<br><br>Read more: <br><img src=\"https://static.sosovalue.com/2026/04/20/511cc1f8-aa40-4cf9-a4d1-98a36107fdc5.jpg\"/>",
-                "author": "SECGov",
-                "author_description": "U.S. Securities and Exchange Commission",
-                "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/04/28/cbc4e01c-bff6-4cb5-b0cf-33988e9c0e8b.jpg",
-                "impression_count": "14670",
-                "like_count": "86",
-                "reply_count": "20",
-                "retweet_count": "33",
-                "category": 3,
-                "feature_image": null,
-                "nick_name": "U.S. Securities and Exchange Commission",
-                "is_blue_verified": false,
-                "verified_type": "Government",
-                "matched_currencies": null,
-                "tags": [
-                    "SEC",
-                    "CFTC"
-                ],
-                "media_info": [
-                    {
-                        "soso_url": "https://static.sosovalue.com/2026/04/20/511cc1f8-aa40-4cf9-a4d1-98a36107fdc5.jpg",
-                        "original_url": "https://pbs.twimg.com/media/HGW1S_kaEAAXhfc.jpg",
-                        "short_url": "https://t.co/s9PfEsr2TR",
-                        "type": "photo"
-                    }
-                ],
-                "quote_info": null
-            },
-            {
-                "id": "2046250317703090176",
-                "source_link": "https://sosovalue.com/research/2046250317703090176?from=888001",
-                "original_link": "https://twitter.com/mayan/status/2046240576555880619",
-                "release_time": "1776696745000",
-                "title": null,
-                "content": "Mayan is not affected by the rsETH/Aave/LayerZero incident. All routes are fully operational.\n\nCross-chain transfers on Mayan are powered by Wormhole message-passing, secured by 19 independent Guardians with a 13-of-19 supermajority requirement on every message.",
-                "author": "mayan",
-                "author_description": null,
-                "author_avatar_url": "https://static.sosovalue.com/2026/04/20/098d2188-1dba-4ce7-ad9d-0b2d27732a98.png",
-                "impression_count": "136",
-                "like_count": "5",
-                "reply_count": "2",
-                "retweet_count": "2",
-                "category": 3,
-                "feature_image": null,
-                "nick_name": "Mayan | 2.0 Now Live",
-                "is_blue_verified": false,
-                "verified_type": "Business",
-                "matched_currencies": null,
-                "tags": [
-                    "Mayan",
-                    "Wormhole",
-                    "Guardians"
-                ],
-                "media_info": null,
-                "quote_info": null
-            }
-        ]
-    },
-    "details": null
+  "code": 0,
+  "message": "success",
+  "data": {
+    "page": 1,
+    "page_size": 20,
+    "total": "680",
+    "list": [
+      {
+        "id": "2053611083421134848",
+        "source_link": "https://sosovalue.com/research/2053611083421134848?from=888001",
+        "original_link": "https://twitter.com/BitcoinMagazine/status/2053608673285382592",
+        "release_time": "1778453436000",
+        "title": null,
+        "content": "JUST IN: $82,000.00 Bitcoin \ud83d\ude80 <br><img src=\"https://static.sosovalue.com/2026/05/10/0a19c809-8a12-4878-891a-9b330a5d6fb5.png\"/>",
+        "author": "BitcoinMagazine",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/9f4d0f0d-ad69-4147-af55-0978ce648daf.jpg",
+        "impression_count": "969",
+        "like_count": "21",
+        "reply_count": "11",
+        "retweet_count": "7",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Bitcoin Magazine",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319866",
+            "symbol": "BTC",
+            "name": "BITCOIN"
+          }
+        ],
+        "tags": [
+          "Bitcoin"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/0a19c809-8a12-4878-891a-9b330a5d6fb5.png",
+            "original_url": "https://pbs.twimg.com/media/HH_iM-HXwAIthxk.png",
+            "short_url": "https://t.co/G3YidQQXam",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053596795192573952",
+        "source_link": "https://sosovalue.com/research/2053596795192573952?from=888001",
+        "original_link": "https://twitter.com/norbertbodziony/status/2053590565598425164",
+        "release_time": "1778449119000",
+        "title": null,
+        "content": "$SKY both debt and collateral ATH",
+        "author": "norbertbodziony",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/4de29816-9554-40e5-b304-23851e9d1d80.jpg",
+        "impression_count": "68",
+        "like_count": "4",
+        "reply_count": "1",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "NB\ud83c\uddf5\ud83c\uddf1",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1863926334227173378",
+            "symbol": "SKY",
+            "name": "SKY"
+          }
+        ],
+        "tags": [
+          "SKY"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/1a3cf6fe-ef6b-40c4-be1a-a4bdce1f0d1e.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_Rs-BXsAAcMND.jpg",
+            "short_url": "https://t.co/YDWV7XkK6H",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053543364864716800",
+        "source_link": "https://sosovalue.com/research/2053543364864716800?from=888001",
+        "original_link": "https://twitter.com/a16zcrypto/status/2053537301704196402",
+        "release_time": "1778436420000",
+        "title": null,
+        "content": "\"A very resourceful engineer can now do a lot of product management and a lot of design if they're just willing to do the work and use AI.\"<br><br>@alive_eth on AI collapsing the PM, designer, and engineer roles into one:<br><br>\"One thing that we're seeing is the blending of the roles of the product manager, the designer, and the engineer, where every one of those three believe that they can do the job of the other two. Marc Andreessen actually referred to this as the Mexican standoff between the three.\"<br><br>@alive_eth @unchained_pod @laurashin<br><img src=\"https://static.sosovalue.com/2026/05/10/d3565f15-c864-4b58-bfd8-f27faf4f9818.jpg\"/>",
+        "author": "a16zcrypto",
+        "author_description": "Official Twitter",
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/9148be95-4683-43a3-83c7-52656d6c71ac.jpg",
+        "impression_count": "230",
+        "like_count": "5",
+        "reply_count": "1",
+        "retweet_count": "1",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "a16z crypto",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Marc Andreessen",
+          "AI",
+          "Unchained"
+        ],
+        "media_info": [
+          {
+            "soso_url": null,
+            "original_url": null,
+            "short_url": "https://t.co/jfi62257kM",
+            "type": "video"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053528018690715648",
+        "source_link": "https://sosovalue.com/research/2053528018690715648?from=888001",
+        "original_link": "https://twitter.com/Shaughnessy119/status/2053526648830513403",
+        "release_time": "1778433880000",
+        "title": null,
+        "content": "We hosted @ErikVoorhees to headline our Crypto x AI conference 1.5 years ago on @AskVenice",
+        "author": "Shaughnessy119",
+        "author_description": "Delphi Digital Co-founder",
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/11/807e33af-c142-4aea-aa89-276171e5eac8.jpg",
+        "impression_count": "71",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Tommy",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": null,
+        "tags": [
+          "Erik Voorhees",
+          "AskVenice"
+        ],
+        "media_info": null,
+        "quote_info": {
+          "content": "The Battle for Human Freedom in the Post-Human World\n\n\"The biggest danger to humanity is if we allow ourselves to be convinced that open-source AI is too dangerous.\"  -  @ErikVoorhees (@AskVenice)\n\n\ud83d\udcd8 https://t.co/jq6zq3QqZz",
+          "impression_count": "5973",
+          "like_count": "22",
+          "reply_count": "5973",
+          "retweet_count": "6",
+          "created_at": "1729270058000",
+          "media_info": null,
+          "original_url": "https://twitter.com/Delphi_Digital/status/1847318635443896530",
+          "author_avatar_url": "https://static.sosovalue.com/2026/05/10/b2b92bf7-c203-4800-9f5c-e2d7d0b3e945.jpg",
+          "author": "Delphi_Digital",
+          "nick_name": "Delphi Digital",
+          "is_blue_verified": true,
+          "verified_type": "Business"
+        }
+      },
+      {
+        "id": "2053535691217776640",
+        "source_link": "https://sosovalue.com/research/2053535691217776640?from=888001",
+        "original_link": "https://twitter.com/BitcoinMagazine/status/2053526635983278260",
+        "release_time": "1778433877000",
+        "title": null,
+        "content": "$81,400 Bitcoin \ud83d\udc02",
+        "author": "BitcoinMagazine",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/c4e61b2f-86fa-4708-9641-2ea35dd04766.jpg",
+        "impression_count": "6663",
+        "like_count": "370",
+        "reply_count": "24",
+        "retweet_count": "47",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Bitcoin Magazine",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319866",
+            "symbol": "BTC",
+            "name": "BITCOIN"
+          }
+        ],
+        "tags": [
+          "Bitcoin"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/f0359ab3-5f34-4f01-9327-3ba98600b5ea.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH-XisUWoAAxLv1.jpg",
+            "short_url": "https://t.co/sb2HEG8gEg",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053528513912188928",
+        "source_link": "https://sosovalue.com/research/2053528513912188928?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053513027086102599",
+        "release_time": "1778430632000",
+        "title": null,
+        "content": "According to Bloomberg, blockchain infrastructure company Digital Asset is conducting a new round of financing at a valuation of approximately $2.00B, with a16z crypto leading the approximately $300.00M financing round. Digital Asset is the development company behind Canton Network, a public chain that supports partial data privacy and is mainly aimed at financial institutions. It has already received support from DRW, Citadel Securities, and several Wall Street banks. Previously, Digital Asset completed a $50.00M financing round in 2025 with participation from institutions such as BNY Mellon and Nasdaq.",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/8e098f99-0fef-47df-a64d-1854333380ef.jpg",
+        "impression_count": "298",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Digital Asset",
+          "a16z crypto",
+          "Canton Network"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053509297735757824",
+        "source_link": "https://sosovalue.com/research/2053509297735757824?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053507609374994637",
+        "release_time": "1778429341000",
+        "title": null,
+        "content": "Wu Blockchain learned that, according to Onchain Lens monitoring, Bitcoin whale Garrett Jin has deposited 225,627 ETH into Binance, worth approximately $527 million at current prices.",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/1484cd5e-3dac-45b0-a23e-d0b691de0542.jpg",
+        "impression_count": "81",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319867",
+            "symbol": "ETH",
+            "name": "ETHEREUM"
+          },
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319869",
+            "symbol": "BNB",
+            "name": "BINANCE COIN"
+          }
+        ],
+        "tags": [
+          "Binance",
+          "Garrett Jin",
+          "Onchain Lens"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053505525754048512",
+        "source_link": "https://sosovalue.com/research/2053505525754048512?from=888001",
+        "original_link": "https://twitter.com/MapleLeafCap/status/2053497402649162000",
+        "release_time": "1778426907000",
+        "title": null,
+        "content": "Analyst: memory cycle is cyclical and will soon be peaking with no exception\n\nSer it may be true but this cycle could take up more than half of your investing career",
+        "author": "MapleLeafCap",
+        "author_description": "MapleLeafCapital Founder",
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/e659a055-473c-434f-8120-5b0a03461357.jpg",
+        "impression_count": "360",
+        "like_count": "7",
+        "reply_count": "1",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Jason Kam",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": null,
+        "tags": [
+          "Analyst"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053513526229544960",
+        "source_link": "https://sosovalue.com/research/2053513526229544960?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053494180358328416",
+        "release_time": "1778426139000",
+        "title": null,
+        "content": "PayPal and Google Cloud executives at Consensus Miami stated that the future of AI Agent commerce may operate on a cryptocurrency payment rail because AI Agents cannot directly own traditional bank accounts, while stablecoins and open payment protocols are more suitable as machine-to-machine payment infrastructure. Google has launched the open protocol Agentic Payments Protocol (AP2), and PayPal stated that stablecoins such as PYUSD are suitable for AI-native payment scenarios. [CoinDesk]",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/92146212-0629-44d7-99a9-a0f94df5e895.jpg",
+        "impression_count": "660",
+        "like_count": "1",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1730847003432390660",
+            "symbol": "PYUSD",
+            "name": "PAYPAL USD"
+          },
+          {
+            "currency_id": "1940608847159967746",
+            "symbol": "GOOGLX",
+            "name": "ALPHABET XSTOCK"
+          }
+        ],
+        "tags": [
+          "PayPal",
+          "Google",
+          "AP2"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053507747902681088",
+        "source_link": "https://sosovalue.com/research/2053507747902681088?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053493308618342856",
+        "release_time": "1778425931000",
+        "title": null,
+        "content": "\"DeFi Suffers Repeated Heavy Losses, On-Chain Financial Entry Point Turning to Compliant Assets\" [Author: Liam 'Akiba' Wright; Translated by Saoirse, Foresight News] Frequent security incidents such as KelpDAO, Drift, and Venus have occurred, and DeFi risk has expanded from a single smart contract vulnerability to system levels such as permission management, cross-chain bridges, oracles, and operational architecture, resulting in a continuous increase in user trust costs.",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/5322002d-df61-4966-8720-dcaadea4af01.jpg",
+        "impression_count": "728",
+        "like_count": "1",
+        "reply_count": "2",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "DeFi",
+          "KelpDAO",
+          "Drift"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053476319825440768",
+        "source_link": "https://sosovalue.com/research/2053476319825440768?from=888001",
+        "original_link": "https://twitter.com/solana_daily/status/2053475147873767730",
+        "release_time": "1778421601000",
+        "title": null,
+        "content": "\ud83d\udea8 At Consensus Miami 2026, @calilyliu shared a clear vision for Solana:<br>Not competing to be \u201canother Ethereum,\u201d but positions itself as the financial infrastructure for both the human and machine economy.<br><br>And the signals are already here<br>@WesternUnion launched USDPT on Solana. @Visa  settles USDC on Solana. @Shopify  processes stablecoin payments through Solana. @PayPal, @stripe , @CashApp, and @SoFi are all integrating deeper into the ecosystem.<br><br>@Solana is rapidly becoming the settlement layer for the next era of digital payments \u2014 built for both humans and AI agents<br><img src=\"https://static.sosovalue.com/2026/05/10/329b1fa1-cbec-45f1-8ed5-35e4b264a1b2.jpg\"/>",
+        "author": "solana_daily",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/34564ca6-8078-4e13-b8d3-5f9facaa69e9.jpg",
+        "impression_count": "26",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Solana Daily",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319875",
+            "symbol": "SOL",
+            "name": "SOLANA"
+          },
+          {
+            "currency_id": "1673723677362319870",
+            "symbol": "USDC",
+            "name": "USDC"
+          }
+        ],
+        "tags": [
+          "Solana",
+          "Consensus",
+          "Visa"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/122bc031-cf05-4a7e-ae70-3006833a8a21.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH9cZbWbQAE9w7g.jpg",
+            "short_url": "https://t.co/VzOjb7Y6pJ",
+            "type": "photo"
+          }
+        ],
+        "quote_info": {
+          "content": "SOLANA ACCELERATE MIAMI 2026  \ud83c\udf1f\n\nBig banks, TradFi, AI, and builders all-in on @Solana.\nHere are the biggest updates:\n\n\ud83d\udd38@StateStreet ($5T+ AUM) + @galaxyhq  just launched SWEEP \u2014 the first tokenized onchain liquidity fund on Solana. \n\n\ud83d\udd38@Anchorage + JPM Asset Management rolled out tokenized solutions for stablecoin reserves. \n\n\ud83d\udd38@jito_sol dropped @jtx_trade \u2014 a self-custodial trading platform with CEX-level execution, TradingView charts, and portfolio tools. Spot live now.\n\n\ud83d\udd38@moonpay acquired @dflow  in a $100M all-stock deal. \n\n\ud83d\udd38@TAO_dot_com\u2019 $TAO is now native on Solana via Wormhole. \n\n\ud83d\udd38@RaposaCoffeeCo (Solana NFT project) became official coffee partner of Miami Heat & Marlins. \n\n\ud83d\udd38@Securitize, @jumptrading & @JupiterExchange launched fully onchain regulated trading for tokenized equities. \n\n\ud83d\udd38@SoFi is bringing its regulated stablecoin SoFiUSD to Solana. \n\n\ud83d\udd38@jump_firedancer started rolling out Firedancer 1.0 \u2014 the new high-performance validator client for Solana.\n\n\ud83d\udd38New machine-native commerce marketplace for AI agents, powered by @googlecloud  + @moonpay  onramp.\n\n\ud83d\udd38@privy_io rolled out Digital Asset Accounts on Solana \u2014 built for fintech, trading & consumer apps.\n\n\ud83d\udd38@Bullish  tokenized 151M shares on Solana. \n\nTradFi, AI agents, and consumer apps are converging hard on Solana. \n\nWhich update excited you the most? \ud83d\udc47",
+          "impression_count": "7973",
+          "like_count": "118",
+          "reply_count": "7973",
+          "retweet_count": "42",
+          "created_at": "1778168616000",
+          "media_info": null,
+          "original_url": "https://twitter.com/solana_daily/status/2052414053021274277",
+          "author_avatar_url": "https://static.sosovalue.com/2026/05/10/2b1e3e58-3714-4048-86c9-70d8027cc4bb.jpg",
+          "author": "solana_daily",
+          "nick_name": "Solana Daily",
+          "is_blue_verified": true,
+          "verified_type": ""
+        }
+      },
+      {
+        "id": "2053482802319405056",
+        "source_link": "https://sosovalue.com/research/2053482802319405056?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053474547538571666",
+        "release_time": "1778421458000",
+        "title": null,
+        "content": "\"5 Golden Opportunities I Found Using Vibe Coding in the Crypto World\" (Author: Ronin; Translated by AididiaoJP) This article focuses on the application of AI and vibe coding in the crypto industry, proposing 4 types of feasible directions: centralized and decentralized exchange arbitrage robots, prediction market arbitrage tools, on-chain data aggregators, and automated private message sales agents. It also provides a detailed analysis of their technical architecture, risks, and promotion logic. AI has significantly lowered the barrier to entry for individual developers, but the real difficulty lies not in the code, but in market demand, product structure, and long-term execution. Most people overestimate the possibility of getting rich quickly in the short term, but underestimate the importance of continuously accumulating experience and social capital. Read more:",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/7c5367bd-407e-41d9-a958-e72c1a465ff0.jpg",
+        "impression_count": "396",
+        "like_count": "1",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "AI",
+          "Vibe Coding"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053467835641835520",
+        "source_link": "https://sosovalue.com/research/2053467835641835520?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053461438383939753",
+        "release_time": "1778418333000",
+        "title": null,
+        "content": "\"Review of Value Accumulation Mechanisms Across 159 Protocols: Revenue Matters More Than Tokenomics\" (Author: Connor King; Translated & Compiled by TechFlow)  \nThis article analyzes six categories of token value accumulation mechanisms across 159 crypto protocols and finds that revenue scale matters more than the mechanism itself. Protocols with daily revenue exceeding $500,000 delivered an average return of +8% over the past year, whereas the lowest-revenue group posted -81%. Mechanisms such as buyback-and-burn, fee distribution, and the ve model have not consistently generated alpha\u2014performance in many categories was even driven solely by a few top-tier projects (e.g., Hyperliquid). In contrast, pure governance tokens, LRTs, and meme tokens\u2014lacking both revenue generation and value accrual\u2014performed worst overall. Read the full article:",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/28c31317-dc3c-4358-bfba-a8cfa779c86a.jpg",
+        "impression_count": "216",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Hyperliquid",
+          "LRT"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053461081300684800",
+        "source_link": "https://sosovalue.com/research/2053461081300684800?from=888001",
+        "original_link": "https://twitter.com/solana_daily/status/2053457763528052875",
+        "release_time": "1778417456000",
+        "title": null,
+        "content": "\u26a1\ufe0f@Solana ranks #2 among top L1 chains by monthly active addresses, reaching 32.7M users.<br>Followed by <br>\ud83d\udd38@trondao : 15.5 M<br>\ud83d\udd38@Bitcoin : 9.8 M<br>\ud83d\udd38@ethereum : 9.2 M<br>\ud83d\udd38@Aptos : 8.1 M<br>\ud83d\udd38@0xPolygon : 6.4 M<br>\ud83d\udd38@SeiNetwork : 4.9 M<br>\ud83d\udd38@litecoin : 4.8 M<br>\ud83d\udd38@NEARProtocol : 2.2 M <br><img src=\"https://static.sosovalue.com/2026/05/10/6d4ceba8-d733-4709-b0fd-a1132bd12031.jpg\"/>",
+        "author": "solana_daily",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/1b6cedc6-b88c-4684-90cd-0ea8ba22e957.jpg",
+        "impression_count": "339",
+        "like_count": "9",
+        "reply_count": "1",
+        "retweet_count": "6",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Solana Daily",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319875",
+            "symbol": "SOL",
+            "name": "SOLANA"
+          },
+          {
+            "currency_id": "1673723677362319899",
+            "symbol": "APT",
+            "name": "APTOS"
+          },
+          {
+            "currency_id": "1673723677362319867",
+            "symbol": "ETH",
+            "name": "ETHEREUM"
+          },
+          {
+            "currency_id": "1673723677362319876",
+            "symbol": "LTC",
+            "name": "LITECOIN"
+          },
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319903",
+            "symbol": "NEAR",
+            "name": "NEAR PROTOCOL"
+          },
+          {
+            "currency_id": "1730847291434274818",
+            "symbol": "POL",
+            "name": "POLYGON(EX-MATIC)"
+          },
+          {
+            "currency_id": "1730846864525430787",
+            "symbol": "SEI",
+            "name": "SEI"
+          },
+          {
+            "currency_id": "1673723677362319866",
+            "symbol": "BTC",
+            "name": "BITCOIN"
+          },
+          {
+            "currency_id": "1673723677362320386",
+            "symbol": "TRX",
+            "name": "TRON"
+          }
+        ],
+        "tags": [
+          "Solana",
+          "Tron",
+          "Bitcoin"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/f9564dd0-dd4f-4bf5-adbd-cfb5fd020303.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH9YhfaaIAADBGP.jpg",
+            "short_url": "https://t.co/vn8DsMeWhZ",
+            "type": "photo"
+          }
+        ],
+        "quote_info": {
+          "content": "Top 10 Solana DEXs by 24-Hour Trading Volume \ud83d\udcca\n\n@orca_so - $229.4M\n@ManifestTrade - $180.2M\n@MeteoraAG - $146.8M\n@humidifi - $128.95M\n@Raydium - $98.8M\n@Pumpfun - $50.7M\n@PancakeSwap - $39.8M\n@byreal_io - $9.6M\n@DeFiTuna - $657.5K\n@MetaDAOProject - $438.6K",
+          "impression_count": "5929",
+          "like_count": "118",
+          "reply_count": "5929",
+          "retweet_count": "28",
+          "created_at": "1778262000000",
+          "media_info": null,
+          "original_url": "https://twitter.com/solana_daily/status/2052805731179483356",
+          "author_avatar_url": "https://static.sosovalue.com/2026/05/10/06da2a4f-2724-445f-9a1e-8962be878443.jpg",
+          "author": "solana_daily",
+          "nick_name": "Solana Daily",
+          "is_blue_verified": true,
+          "verified_type": ""
+        }
+      },
+      {
+        "id": "2053468018077282304",
+        "source_link": "https://sosovalue.com/research/2053468018077282304?from=888001",
+        "original_link": "https://twitter.com/norbertbodziony/status/2053452637362634924",
+        "release_time": "1778416234000",
+        "title": null,
+        "content": "why does ethereum:0x3c3a81e81dc49a522a592e7622a7e711c06bf354 trades so weak against binancecoin:native ?",
+        "author": "norbertbodziony",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/e32c6056-ac21-4eaf-a9fc-aaf2a6cae4fd.jpg",
+        "impression_count": "144",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "NB\ud83c\uddf5\ud83c\uddf1",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319867",
+            "symbol": "ETH",
+            "name": "ETHEREUM"
+          },
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319869",
+            "symbol": "BNB",
+            "name": "BINANCE COIN"
+          }
+        ],
+        "tags": [
+          "Ethereum",
+          "BinanceCoin"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053452608011448320",
+        "source_link": "https://sosovalue.com/research/2053452608011448320?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053445156129357873",
+        "release_time": "1778414451000",
+        "title": null,
+        "content": "Matthew Sigel, VanEck\u2019s Head of Digital Asset Research, told CNBC that although Bitcoin has pulled back nearly 50% from its 2025 high, he expects BTC to return to its all-time high within the next 12 months. Sigel believes current market sentiment remains cautious\u2014more akin to short-covering than extreme optimism\u2014suggesting further upside potential. Additionally, he notes that if the Clarity Act passes, it could accelerate institutional capital inflows into the crypto market; however, he remains cautious on altcoins overall and is more bullish on Bitcoin and AI-driven mining opportunities.",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/02e64f2c-0d45-4393-9d7c-0a9626bac573.jpg",
+        "impression_count": "359",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319866",
+            "symbol": "BTC",
+            "name": "BITCOIN"
+          },
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          }
+        ],
+        "tags": [
+          "Matthew Sigel",
+          "VanEck",
+          "Clarity Act"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053445053214306304",
+        "source_link": "https://sosovalue.com/research/2053445053214306304?from=888001",
+        "original_link": "https://twitter.com/wublockchain12/status/2053438952686723455",
+        "release_time": "1778412972000",
+        "title": null,
+        "content": "\"The Missing Piece of DeFi: Analyzing the History and Future Direction of On-Chain Options\" (Author: @alphaomegacat; Translated and Edited by Wu Blockchain)  \nThe long-term development of crypto options has fallen short of expectations. The core issue is not the absence of tools, but rather that the market has over-invested in building a professional trading layer while neglecting idle capital\u2014such as spot holders, DAO treasuries, LSTs, and long-term large holders\u2014that can truly generate scalable order flow.",
+        "author": "wublockchain12",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/b516b5e9-a253-4a19-9f91-6411778bfe85.jpg",
+        "impression_count": "149",
+        "like_count": "0",
+        "reply_count": "1",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "\u5434\u8bf4\u533a\u5757\u94fe",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "DeFi",
+          "DAO",
+          "LST"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053444993059598336",
+        "source_link": "https://sosovalue.com/research/2053444993059598336?from=888001",
+        "original_link": "https://twitter.com/BitcoinMagazine/status/2053437354883354885",
+        "release_time": "1778412591000",
+        "title": null,
+        "content": "JUST IN: Michael Saylor hints Strategy is \u201cback to work\u201d buying more bitcoin \ud83d\ude80 <br><img src=\"https://static.sosovalue.com/2026/05/10/c4a0c59a-032a-48dc-b313-515aeab14de4.jpg\"/>",
+        "author": "BitcoinMagazine",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/77c77f21-36bf-4324-babe-f3c3e0f9834c.jpg",
+        "impression_count": "28981",
+        "like_count": "1083",
+        "reply_count": "113",
+        "retweet_count": "123",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Bitcoin Magazine",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319866",
+            "symbol": "BTC",
+            "name": "BITCOIN"
+          },
+          {
+            "currency_id": "1942121818882076673",
+            "symbol": "MSTRX",
+            "name": "MICROSTRATEGY XSTOCK"
+          }
+        ],
+        "tags": [
+          "Michael Saylor",
+          "Bitcoin",
+          "MicroStrategy"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/4b087245-9a04-4ec0-beac-2d5d893119db.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH9GZGjWUAMevan.jpg",
+            "short_url": "https://t.co/NKUWbWdJVj",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053490456181813248",
+        "source_link": "https://sosovalue.com/research/2053490456181813248?from=888001",
+        "original_link": "https://twitter.com/solflare/status/2053429901538292055",
+        "release_time": "1778410814000",
+        "title": null,
+        "content": "Self-custody gives you full control of your crypto\u2026<br>&amp; yes, that comes with responsibility.<br><br>But you\u2019re not doing it alone.<br>Solflare is built to help you stay secure.<br><br>Here\u2019s what actually matters \u2193 <br><img src=\"https://static.sosovalue.com/2026/05/10/54b47d3c-176d-4fb3-9297-670053723868.jpg\"/>",
+        "author": "solflare",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/c38143fe-0e01-4bc8-8dcb-9916715c8c41.jpg",
+        "impression_count": "1848",
+        "like_count": "84",
+        "reply_count": "30",
+        "retweet_count": "14",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "Solflare - The Solana Wallet",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Solflare"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/54b47d3c-176d-4fb3-9297-670053723868.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH8_nLkb0AApQr8.jpg",
+            "short_url": "https://t.co/r4iuWo0WJP",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053430740112396288",
+        "source_link": "https://sosovalue.com/research/2053430740112396288?from=888001",
+        "original_link": "https://twitter.com/blueyard/status/2053425093628285439",
+        "release_time": "1778409667000",
+        "title": null,
+        "content": "Congratulations to team @centrifuge on taking a key step to becoming the essential infrastructure layer for tokenization",
+        "author": "blueyard",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/4bf33c8c-eee8-45fd-bec8-0f2c1c03c39d.jpg",
+        "impression_count": "47",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 3,
+        "feature_image": null,
+        "nick_name": "BlueYard Capital",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362320191",
+            "symbol": "CFG",
+            "name": "CENTRIFUGE"
+          }
+        ],
+        "tags": [
+          "Centrifuge"
+        ],
+        "media_info": null,
+        "quote_info": {
+          "content": "Coinbase has made a strategic investment in Centrifuge and selected Centrifuge as a Preferred Tokenization Infrastructure.\n\nCentrifuge brings deep institutional tokenization expertise.\n@coinbase brings consumer access, institutional relationships, and developer reach.\n\nTogether, we\u2019re bringing differentiated assets to @base.",
+          "impression_count": "68905",
+          "like_count": "593",
+          "reply_count": "68905",
+          "retweet_count": "157",
+          "created_at": "1778081520000",
+          "media_info": null,
+          "original_url": "https://twitter.com/centrifuge/status/2052048744498307384",
+          "author_avatar_url": "https://static.sosovalue.com/2026/05/10/e7d9a0e9-948e-4815-94f2-aa07ff82b362.jpg",
+          "author": "centrifuge",
+          "nick_name": "Centrifuge",
+          "is_blue_verified": true,
+          "verified_type": ""
+        }
+      }
+    ]
+  },
+  "details": null
 }

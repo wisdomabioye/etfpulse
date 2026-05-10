@@ -1,35 +1,40 @@
 {
-    "code": 0,
-    "message": "success",
-    "data": [
-        {
-            "date": "2026-04-20",
-            "events": [
-                "Retail Sales (MoM)"
-            ]
-        },
-        {
-            "date": "2026-04-22",
-            "events": [
-                "S&P Global Services PMI",
-                "S&P Global US Manufacturing PMI"
-            ]
-        },
-        {
-            "date": "2026-04-29",
-            "events": [
-                "GDP (QoQ) ",
-                "Core PCE Price Index (YoY) ",
-                "Core PCE Price Index (MoM)"
-            ]
-        },
-        {
-            "date": "2026-04-30",
-            "events": [
-                "S&P Global US Manufacturing PMI",
-                "ISM Manufacturing PMI"
-            ]
-        }
-    ],
-    "details": null
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "date": "2026-05-10",
+      "events": [
+        "Existing Home Sales"
+      ]
+    },
+    {
+      "date": "2026-05-11",
+      "events": [
+        "CPI (MoM)",
+        "CPI (YoY)",
+        "Core CPI (MoM)"
+      ]
+    },
+    {
+      "date": "2026-05-12",
+      "events": [
+        "PPI (MoM)"
+      ]
+    },
+    {
+      "date": "2026-05-13",
+      "events": [
+        "Retail Sales (MoM)"
+      ]
+    },
+    {
+      "date": "2026-05-20",
+      "events": [
+        "S&P Global US Manufacturing PMI",
+        "S&P Global Services PMI"
+      ]
+    }
+  ],
+  "details": null
 }

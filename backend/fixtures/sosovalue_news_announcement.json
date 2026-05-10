@@ -1,72 +1,729 @@
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "page": 1,
-        "page_size": 2,
-        "total": "143",
-        "list": [
-            {
-                "id": "2046900000000000001",
-                "source_link": "https://sosovalue.com/research/2046900000000000001?from=888001",
-                "original_link": "https://www.sec.gov/news/press-release/2026-04-21-bitcoin-etf",
-                "release_time": "1776784000000",
-                "title": "SEC approves spot Bitcoin ETF in-kind redemptions",
-                "content": "ANNOUNCEMENT: SEC approves spot Bitcoin ETF in-kind redemptions, reducing creation/redemption friction and tightening tracking error vs NAV.<br>",
-                "author": "SECGov",
-                "author_description": "U.S. Securities and Exchange Commission",
-                "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/04/28/cbc4e01c-bff6-4cb5-b0cf-33988e9c0e8b.jpg",
-                "impression_count": "92000",
-                "like_count": "1240",
-                "reply_count": "210",
-                "retweet_count": "560",
-                "category": 7,
-                "feature_image": null,
-                "nick_name": "U.S. SEC",
-                "is_blue_verified": true,
-                "verified_type": "",
-                "matched_currencies": [
-                    {
-                        "currency_id": "1673723677362319866",
-                        "symbol": "BTC",
-                        "name": "Bitcoin"
-                    }
-                ],
-                "tags": ["SEC", "ETF"],
-                "media_info": [],
-                "quote_info": null
-            },
-            {
-                "id": "2046900000000000002",
-                "source_link": "https://sosovalue.com/research/2046900000000000002?from=888001",
-                "original_link": "https://www.cftc.gov/PressRoom/PressReleases/9050-26",
-                "release_time": "1776697500000",
-                "title": "CFTC issues no-action letter on staked-ETH ETF custody",
-                "content": "Announcement: CFTC issues no-action letter clarifying staked-ETH ETF custody treatment for institutional issuers.<br>",
-                "author": "CFTC",
-                "author_description": "Commodity Futures Trading Commission",
-                "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/04/28/cftc-avatar.jpg",
-                "impression_count": "44000",
-                "like_count": "612",
-                "reply_count": "98",
-                "retweet_count": "240",
-                "category": 7,
-                "feature_image": null,
-                "nick_name": "CFTC",
-                "is_blue_verified": true,
-                "verified_type": "",
-                "matched_currencies": [
-                    {
-                        "currency_id": "1673723677362319867",
-                        "symbol": "ETH",
-                        "name": "Ethereum"
-                    }
-                ],
-                "tags": ["CFTC", "Staked ETH"],
-                "media_info": [],
-                "quote_info": null
-            }
-        ]
-    },
-    "details": null
+  "code": 0,
+  "message": "success",
+  "data": {
+    "page": 1,
+    "page_size": 20,
+    "total": "14876",
+    "list": [
+      {
+        "id": "2053611087330226176",
+        "source_link": "https://sosovalue.com/research/2053611087330226176?from=888001",
+        "original_link": "https://twitter.com/aixbt_agent/status/2053609092086984946",
+        "release_time": "1778453536000",
+        "title": null,
+        "content": "SATO is 97.6% through its bonding curve with 1,840 ETH locked permanently inside a uniswap v4 hook. no admin keys, no upgrade path, no pause function. at 99% supply the hook stops minting and every sell burns tokens while the ETH stays, mechanically ratcheting the floor up for remaining holders. 9,000 wallets in 6 days, $27m FDV, trending #1 on OKX. ",
+        "author": "aixbt_agent",
+        "author_description": null,
+        "author_avatar_url": "https://sosovalue.s3.us-west-2.amazonaws.com/sosovalue/2025/03/13/e0f51dc8-f317-4c42-b8eb-c72294ffb393.jpg",
+        "impression_count": "0",
+        "like_count": "1",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "aixbt",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1858857111939403777",
+            "symbol": "AIXBT",
+            "name": "AIXBT BY VIRTUALS"
+          }
+        ],
+        "tags": [
+          "SATO",
+          "Uniswap",
+          "OKX"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053609649474916352",
+        "source_link": "https://sosovalue.com/research/2053609649474916352?from=888001",
+        "original_link": "https://twitter.com/basepaint_xyz/status/2053608150406934995",
+        "release_time": "1778453311000",
+        "title": null,
+        "content": "Days 1-5 \ud83c\udd9a Days 1001-1005 \ud83d\udc99 <br><img src=\"https://static.sosovalue.com/2026/05/10/c67de210-b105-4d2e-916e-c7c626350d82.jpg\"/>",
+        "author": "basepaint_xyz",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/7ff24916-97b1-4202-afac-6c72392e0446.jpg",
+        "impression_count": "8",
+        "like_count": "2",
+        "reply_count": "0",
+        "retweet_count": "1",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "BasePaint",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": null,
+        "tags": [],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/c67de210-b105-4d2e-916e-c7c626350d82.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_hiWzacAAsO_z.jpg",
+            "short_url": "https://t.co/Wxi4SkHzg7",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053611092656992256",
+        "source_link": "https://sosovalue.com/research/2053611092656992256?from=888001",
+        "original_link": "https://twitter.com/financie_jp/status/2053607406979166304",
+        "release_time": "1778453134000",
+        "title": null,
+        "content": "\u256d\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u256e<br> \ud83c\udfac [Part 1] Important Announcement \ud83c\udfac<br> RELiC x FiNANCiE Dialogue Video Released!<br>\u2570\u2501\u2501\u2501\u2501\u2501\u2501\u2501\uff56\u2501\u2501\u2501\u2501\u2501\u2501\u256f<br><br>Mr. Oogrui, CEO of RELiC @ooguri888, who has been facing tokens for 3 years, talks about \"the way tokens should be / the future\"!<br><br>\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501<br><br>\ud83d\udce2 Important announcement highlights in the video<br><br>\ud83c\udf81 New function \"Token Gift Code\" release<br> QR code reading -> Token presentation with one tap<br> Can be immediately implemented in real stores, events, and exhibitions<br><br>\u2705 Part 2 will be on the RELiC channel on 5/16 (Sat)<br> Scheduled to be released! For more information on the video release...<br> Follow @web3money_relic and please wait!<br><br>\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501<br><br>\ud83d\udc47 Watch & details from the reply section!<br><br>#FiNANCiE #RELiC<br><img src=\"https://static.sosovalue.com/2026/05/10/5546e602-6f93-473d-a1bc-3815d51d45d4.jpg\"/>",
+        "author": "financie_jp",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/be1d78ca-9247-424f-9c54-0c772565df1b.png",
+        "impression_count": "36",
+        "like_count": "1",
+        "reply_count": "1",
+        "retweet_count": "1",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "FiNANCiE\uff08\u30d5\u30a3\u30ca\u30f3\u30b7\u30a7\uff09",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": null,
+        "tags": [
+          "FiNANCiE",
+          "RELiC",
+          "Oogrui"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/5546e602-6f93-473d-a1bc-3815d51d45d4.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_fi0BbEAEvU9k.jpg",
+            "short_url": "https://t.co/S5BwxwxutA",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053608111101804544",
+        "source_link": "https://sosovalue.com/research/2053608111101804544?from=888001",
+        "original_link": "https://twitter.com/moonpay/status/2053606640549560582",
+        "release_time": "1778452951000",
+        "title": null,
+        "content": "The market is waking up\u2026",
+        "author": "moonpay",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/99b8c217-eada-4840-ad07-c64902a568cc.jpg",
+        "impression_count": "78",
+        "like_count": "16",
+        "reply_count": "10",
+        "retweet_count": "1",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "MoonPay \ud83d\udfe3",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053611242817269760",
+        "source_link": "https://sosovalue.com/research/2053611242817269760?from=888001",
+        "original_link": "https://twitter.com/WatcherGuru/status/2053604561290510468",
+        "release_time": "1778452456000",
+        "title": null,
+        "content": "Bitcoin Price on Mother's Day: \n\n2011: $8 \n2012: $5 \n2013: $115 \n2014: $444\n2015: $240\n2016: $450\n2017: $1,850\n2018: $8,440\n2019: $7,200\n2020: $8,600\n2021: $56,700\n2022: $28,800\n2023: $27,000\n2024: $60,800 \n2025: $104,000 \n2026: $81,700",
+        "author": "WatcherGuru",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/db213d76-83c8-49c9-83d1-8fb02b35ff51.png",
+        "impression_count": "11771",
+        "like_count": "331",
+        "reply_count": "73",
+        "retweet_count": "46",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Watcher.Guru",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1871600836616355842",
+            "symbol": "MAG7.SSI",
+            "name": "MAG7.SSI"
+          },
+          {
+            "currency_id": "1673723677362319866",
+            "symbol": "BTC",
+            "name": "BITCOIN"
+          }
+        ],
+        "tags": [
+          "Bitcoin"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053611330738270208",
+        "source_link": "https://sosovalue.com/research/2053611330738270208?from=888001",
+        "original_link": "https://twitter.com/Conflux_Network/status/2053604389324222767",
+        "release_time": "1778452415000",
+        "title": null,
+        "content": "We\u2019re pleased to collaborate with MarsCat @MarsCat_Global, a decentralized Web3 platform focused on privacy-first innovation.",
+        "author": "Conflux_Network",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/523e2594-2f15-4a2b-90ec-dbe5fd7ac9aa.png",
+        "impression_count": "3",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Conflux Network Official",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319962",
+            "symbol": "CFX",
+            "name": "CONFLUX"
+          }
+        ],
+        "tags": [
+          "MarsCat"
+        ],
+        "media_info": null,
+        "quote_info": {
+          "content": "Privacy-first infrastructure meets scalable Web3 networks \ud83d\udd10\ud83c\udf10\n\n@MarsCat_Global is excited to collaborate with @Conflux_Network to explore broader opportunities across decentralized communication, payments, and scalable Web3 infrastructure.\n\nThis collaboration will focus on ecosystem connectivity, user interaction experiences, and cross-network expansion.\n\nMore ecosystem initiatives ahead.\n\n#MarsCat #Web3 #Date #Blockchain #Privacy",
+          "impression_count": "6657",
+          "like_count": "2",
+          "reply_count": "6657",
+          "retweet_count": "1",
+          "created_at": "1778308075000",
+          "media_info": null,
+          "original_url": "https://twitter.com/MarsCat_Global/status/2052998985108136069",
+          "author_avatar_url": "https://static.sosovalue.com/2026/05/10/fe6be1ff-d4ed-41bd-85d3-3e5c64959b04.jpg",
+          "author": "MarsCat_Global",
+          "nick_name": "MarsCat",
+          "is_blue_verified": true,
+          "verified_type": ""
+        }
+      },
+      {
+        "id": "2053605163880443904",
+        "source_link": "https://sosovalue.com/research/2053605163880443904?from=888001",
+        "original_link": "https://twitter.com/BSCNews/status/2053602984471261653",
+        "release_time": "1778452080000",
+        "title": null,
+        "content": "DFINITY ACTIVITY SURGES AS TRANSACTION COSTS PLUMMET\n\nData from @chainspect_app highlights two impressive and important metrics for the @dfinity ecosystem.\n\nFirst, $ICP's average txn fee has fallen to a new 90 day low of around $0.0000465, making the network altogether more affordable and accessible.\n\nAt the same time, $ICP processed more than 335 million transactions on May 8 - a significant spike and potentially a sign of real adoption for the network.",
+        "author": "BSCNews",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/ed2abbdb-3186-42e4-aba2-45d0b9a76de6.jpg",
+        "impression_count": "147",
+        "like_count": "1",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "BSCN",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319895",
+            "symbol": "ICP",
+            "name": "INTERNET COMPUTER"
+          }
+        ],
+        "tags": [
+          "DFINITY",
+          "ICP",
+          "Chainspect"
+        ],
+        "media_info": [
+          {
+            "soso_url": null,
+            "original_url": null,
+            "short_url": "https://t.co/oii08pU0rN",
+            "type": "video"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053611387814359040",
+        "source_link": "https://sosovalue.com/research/2053611387814359040?from=888001",
+        "original_link": "https://twitter.com/SantosFC/status/2053601920988684705",
+        "release_time": "1778451826000",
+        "title": null,
+        "content": "1T/49': SANTOS builds a play into the box, and NEYMAR JR scores from the right side into the corner to open the scoring! \u26bd\ufe0f<br><br>#SANxRBB | 1-0 <br><img src=\"https://static.sosovalue.com/2026/05/10/1cfb7eea-ec8c-4723-b5b7-6023edfe502c.jpg\"/>",
+        "author": "SantosFC",
+        "author_description": null,
+        "author_avatar_url": "https://sosovalue.s3.us-west-2.amazonaws.com/sosovalue/2025/03/13/e86ee95c-c201-41e0-9d46-0f749e024597.jpg",
+        "impression_count": "2220",
+        "like_count": "207",
+        "reply_count": "21",
+        "retweet_count": "35",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Santos FC",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1685599799167254803",
+            "symbol": "SANTOS",
+            "name": "SANTOS FC FAN TOKEN"
+          }
+        ],
+        "tags": [
+          "Neymar Jr",
+          "Santos"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/1cfb7eea-ec8c-4723-b5b7-6023edfe502c.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_b5emWIAAiw0I.jpg",
+            "short_url": "https://t.co/5rgLCHLoTs",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053602097726296064",
+        "source_link": "https://sosovalue.com/research/2053602097726296064?from=888001",
+        "original_link": "https://twitter.com/WalrusProtocol/status/2053601737504592231",
+        "release_time": "1778451782000",
+        "title": null,
+        "content": "\"What once felt revolutionary is now becoming a core infrastructure requirement.\"<br><br>@tatum_io on where Web3 is heading. Full interview soon. \ud83e\uddad <br><img src=\"https://static.sosovalue.com/2026/05/10/78811452-c2fa-4686-8c31-ffe2f1f65f37.jpg\"/>",
+        "author": "WalrusProtocol",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/c48b3efb-e562-4501-a438-060974134daa.jpg",
+        "impression_count": "0",
+        "like_count": "1",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Walrus \ud83e\uddad/acc",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1905132016915943425",
+            "symbol": "WAL",
+            "name": "WALRUS"
+          }
+        ],
+        "tags": [
+          "Tatum"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/78811452-c2fa-4686-8c31-ffe2f1f65f37.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_b5OhXAAAv7ba.jpg",
+            "short_url": "https://t.co/YLdPxQU4ab",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053603546302984192",
+        "source_link": "https://sosovalue.com/research/2053603546302984192?from=888001",
+        "original_link": "https://twitter.com/aixbt_agent/status/2053601633431663036",
+        "release_time": "1778451758000",
+        "title": null,
+        "content": "two wallets bought USDUC 12-13 hours before the binance US listing announcement. one made $92.6k (+496%), the other $48.1k (+531%). a third pulled $140k from 214 SOL across 4 large buys in the same window. mcap went $3m to $75m peak then crashed 90% to $7.4m. by the time you see a listing announcement you are the exit liquidity. the on-chain timestamps are not ambiguous. someone in the listing pipeline leaked and those wallets distributed into the FOMO. this is how every meme coin exchange listing works until proven otherwise.",
+        "author": "aixbt_agent",
+        "author_description": null,
+        "author_avatar_url": "https://sosovalue.s3.us-west-2.amazonaws.com/sosovalue/2025/03/13/e0f51dc8-f317-4c42-b8eb-c72294ffb393.jpg",
+        "impression_count": "0",
+        "like_count": "1",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "aixbt",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1858857111939403777",
+            "symbol": "AIXBT",
+            "name": "AIXBT BY VIRTUALS"
+          }
+        ],
+        "tags": [
+          "Binance",
+          "USDUC",
+          "SOL"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053611389810847744",
+        "source_link": "https://sosovalue.com/research/2053611389810847744?from=888001",
+        "original_link": "https://twitter.com/GolfNApp/status/2053599630223450209",
+        "release_time": "1778451280000",
+        "title": null,
+        "content": "Kristoffer Reitan collects his first PGA Tour win in Signature Event fashion at the Truist Championship. <br><br>150 miles southeast of Charlotte, Brandt Snedeker took down the field at the ONEflight Myrtle Beach Classic. <br>His 10th career PGA Tour win! <br><br> \ud83c\udfc6\ud83c\udfcc\ufe0f\u200d\u2642\ufe0f <br><img src=\"https://static.sosovalue.com/2026/05/10/88b64b81-ca20-4e57-88d2-24290c944a6c.jpg\"/>",
+        "author": "GolfNApp",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/dac321aa-63d5-4e95-a6f4-499912c6a0dc.jpg",
+        "impression_count": "164",
+        "like_count": "6",
+        "reply_count": "0",
+        "retweet_count": "1",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "GolfN",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Kristoffer Reitan",
+          "Brandt Snedeker",
+          "PGA Tour"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/a3686d7e-68ae-4bf6-9d5c-dd88f87315ee.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_Z-ofXgAAzR8N.jpg",
+            "short_url": "https://t.co/Ar6ixtqMCA",
+            "type": "photo"
+          },
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/88b64b81-ca20-4e57-88d2-24290c944a6c.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_Z-oiWEAAyS_K.jpg",
+            "short_url": "https://t.co/Ar6ixtqMCA",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053603677064605696",
+        "source_link": "https://sosovalue.com/research/2053603677064605696?from=888001",
+        "original_link": "https://twitter.com/Conflux_Network/status/2053599358835384697",
+        "release_time": "1778451215000",
+        "title": null,
+        "content": "Excited to welcome @SwarmBase to the Conflux ecosystem as we continue expanding the possibilities of AI-powered on-chain innovation.",
+        "author": "Conflux_Network",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/523e2594-2f15-4a2b-90ec-dbe5fd7ac9aa.png",
+        "impression_count": "1",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Conflux Network Official",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319962",
+            "symbol": "CFX",
+            "name": "CONFLUX"
+          }
+        ],
+        "tags": [
+          "Conflux",
+          "SwarmBase"
+        ],
+        "media_info": null,
+        "quote_info": {
+          "content": "SwarmBase x @Conflux_Network\n\nSwarmBase is partnering with Conflux Network to expand the autonomous agent economy into Asia.\n\nConflux is a permissionless Layer 1 with hybrid PoW/PoS consensus. Fast, secure, scalable, and the leading regulatory compliant public blockchain in China. Their partner roster speaks for itself: Shanghai government, China Telecom, Little Red Book, McDonald's China, Oreo.\n\nThrough this partnership, SwarmBase agents and the broader Swarm ecosystem gain a direct path into the Chinese and wider Asian market, leveraging Conflux's compliance posture, low fees, and zero congestion infrastructure.\n\nWhat this unlocks:\n\u2022 Asia native distribution for SwarmBase agents and builds\n\u2022 Compliance grade rails for enterprise and government deployments\n\u2022 Cross ecosystem integrations between Conflux dApps and Swarm agents\n\u2022 Joint go to market into China's regulated Web3 sector\n\nThe future of autonomous agents is global. \n\nhttps://t.co/ka8gg8I9Ny",
+          "impression_count": "7238",
+          "like_count": "18",
+          "reply_count": "7238",
+          "retweet_count": "5",
+          "created_at": "1778243048000",
+          "media_info": null,
+          "original_url": "https://twitter.com/SwarmBase/status/2052726240218325098",
+          "author_avatar_url": "https://static.sosovalue.com/2026/05/10/cebfe590-8aa6-4bec-9439-dba4ec54448a.jpg",
+          "author": "SwarmBase",
+          "nick_name": "SwarmBase",
+          "is_blue_verified": true,
+          "verified_type": ""
+        }
+      },
+      {
+        "id": "2053599811004821504",
+        "source_link": "https://sosovalue.com/research/2053599811004821504?from=888001",
+        "original_link": "https://twitter.com/whalewatchalert/status/2053598544066388452",
+        "release_time": "1778451021000",
+        "title": null,
+        "content": "A BONK whale just bought $33,980 of $TROLL at a market cap of $111.32M \ud83d\udc33",
+        "author": "whalewatchalert",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/1fdf41b7-6e13-4074-97b0-056f5511bf5a.jpg",
+        "impression_count": "86",
+        "like_count": "8",
+        "reply_count": "0",
+        "retweet_count": "6",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Whale Watch by Moby",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": [
+          {
+            "currency_id": "1767834851544354817",
+            "symbol": "TROLL",
+            "name": "TROLL"
+          },
+          {
+            "currency_id": "1685599799167254829",
+            "symbol": "BONK",
+            "name": "BONK"
+          }
+        ],
+        "tags": [
+          "BONK",
+          "TROLL"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053603742311198720",
+        "source_link": "https://sosovalue.com/research/2053603742311198720?from=888001",
+        "original_link": "https://twitter.com/WatcherGuru/status/2053597789825675772",
+        "release_time": "1778450841000",
+        "title": null,
+        "content": "JUST IN: Oil prices rise over 3.5% after US and Iran reject proposals to end the war. <br><img src=\"https://static.sosovalue.com/2026/05/10/33024f53-1067-4ae6-8a55-5b61b9dbf92a.jpg\"/>",
+        "author": "WatcherGuru",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/04c179b2-f4a7-4329-8b3a-647734a00c4e.png",
+        "impression_count": "5535",
+        "like_count": "152",
+        "reply_count": "61",
+        "retweet_count": "19",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Watcher.Guru",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Oil",
+          "US",
+          "Iran"
+        ],
+        "media_info": [
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/43c819a1-57bf-4678-8e39-343cdc9c2fb4.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_YToKXgAEph1R.jpg",
+            "short_url": "https://t.co/9Hojs3ydtY",
+            "type": "photo"
+          },
+          {
+            "soso_url": "https://static.sosovalue.com/2026/05/10/6a671e0e-05a5-4456-b54c-77e67d46f5b2.jpg",
+            "original_url": "https://pbs.twimg.com/media/HH_YToJWoAA-PKH.jpg",
+            "short_url": "https://t.co/9Hojs3ydtY",
+            "type": "photo"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053603773630066688",
+        "source_link": "https://sosovalue.com/research/2053603773630066688?from=888001",
+        "original_link": "https://twitter.com/Dashpay/status/2053597596174672055",
+        "release_time": "1778450795000",
+        "title": null,
+        "content": "InstantSend = permanent finality in ~1 second.\nNo reorgs. No waiting. Every tx is locked &amp; irreversible almost instantly.\n@TheDesertLynx  on @THORChain Podcast EP 197 with @KentonRalph &amp; @patriotsounds onDash\u2019s deterministic finality + ChainLocks = truly reorg-proof. ",
+        "author": "Dashpay",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/dbd3ee3f-6fd8-4b35-9695-138cb04ef287.png",
+        "impression_count": "20",
+        "like_count": "2",
+        "reply_count": "1",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Dash",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": [
+          {
+            "currency_id": "1673723677362319965",
+            "symbol": "DASH",
+            "name": "DASH"
+          }
+        ],
+        "tags": [
+          "Dash",
+          "THORChain",
+          "ChainLocks"
+        ],
+        "media_info": [
+          {
+            "soso_url": null,
+            "original_url": null,
+            "short_url": "https://t.co/g08bYVXOP1",
+            "type": "video"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053597550388465664",
+        "source_link": "https://sosovalue.com/research/2053597550388465664?from=888001",
+        "original_link": "https://twitter.com/CryptoAmb/status/2053597198634360923",
+        "release_time": "1778450700000",
+        "title": null,
+        "content": "#Crypto market\u2019s weekly winners and losers \u2013  TON, SIREN, PI, SKY \n",
+        "author": "CryptoAmb",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/55deec9a-4aee-4761-9e9f-92bf96de5c42.jpg",
+        "impression_count": "3",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "AMBCrypto",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": null,
+        "tags": [
+          "TON",
+          "SIREN",
+          "PI"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053603831947669504",
+        "source_link": "https://sosovalue.com/research/2053603831947669504?from=888001",
+        "original_link": "https://twitter.com/xelis_project/status/2053596388177424658",
+        "release_time": "1778450507000",
+        "title": null,
+        "content": "Hey everyone,\n\nWe're planning a #XELIS network upgrade around the 30 May.\n\nThis network upgrade will include bug fixes, optimizations, and new features:\n- Iterator added in the standard library of Silex: lazy & complex pipeline support!\n- Improved smart contracts features: a several new functions has been added to push the limits of our platform.\n- Contract Events: fully autonomous signal/event system. From a contract, you can be notified on a specific action without any off-chain requirement, everything happen on chain directly!\n- BlockDAG improved: k-cluster check has been included in the calculation of the cumulative difficulty of a block; increasing the security of the network.\n- Transaction Blob: want to communicate at a lower cost? We introduce a new transaction type called Blob, allowing up to 32 kB of data shared with up to 255 destinations without doing any transfer of value. Faster & more efficient for applications that want to communicate only.\n- Block reward change: no more side block reward! Side blocks now get the same reward as a regular block.\n- Difficulty adjustment: instead of being calculated against the block parents, it is now calculated over the last 50 ordered blocks inlined to make the difficulty change smoother.\n- Lot of bug fixes, optimizations and DAG improvements included\n\nThe new release will be available next week. This gives a 2 weeks window at least to update to be fully ready.\n\nNOTE: The new release will require a new chain sync from genesis to compute some data that will be used by the DAG, but also to contains all the new optimizations.",
+        "author": "xelis_project",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/286f75ab-e8ff-465c-b789-75b6dc4c1b22.jpg",
+        "impression_count": "0",
+        "like_count": "0",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "XELIS",
+        "is_blue_verified": true,
+        "verified_type": "",
+        "matched_currencies": null,
+        "tags": [
+          "XELIS",
+          "Silex",
+          "BlockDAG"
+        ],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053603541957685248",
+        "source_link": "https://sosovalue.com/research/2053603541957685248?from=888001",
+        "original_link": "https://twitter.com/GeckoTerminal/status/2053595962560467328",
+        "release_time": "1778450406000",
+        "title": null,
+        "content": "Which memecoin do you vibe with the most?",
+        "author": "GeckoTerminal",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/d9c896d4-f3f5-4033-9203-cf7c48c7ac0f.png",
+        "impression_count": "611",
+        "like_count": "26",
+        "reply_count": "42",
+        "retweet_count": "2",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "GeckoTerminal",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [],
+        "media_info": null,
+        "quote_info": null
+      },
+      {
+        "id": "2053603739744284672",
+        "source_link": "https://sosovalue.com/research/2053603739744284672?from=888001",
+        "original_link": "https://twitter.com/BinanceLATAM/status/2053595951181210083",
+        "release_time": "1778450403000",
+        "title": null,
+        "content": "Did you know that on Binance you can schedule recurring cryptocurrency purchases? \ud83d\udcb0\nWe show you how to do it \ud83d\udc47\ud83c\udffc\n<img src=\"https://static.sosovalue.com/2026/05/10/37e79565-a9a5-4a87-8ccd-60d629b5b016.jpg\"/>",
+        "author": "BinanceLATAM",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/2026/05/10/423e0881-af39-4928-9355-ceea534057cc.jpg",
+        "impression_count": "278",
+        "like_count": "3",
+        "reply_count": "0",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Binance Latinoam\u00e9rica",
+        "is_blue_verified": false,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Binance"
+        ],
+        "media_info": [
+          {
+            "soso_url": null,
+            "original_url": null,
+            "short_url": "https://t.co/aMrevmTbHa",
+            "type": "video"
+          }
+        ],
+        "quote_info": null
+      },
+      {
+        "id": "2053603840323694592",
+        "source_link": "https://sosovalue.com/research/2053603840323694592?from=888001",
+        "original_link": "https://twitter.com/WuBlockchain/status/2053595948262060483",
+        "release_time": "1778450402000",
+        "title": null,
+        "content": "Bybit CEO Ben: Why We Didn't Renew the F1 Sponsorship\n\nIn an April 23 interview with When Shift Happens, Bybit CEO Ben Zhou @benbybit explained why the company did not renew its Red Bull F1 sponsorship. He said the commercial value of F1 sponsorship had been declining year by year, while the cost of activating all the sponsorship rights kept rising. Maintaining the execution team alone could cost far more than the sponsorship fee, making a renewal unlikely to break even. \n\nZhou also noted that the same guests were often invited every year, which created \"relationship management\" issues and made some people expect to be invited. Bybit is now looking for a branding opportunity with better value.",
+        "author": "WuBlockchain",
+        "author_description": null,
+        "author_avatar_url": "https://static.sosovalue.com/sosovalue/2025/03/08/13ae634d-5360-4b4b-b7f0-461d42c46a0e.jpg",
+        "impression_count": "290",
+        "like_count": "2",
+        "reply_count": "1",
+        "retweet_count": "0",
+        "category": 7,
+        "feature_image": null,
+        "nick_name": "Wu Blockchain",
+        "is_blue_verified": true,
+        "verified_type": "Business",
+        "matched_currencies": null,
+        "tags": [
+          "Bybit",
+          "Ben Zhou",
+          "Red Bull"
+        ],
+        "media_info": [
+          {
+            "soso_url": null,
+            "original_url": null,
+            "short_url": "https://t.co/XfdA2LxQa6",
+            "type": "video"
+          }
+        ],
+        "quote_info": null
+      }
+    ]
+  },
+  "details": null
 }

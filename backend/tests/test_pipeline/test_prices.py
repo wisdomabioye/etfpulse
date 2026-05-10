@@ -27,7 +27,7 @@ class TestHappyPath:
         assert result is not None
         price, source = result
         assert source == "sosovalue"
-        assert price == Decimal("84120.50")
+        assert price == Decimal("82352.65")
 
 
 class TestFallback:
@@ -44,7 +44,7 @@ class TestFallback:
         assert result is not None
         price, source = result
         assert source == "binance"
-        assert price == Decimal("84120.50000000")
+        assert price == Decimal("82352.65000000")
 
     async def test_falls_back_on_generic_sosovalue_error(self, monkeypatch):
         """Any SoSoValueError (base class) triggers fallback — quota, network, 5xx."""
@@ -174,14 +174,15 @@ class TestPriceBarConverters:
 
 class TestKlinesComposer:
     async def test_sosovalue_success_returns_bars_tagged_sosovalue(self):
-        """Fixture-backed: SoSoValue happy path. 3 bars from `sosovalue_klines_btc`."""
+        """Fixture-backed: SoSoValue happy path. Fixture has 90 bars (limit is
+        ignored under fixture mode — it only shapes the upstream HTTP call)."""
         result = await get_daily_klines_with_source("BTC", limit=3)
         assert result is not None
         bars, source = result
         assert source == "sosovalue"
-        assert len(bars) == 3
+        assert len(bars) == 90
         # Last bar's close matches the fixture (anchored value used elsewhere).
-        assert bars[-1].close == Decimal("84120.50")
+        assert bars[-1].close == Decimal("82220.14")
 
     async def test_falls_back_to_binance_on_error(self, monkeypatch):
         """SoSoValueError → composer must try Binance, return source='binance'."""

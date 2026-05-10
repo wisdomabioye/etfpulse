@@ -11,12 +11,12 @@ from etfpulse.pipeline.ingestor import ingest_etf_flows, ingest_news
 
 async def test_ingest_etf_flows_inserts_unique_rows(db_session):
     inserted = await ingest_etf_flows(db_session, "BTC")
-    assert inserted == 7  # fixture has 10 rows spanning 7 unique dates
+    assert inserted == 21  # fixture has 28 rows spanning 21 unique dates
 
     count = await db_session.scalar(
         select(func.count()).select_from(ETFFlow).where(ETFFlow.asset == "BTC")
     )
-    assert count == 7
+    assert count == 21
 
     rows = (
         (
@@ -27,18 +27,18 @@ async def test_ingest_etf_flows_inserts_unique_rows(db_session):
         .scalars()
         .all()
     )
-    assert rows[0].captured_at.isoformat() == "2026-04-17"
-    assert float(rows[0].total_net_flow_usd) == pytest.approx(663911366.465, rel=1e-9)
+    assert rows[0].captured_at.isoformat() == "2026-05-08"
+    assert float(rows[0].total_net_flow_usd) == pytest.approx(-145651012.3, rel=1e-9)
 
 
 async def test_ingest_etf_flows_is_idempotent(db_session):
     first = await ingest_etf_flows(db_session, "BTC")
     second = await ingest_etf_flows(db_session, "BTC")
-    assert first == 7
+    assert first == 21
     assert second == 0
 
     count = await db_session.scalar(select(func.count()).select_from(ETFFlow))
-    assert count == 7
+    assert count == 21
 
 
 async def test_ingest_etf_flows_separates_assets(db_session):

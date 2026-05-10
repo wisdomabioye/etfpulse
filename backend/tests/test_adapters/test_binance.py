@@ -1,7 +1,7 @@
 """Binance adapter tests.
 
 Fixture-mode only — every test runs offline against JSON fixtures that
-mirror the verified live response shapes (captured 2026-04-24 from
+mirror the verified live response shapes (captured 2026-05-11 from
 `data-api.binance.vision`).
 """
 
@@ -20,12 +20,12 @@ class TestSpotPrice:
         client = BinanceClient()
         price = await client.get_spot_price("BTC")
         assert isinstance(price, Decimal)
-        assert price == Decimal("84120.50000000")
+        assert price == Decimal("82352.65000000")
 
     async def test_eth_spot_from_fixture(self):
         client = BinanceClient()
         price = await client.get_spot_price("ETH")
-        assert price == Decimal("2480.50000000")
+        assert price == Decimal("2377.85000000")
 
     async def test_spot_cache_hits_on_second_call(self):
         """Second call within the TTL window must not re-read the fixture."""
@@ -51,25 +51,26 @@ class TestSpotPrice:
 class TestKlines:
     async def test_btc_klines_parse_12_element_arrays(self):
         """Wire shape is arrays, not objects — `from_raw` handles the
-        positional unpacking."""
+        positional unpacking. Fixture-mode ignores `limit` and returns the
+        full captured series (100 bars)."""
         client = BinanceClient()
         bars = await client.get_daily_klines("BTC", limit=3)
-        assert len(bars) == 3
+        assert len(bars) == 100
         assert all(isinstance(b, BinanceKline) for b in bars)
 
     async def test_kline_close_is_decimal_and_matches_fixture(self):
         """Close price is at index 4 of the raw array, returned as Decimal."""
         client = BinanceClient()
         bars = await client.get_daily_klines("BTC", limit=3)
-        # Fixture's last bar close is 84120.50000000
-        assert bars[-1].close == Decimal("84120.50000000")
+        # Fixture's last bar close is 82352.65000000
+        assert bars[-1].close == Decimal("82352.65000000")
 
     async def test_kline_bar_date_is_utc(self):
         """`bar_date` converts ms-epoch open_time to a UTC calendar date."""
         client = BinanceClient()
         bars = await client.get_daily_klines("ETH", limit=3)
-        # Fixture first bar open_time = 1745193600000 ms = 2025-04-21 UTC
-        assert str(bars[0].bar_date) == "2025-04-21"
+        # Fixture first bar open_time = 1769817600000 ms = 2026-01-31 UTC
+        assert str(bars[0].bar_date) == "2026-01-31"
 
     async def test_klines_cache_hits_on_second_call(self):
         client = BinanceClient()

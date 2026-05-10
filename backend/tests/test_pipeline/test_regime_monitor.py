@@ -142,10 +142,10 @@ class TestClassifyRegime:
         assert c.confidence == 1
         assert c.macro_events_nearby == []
         # Dominance is sourced from sosovalue_sector_spotlight.json fixture
-        # which records BTC at 0.5943 marketcap_dom.
+        # which records BTC at 0.5944 marketcap_dom.
         assert c.reasoning["dominance"]["available"] is True
-        assert c.btc_dominance == Decimal("0.5943")
-        assert c.reasoning["dominance"]["btc_dominance"] == "0.5943"
+        assert c.btc_dominance == Decimal("0.5944")
+        assert c.reasoning["dominance"]["btc_dominance"] == "0.5944"
 
     async def test_dominance_unavailable_when_adapter_fails(
         self, db_session, _no_macro_events, _sector_spotlight_fails

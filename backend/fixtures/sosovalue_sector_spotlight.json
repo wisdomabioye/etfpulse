@@ -5,173 +5,173 @@
     "sector": [
       {
         "name": "DeFi",
-        "change_pct_24h": 0.0026,
+        "change_pct_24h": 0.0208,
         "marketcap_dom": 0.0147
       },
       {
         "name": "Layer2",
-        "change_pct_24h": -0.0053,
+        "change_pct_24h": 0.0204,
         "marketcap_dom": 0.0024
       },
       {
         "name": "NFT",
-        "change_pct_24h": -0.0047,
+        "change_pct_24h": 0.0084,
         "marketcap_dom": 0.0006
       },
       {
         "name": "GameFi",
-        "change_pct_24h": 0.0006,
+        "change_pct_24h": 0.022,
         "marketcap_dom": 0.001
       },
       {
         "name": "Others",
-        "change_pct_24h": -0.0115,
+        "change_pct_24h": 0.0036,
         "marketcap_dom": 0.0051
       },
       {
         "name": "Layer1",
-        "change_pct_24h": -0.0018,
-        "marketcap_dom": 0.0833
+        "change_pct_24h": 0.0208,
+        "marketcap_dom": 0.0837
       },
       {
         "name": "StableCoin",
         "change_pct_24h": 0.0,
-        "marketcap_dom": 0.0981
+        "marketcap_dom": 0.0965
       },
       {
         "name": "PayFi",
-        "change_pct_24h": 0.0021,
-        "marketcap_dom": 0.0374
+        "change_pct_24h": 0.0317,
+        "marketcap_dom": 0.0378
       },
       {
         "name": "CeFi",
-        "change_pct_24h": 0.0018,
+        "change_pct_24h": 0.0173,
         "marketcap_dom": 0.0393
       },
       {
         "name": "Meme",
-        "change_pct_24h": -0.0056,
-        "marketcap_dom": 0.0111
+        "change_pct_24h": 0.0212,
+        "marketcap_dom": 0.0112
       },
       {
         "name": "BTC",
-        "change_pct_24h": 0.006,
-        "marketcap_dom": 0.5943
+        "change_pct_24h": 0.0168,
+        "marketcap_dom": 0.5944
       },
       {
         "name": "ETH",
-        "change_pct_24h": 0.0044,
-        "marketcap_dom": 0.103
+        "change_pct_24h": 0.0202,
+        "marketcap_dom": 0.1037
       },
       {
         "name": "AI",
-        "change_pct_24h": -0.0032,
+        "change_pct_24h": -0.0004,
         "marketcap_dom": 0.0042
       },
       {
         "name": "SocialFi",
-        "change_pct_24h": -0.0458,
+        "change_pct_24h": -0.002,
         "marketcap_dom": 0.0023
       },
       {
         "name": "DePIN",
-        "change_pct_24h": -0.009,
+        "change_pct_24h": -0.0035,
         "marketcap_dom": 0.0015
       },
       {
         "name": "RWA",
-        "change_pct_24h": -0.0227,
+        "change_pct_24h": -0.0001,
         "marketcap_dom": 0.0016
       }
     ],
     "spotlight": [
       {
         "name": " PerpDEX",
-        "change_pct_24h": -0.0095
+        "change_pct_24h": 0.0076
       },
       {
         "name": "Privacy",
-        "change_pct_24h": -0.014
+        "change_pct_24h": -0.0065
       },
       {
         "name": "BSC Ecosystem",
-        "change_pct_24h": 0.0016
+        "change_pct_24h": 0.0234
       },
       {
         "name": "Gold-Backed Token",
-        "change_pct_24h": 0.0021
+        "change_pct_24h": -0.0058
       },
       {
         "name": "Solana Ecosystem",
-        "change_pct_24h": 0.0047
+        "change_pct_24h": 0.0326
       },
       {
         "name": "Base Ecosystem",
-        "change_pct_24h": 0.0039
+        "change_pct_24h": 0.0238
       },
       {
         "name": "ETF Candidates",
-        "change_pct_24h": 0.0012
+        "change_pct_24h": 0.0351
       },
       {
         "name": "Tokenized Stocks",
-        "change_pct_24h": 0.005
+        "change_pct_24h": 0.0071
       },
       {
         "name": "Grayscale 2025 Top20",
-        "change_pct_24h": 0.0057
+        "change_pct_24h": 0.0193
       },
       {
         "name": "Sui Ecosystem",
-        "change_pct_24h": 0.0743
+        "change_pct_24h": 0.2381
       },
       {
         "name": "AI Agents",
-        "change_pct_24h": -0.0179
+        "change_pct_24h": -0.0008
       },
       {
         "name": "DeFAI",
-        "change_pct_24h": -0.0063
+        "change_pct_24h": -0.0848
       },
       {
         "name": "Modular Blockchain",
-        "change_pct_24h": -0.0036
+        "change_pct_24h": 0.032
       },
       {
         "name": "DeSci",
-        "change_pct_24h": 0.0152
+        "change_pct_24h": -0.0241
       },
       {
         "name": "LSDFi",
-        "change_pct_24h": -0.0135
+        "change_pct_24h": -0.0023
       },
       {
         "name": "LRTFi",
-        "change_pct_24h": -0.0116
+        "change_pct_24h": 0.0102
       },
       {
         "name": "Paradigm Portfolio",
-        "change_pct_24h": 0.0239
+        "change_pct_24h": 0.0413
       },
       {
         "name": "a16z Portfolio",
-        "change_pct_24h": 0.0046
+        "change_pct_24h": 0.0279
       },
       {
         "name": "Multicoin Portfolio",
-        "change_pct_24h": 0.0037
+        "change_pct_24h": 0.0226
       },
       {
         "name": "Delphi Portfolio",
-        "change_pct_24h": 0.0042
+        "change_pct_24h": 0.0231
       },
       {
         "name": "Pantera Portfolio",
-        "change_pct_24h": -0.0036
+        "change_pct_24h": 0.0267
       },
       {
         "name": "GLXY Portfolio",
-        "change_pct_24h": 0.0043
+        "change_pct_24h": 0.0206
       }
     ]
   },
