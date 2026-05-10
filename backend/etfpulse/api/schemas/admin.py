@@ -82,3 +82,10 @@ class AdminMetrics(BaseModel):
     # jobs registered. Use the `next_run_at` per row to spot a scheduler
     # that's running but has stopped advancing its timers.
     scheduler_jobs: list[SchedulerJobInfo] | None = None
+
+    # Size of `app.state.telegram_webhook_secrets` — surfaces stuck
+    # rotations (issue #40). Steady state is 1; a value of 2+ means a
+    # widen-then-shrink rotation didn't complete (process killed
+    # mid-rotation, or the operator pinned the set artificially).
+    # None when the bot is disabled (no state to inspect).
+    accepted_webhook_secrets: int | None = None

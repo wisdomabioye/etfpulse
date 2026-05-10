@@ -99,6 +99,7 @@ def verify_bot_enabled(request: Request) -> None:
 
 
 async def verify_telegram_secret(
+    request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(
         default=None, alias="X-Telegram-Bot-Api-Secret-Token"
     ),
@@ -107,10 +108,17 @@ async def verify_telegram_secret(
 
     Last in the chain — only reachable once suffix and bot-enabled gates pass.
     Telegram sends this header on every legitimate webhook POST when we
-    register via `set_webhook(secret_token=...)`. An empty configured secret
-    also rejects defensively, though `verify_bot_enabled` should have caught
-    the disabled-bot case already.
+    register via `set_webhook(secret_token=...)`.
+
+    The accepted-secrets set lives on `app.state.telegram_webhook_secrets`
+    (a set) so it can be mutated at runtime by the admin rotate endpoint
+    (issue #40 — hot rotation without restart). During a rotation it
+    briefly contains BOTH the old and new secret so in-flight Telegram
+    POSTs aren't rejected. The lifespan task initialises it from
+    `settings.telegram_webhook_secret` at boot; if the bot is disabled
+    the `verify_bot_enabled` gate ahead of this dep should have returned
+    404 already — the empty-set fallback below is defensive.
     """
-    expected = settings.telegram_webhook_secret
-    if not expected or x_telegram_bot_api_secret_token != expected:
+    accepted: set[str] = getattr(request.app.state, "telegram_webhook_secrets", set())
+    if not accepted or x_telegram_bot_api_secret_token not in accepted:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)

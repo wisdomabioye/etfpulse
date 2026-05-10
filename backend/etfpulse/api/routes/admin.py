@@ -12,6 +12,7 @@ silently drift.
 
 from __future__ import annotations
 
+import secrets as secrets_module
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -19,7 +20,9 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from telegram.error import TelegramError
 
+from etfpulse.adapters.telegram import telegram_client
 from etfpulse.api.deps import get_db_session, require_admin_key
 from etfpulse.api.schemas.admin import (
     AdminMetrics,
@@ -27,10 +30,20 @@ from etfpulse.api.schemas.admin import (
     SchedulerJobInfo,
     SignalStatusCounts,
 )
+from etfpulse.api.schemas.telegram_admin import (
+    RotateWebhookSecretRequest,
+    RotateWebhookSecretResponse,
+)
 from etfpulse.config import settings
 from etfpulse.models import DeliveryStatus, Signal, SignalDelivery, SignalStatus
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
 from etfpulse.pipeline.scheduler import _run_cycle_with_session
+
+# Allowed updates passed to set_webhook on rotation — kept in sync with
+# `bot/lifespan.py:_ALLOWED_UPDATES`. Duplicated rather than imported to
+# avoid a route → bot import dependency (the bot package depends on api,
+# not the other way around in CLAUDE.md's domain layering).
+_ALLOWED_UPDATES = ["message", "my_chat_member"]
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -162,6 +175,12 @@ async def get_admin_metrics(
             for job in scheduler.get_jobs()
         ]
 
+    # --- Webhook secret-set size (issue #40 stuck-rotation visibility) ----
+    # None when bot is disabled (no state to inspect). 1 in steady state;
+    # 2+ means a widen-then-shrink rotation didn't complete.
+    secrets_set = getattr(request.app.state, "telegram_webhook_secrets", None)
+    accepted_webhook_secrets = len(secrets_set) if secrets_set is not None else None
+
     return AdminMetrics(
         signal_status_counts=signal_status,
         delivery_status_counts=delivery_status,
@@ -170,4 +189,116 @@ async def get_admin_metrics(
         deliveries_stuck_pending=deliveries_stuck_pending,
         deliveries_reaper_failures=deliveries_reaper_failures,
         scheduler_jobs=scheduler_jobs,
+        accepted_webhook_secrets=accepted_webhook_secrets,
     )
+
+
+@router.post(
+    "/telegram/rotate-webhook-secret",
+    response_model=RotateWebhookSecretResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def rotate_webhook_secret(
+    request: Request,
+    body: RotateWebhookSecretRequest | None = None,
+) -> RotateWebhookSecretResponse:
+    """Rotate the Telegram webhook secret WITHOUT a container restart (issue #40).
+
+    Race-free protocol:
+        1. Widen `app.state.telegram_webhook_secrets` to {old, new} BEFORE
+           calling Telegram. Any in-flight webhook POST during the rotation
+           (old-secret-signed) still verifies. Any post-rotation POST
+           (new-secret-signed) also verifies.
+        2. Call `set_webhook(secret_token=new)`. Telegram now signs future
+           webhooks with the new secret.
+        3. On success, shrink the set to just {new}. The old secret is
+           rejected from this point forward — that's the actual rotation.
+        4. On failure, revert the set to {old}. Telegram is still signing
+           with the old secret (set_webhook never landed), so the bot
+           keeps working with no operator-visible disruption.
+
+    Body is optional — omit to have the server generate a fresh secret;
+    supply `secret` if the operator wants to coordinate the rotation with
+    an env var update (and needs to know the value in advance).
+
+    The response is a one-time disclosure — the secret cannot be retrieved
+    again. The `note` field reminds the operator to update the deploy
+    env var so the new value survives a container restart.
+
+    Pre-conditions:
+        - Bot must be enabled (`app.state.bot_application` attached).
+            Otherwise there's nothing to rotate; return 503.
+    """
+    if getattr(request.app.state, "bot_application", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="bot disabled — nothing to rotate",
+        )
+
+    # Serialise concurrent rotations. The lock is held across the full
+    # widen → set_webhook → shrink sequence so a second concurrent caller
+    # waits its turn rather than racing on app.state.
+    lock = getattr(request.app.state, "telegram_webhook_rotate_lock", None)
+    if lock is None:
+        # Defensive — lifespan should have created it. Without serialisation
+        # we can't guarantee atomicity, so refuse rather than corrupt state.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="rotation lock uninitialised",
+        )
+
+    async with lock:
+        return await _do_rotate(request, body)
+
+
+async def _do_rotate(
+    request: Request, body: RotateWebhookSecretRequest | None
+) -> RotateWebhookSecretResponse:
+    """Inner rotation body — runs under `telegram_webhook_rotate_lock`."""
+    old_secrets: set[str] = getattr(request.app.state, "telegram_webhook_secrets", set())
+    if not old_secrets:
+        # Defensive — lifespan should have initialised this. If it didn't,
+        # we have no "old" to widen around, so refuse.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="webhook secret state uninitialised",
+        )
+
+    new_secret = (body.secret if body else None) or secrets_module.token_hex(32)
+    webhook_url = getattr(request.app.state, "telegram_webhook_url", None)
+    if webhook_url is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="webhook url unavailable",
+        )
+
+    # Step 1 — widen.
+    request.app.state.telegram_webhook_secrets = old_secrets | {new_secret}
+    log.info("webhook_rotate_begin", widened_to=len(old_secrets) + 1)
+
+    # Step 2 — push to Telegram.
+    try:
+        await telegram_client.set_webhook(
+            url=webhook_url,
+            secret_token=new_secret,
+            allowed_updates=_ALLOWED_UPDATES,
+        )
+    except TelegramError as exc:
+        # Step 4 — revert. Old secret is still what Telegram signs with.
+        request.app.state.telegram_webhook_secrets = old_secrets
+        log.warning(
+            "webhook_rotate_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="set_webhook failed — rotation reverted, old secret still active",
+        ) from exc
+
+    # Step 3 — shrink. Telegram now signs with new; old is dead.
+    request.app.state.telegram_webhook_secrets = {new_secret}
+    log.info("webhook_rotate_complete")
+
+    return RotateWebhookSecretResponse(secret=new_secret)

@@ -30,6 +30,7 @@ On shutdown:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -119,6 +120,17 @@ async def start_bot(app: FastAPI) -> AsyncIterator[None]:
         )
 
     app.state.bot_application = application
+    # Mutable secret set for hot rotation (issue #40). The admin rotate
+    # endpoint widens/shrinks this set; `verify_telegram_secret` reads
+    # from it. Boot value is the env-configured secret. After an in-process
+    # rotation, the env var no longer matches — operator must update env
+    # for the value to survive a container restart.
+    app.state.telegram_webhook_secrets = {settings.telegram_webhook_secret}
+    app.state.telegram_webhook_url = webhook_url
+    # Serialises concurrent rotations — two operators hitting rotate at
+    # once would otherwise race on the widen/shrink protocol and end up
+    # with app.state desync'd from what Telegram signs with.
+    app.state.telegram_webhook_rotate_lock = asyncio.Lock()
     log.info("bot_started", webhook_url=webhook_url, allowed_updates=_ALLOWED_UPDATES)
 
     try:

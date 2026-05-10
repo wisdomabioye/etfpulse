@@ -449,3 +449,29 @@ class TestAdminMetricsShape:
             "failed": 1,
             "skipped": 1,
         }
+
+    async def test_accepted_webhook_secrets_null_when_bot_off(self, db_session, metrics_client):
+        """Default test mode disables the bot → `telegram_webhook_secrets`
+        never gets set on app.state → field is null. Distinguishes
+        "bot off" from "rotation in progress" (which would be 2)."""
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["accepted_webhook_secrets"] is None
+
+    async def test_accepted_webhook_secrets_reflects_state(self, db_session, monkeypatch):
+        """When bot is up, the field reports `len(app.state.telegram_webhook_secrets)`.
+        Steady state is 1; 2+ would indicate a stuck/in-flight rotation."""
+        monkeypatch.setattr(settings, "admin_api_key", "secret-key")
+        app = create_app()
+        # Simulate "rotation in progress" — two accepted secrets.
+        app.state.telegram_webhook_secrets = {"old-secret-value", "new-secret-value"}
+
+        async def _override() -> AsyncIterator:
+            yield db_session
+
+        app.dependency_overrides[get_db_session] = _override
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        app.dependency_overrides.clear()
+        assert r.status_code == 200
+        assert r.json()["accepted_webhook_secrets"] == 2
