@@ -315,4 +315,10 @@ export interface AdminMetrics {
   deliveries_reaper_failures: number;
   /** Null when run_scheduler=false in the backend. */
   scheduler_jobs: SchedulerJobInfo[] | null;
+  /** Null when bot disabled; >1 indicates a stuck rotation (#40). */
+  accepted_webhook_secrets: number | null;
+  /** Prompt version this process stamps on new signals (#32). */
+  current_ai_prompt_version: string;
+  /** Full-table distribution sorted by count DESC. */
+  signal_counts_by_prompt_version: Record<string, number>;
 }

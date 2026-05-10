@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import { useAdminMetrics } from '../api/queries';
 import { ApiError } from '../api/client';
 import type { AdminMetrics, SchedulerJobInfo } from '../api/types';
@@ -49,7 +50,7 @@ export function Admin() {
 
   const query = useAdminMetrics(activeKey);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     persistKey(keyInput);
     setActiveKey(keyInput);
@@ -126,7 +127,7 @@ function MetricsSkeleton() {
   );
 }
 
-function MetricsError({ error }: { error: unknown }) {
+function MetricsError({ error }: { error: Error }) {
   if (error instanceof ApiError) {
     if (error.status === 401) {
       return (
@@ -145,12 +146,7 @@ function MetricsError({ error }: { error: unknown }) {
       );
     }
   }
-  return (
-    <EmptyState
-      title="Could not load metrics."
-      hint={error instanceof Error ? error.message : 'Unknown error'}
-    />
-  );
+  return <EmptyState title="Could not load metrics." hint={error.message} />;
 }
 
 function MetricsBody({ data }: { data: AdminMetrics }) {
@@ -207,6 +203,46 @@ function MetricsBody({ data }: { data: AdminMetrics }) {
         <Kicker>Scheduler</Kicker>
         <SchedulerTable jobs={data.scheduler_jobs} />
       </section>
+
+      {/* AI prompt versioning (#32) */}
+      <section className="space-y-3">
+        <Kicker>AI prompt version</Kicker>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatTile
+            label="Active version"
+            value={<span className="font-mono">{data.current_ai_prompt_version}</span>}
+          />
+          {Object.entries(data.signal_counts_by_prompt_version).map(([version, count]) => (
+            <StatTile
+              key={version}
+              label={`Signals · ${version}`}
+              value={count}
+            />
+          ))}
+        </div>
+        <Hint>
+          Track-record can be sliced by version via{' '}
+          <code className="font-mono">?ai_prompt_version={data.current_ai_prompt_version}</code>{' '}
+          to avoid mixing cohorts after a prompt bump.
+        </Hint>
+      </section>
+
+      {/* Webhook secrets (#40) */}
+      {data.accepted_webhook_secrets !== null && (
+        <section className="space-y-3">
+          <Kicker>Webhook secret rotation</Kicker>
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="Accepted secrets" value={data.accepted_webhook_secrets} />
+          </div>
+          {data.accepted_webhook_secrets > 1 && (
+            <Hint warn>
+              {data.accepted_webhook_secrets} secrets accepted — a rotation
+              is mid-flight or didn't complete. Re-run rotation to converge
+              to a single active secret.
+            </Hint>
+          )}
+        </section>
+      )}
     </>
   );
 }
@@ -258,7 +294,7 @@ function SchedulerTable({ jobs }: { jobs: SchedulerJobInfo[] | null }) {
   );
 }
 
-function Hint({ warn, children }: { warn?: boolean; children: React.ReactNode }) {
+function Hint({ warn, children }: { warn?: boolean; children: ReactNode }) {
   const color = warn ? 'text-warn' : 'text-text-3';
   return <div className={`text-[12px] font-mono ${color}`}>{children}</div>;
 }

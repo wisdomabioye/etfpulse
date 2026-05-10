@@ -54,6 +54,7 @@ async def _seed_signal_with_outcome(
     hit_stop: bool | None = None,
     evaluated_at: datetime | None = None,
     key: str = "x",
+    ai_prompt_version: str = "v3",
 ) -> SignalOutcome:
     """Seed one Signal + one SignalOutcome (the public surface for /track-record).
 
@@ -68,7 +69,7 @@ async def _seed_signal_with_outcome(
         status="alerted",
         price_at_creation=Decimal("84200"),
         price_source="binance",
-        ai_prompt_version="v3",
+        ai_prompt_version=ai_prompt_version,
         fingerprint=compute_fingerprint("track-record-test", key),
         signal_date=date(2026, 4, 25),
     )
@@ -240,6 +241,81 @@ class TestFilters:
         for bad in (0, 11, -1):
             r = await client.get(f"/api/track-record?confidence_min={bad}")
             assert r.status_code == 422
+
+    async def test_ai_prompt_version_filter_narrows(self, db_session, client):
+        """Issue #32 — cross-version filter so a prompt bump doesn't
+        pollute the headline hit rate. v2 cohort and v3 cohort must
+        each slice to their own outcomes only."""
+        await _seed_signal_with_outcome(
+            db_session, hit_target=True, key="v2-hit", ai_prompt_version="v2"
+        )
+        await _seed_signal_with_outcome(
+            db_session, hit_target=False, key="v2-miss", ai_prompt_version="v2"
+        )
+        await _seed_signal_with_outcome(
+            db_session, hit_target=True, key="v3-1", ai_prompt_version="v3"
+        )
+
+        body_v2 = (await client.get("/api/track-record?ai_prompt_version=v2")).json()
+        assert body_v2["summary"]["total_evaluated"] == 2
+        assert body_v2["summary"]["targets_hit"] == 1
+        assert body_v2["summary"]["hit_rate_pct"] == 50.0
+        assert len(body_v2["items"]) == 2
+
+        body_v3 = (await client.get("/api/track-record?ai_prompt_version=v3")).json()
+        assert body_v3["summary"]["total_evaluated"] == 1
+        assert body_v3["summary"]["targets_hit"] == 1
+        assert body_v3["summary"]["hit_rate_pct"] == 100.0
+
+    async def test_ai_prompt_version_multi_digit_accepted(self, db_session, client):
+        """Pattern `^v[0-9]+$` accepts multi-digit cohorts — v10, v12, v100.
+        A prompt-version bump past v9 must not silently break the filter."""
+        await _seed_signal_with_outcome(
+            db_session, hit_target=True, key="v12-only", ai_prompt_version="v12"
+        )
+        await _seed_signal_with_outcome(
+            db_session, hit_target=False, key="v3-other", ai_prompt_version="v3"
+        )
+
+        body = (await client.get("/api/track-record?ai_prompt_version=v12")).json()
+        assert body["summary"]["total_evaluated"] == 1
+        assert body["items"][0]["confidence"] == 7  # the v12 one
+
+    async def test_ai_prompt_version_invalid_format_rejected(self, db_session, client):
+        """Pattern `^v[0-9]+$` matches DB CHECK — `v3`, `v12` ok;
+        `3`, `v`, `v3.0`, `vX` rejected with 422."""
+        for bad in ("3", "v", "v3.0", "vX", "version3"):
+            r = await client.get(f"/api/track-record?ai_prompt_version={bad}")
+            assert r.status_code == 422, f"expected 422 for {bad!r}"
+
+    async def test_ai_prompt_version_combines_with_other_filters(self, db_session, client):
+        """Cross-version filter composes with asset/signal_type/confidence_min
+        — verifies the JOIN-when-set logic doesn't shadow the other WHEREs."""
+        await _seed_signal_with_outcome(
+            db_session,
+            asset="BTC",
+            hit_target=True,
+            key="match",
+            ai_prompt_version="v3",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            asset="ETH",
+            hit_target=True,
+            key="wrong-asset",
+            ai_prompt_version="v3",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            asset="BTC",
+            hit_target=True,
+            key="wrong-version",
+            ai_prompt_version="v2",
+        )
+
+        body = (await client.get("/api/track-record?asset=BTC&ai_prompt_version=v3")).json()
+        assert body["summary"]["total_evaluated"] == 1
+        assert body["items"][0]["asset"] == "BTC"
 
 
 # ---------------------------------------------------------------------------

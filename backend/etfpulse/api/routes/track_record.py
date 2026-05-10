@@ -43,7 +43,7 @@ from etfpulse.api.schemas.track_record import (
     TrackRecordItemOut,
     TrackRecordSummary,
 )
-from etfpulse.models import SignalOutcome
+from etfpulse.models import Signal, SignalOutcome
 
 # Generic so `_apply_filters` returns the same Select shape it accepts —
 # keeps the row query and the aggregate query sharing one WHERE-builder.
@@ -58,6 +58,16 @@ async def get_track_record(
     asset: AssetLiteral | None = Query(default=None),
     signal_type: SignalTypeLiteral | None = Query(default=None),
     confidence_min: int | None = Query(default=None, ge=1, le=10),
+    # Issue #32 — cross-version track-record filter. Slice the public hit
+    # rate by the prompt version that produced each signal so a prompt
+    # bump (v2 → v3) doesn't pollute the headline number. Accepts any
+    # `v[0-9]+` string; FE typically passes the value currently active
+    # on the backend (surfaced via `/api/admin/metrics` for operators).
+    ai_prompt_version: str | None = Query(
+        default=None,
+        pattern=r"^v[0-9]+$",
+        description="Restrict to outcomes whose source signal was built with this prompt version.",
+    ),
     cursor: str | None = Query(default=None),
     page: int | None = Query(default=None, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
@@ -89,6 +99,14 @@ async def get_track_record(
             q = q.where(SignalOutcome.signal_type == signal_type)
         if confidence_min is not None:
             q = q.where(SignalOutcome.confidence >= confidence_min)
+        if ai_prompt_version is not None:
+            # `ai_prompt_version` lives on Signal, not SignalOutcome, so
+            # we JOIN. Outcome → Signal is 1:1 via signal_id, so this
+            # doesn't multiply rows. Only joined when the filter is set
+            # to keep the unfiltered query path single-table-fast.
+            q = q.join(Signal, Signal.id == SignalOutcome.signal_id).where(
+                Signal.ai_prompt_version == ai_prompt_version
+            )
         return q
 
     # ------------------------------------------------------------------

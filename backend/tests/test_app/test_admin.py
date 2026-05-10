@@ -450,6 +450,58 @@ class TestAdminMetricsShape:
             "skipped": 1,
         }
 
+    async def test_current_ai_prompt_version_is_active_string(self, db_session, metrics_client):
+        """Issue #32 — operator sees what version this process stamps on new
+        signals. Sourced from `pipeline.analysis.AI_PROMPT_VERSION`."""
+        from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["current_ai_prompt_version"] == AI_PROMPT_VERSION
+
+    async def test_prompt_version_counts_group_correctly(self, db_session, metrics_client):
+        """Distribution should reflect actual `signals.ai_prompt_version`
+        values, sorted by count descending."""
+        # 3× v3, 2× v2, 1× v1
+        for i, pv in enumerate(["v3", "v3", "v3", "v2", "v2", "v1"]):
+            await _seed_signal(db_session, fp_seed=f"pv{i}")
+            # _seed_signal stamps v1 (the model server_default); override.
+            await db_session.execute(
+                Signal.__table__.update()
+                .where(Signal.fingerprint == compute_fingerprint("BTC", "metrics-test", f"pv{i}"))
+                .values(ai_prompt_version=pv)
+            )
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        counts = r.json()["signal_counts_by_prompt_version"]
+        assert counts == {"v3": 3, "v2": 2, "v1": 1}
+        # Dict order is by count DESC — JSON preserves Python dict order.
+        assert list(counts.keys()) == ["v3", "v2", "v1"]
+
+    async def test_prompt_version_counts_tiebreak_is_deterministic(
+        self, db_session, metrics_client
+    ):
+        """When two cohorts have equal counts, sort by version string for
+        stable display. Without the tie-break the dashboard would flicker
+        between renders on equal-count cohorts."""
+        # 2× v3, 2× v2 — equal counts.
+        for i, pv in enumerate(["v2", "v2", "v3", "v3"]):
+            await _seed_signal(db_session, fp_seed=f"tie{i}")
+            await db_session.execute(
+                Signal.__table__.update()
+                .where(Signal.fingerprint == compute_fingerprint("BTC", "metrics-test", f"tie{i}"))
+                .values(ai_prompt_version=pv)
+            )
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        counts = r.json()["signal_counts_by_prompt_version"]
+        # v2 sorts before v3 lexicographically; with equal counts the
+        # secondary ORDER BY pins v2 first.
+        assert list(counts.keys()) == ["v2", "v3"]
+
+    async def test_prompt_version_counts_empty_db(self, db_session, metrics_client):
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["signal_counts_by_prompt_version"] == {}
+
     async def test_accepted_webhook_secrets_null_when_bot_off(self, db_session, metrics_client):
         """Default test mode disables the bot → `telegram_webhook_secrets`
         never gets set on app.state → field is null. Distinguishes

@@ -36,6 +36,7 @@ from etfpulse.api.schemas.telegram_admin import (
 )
 from etfpulse.config import settings
 from etfpulse.models import DeliveryStatus, Signal, SignalDelivery, SignalStatus
+from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
 from etfpulse.pipeline.scheduler import _run_cycle_with_session
 
@@ -181,6 +182,21 @@ async def get_admin_metrics(
     secrets_set = getattr(request.app.state, "telegram_webhook_secrets", None)
     accepted_webhook_secrets = len(secrets_set) if secrets_set is not None else None
 
+    # --- Prompt-version distribution (issue #32) --------------------------
+    # GROUP BY ai_prompt_version. Sorted by count DESC so the dominant
+    # cohort renders first in the dashboard. Empty DB → {}.
+    pv_rows = (
+        await session.execute(
+            select(Signal.ai_prompt_version, func.count())
+            .group_by(Signal.ai_prompt_version)
+            # Secondary sort by version string for deterministic display
+            # when two cohorts have equal counts (v2=50 and v3=50 would
+            # otherwise flip between renders).
+            .order_by(func.count().desc(), Signal.ai_prompt_version)
+        )
+    ).all()
+    signal_counts_by_prompt_version = {row[0]: row[1] for row in pv_rows}
+
     return AdminMetrics(
         signal_status_counts=signal_status,
         delivery_status_counts=delivery_status,
@@ -190,6 +206,8 @@ async def get_admin_metrics(
         deliveries_reaper_failures=deliveries_reaper_failures,
         scheduler_jobs=scheduler_jobs,
         accepted_webhook_secrets=accepted_webhook_secrets,
+        current_ai_prompt_version=AI_PROMPT_VERSION,
+        signal_counts_by_prompt_version=signal_counts_by_prompt_version,
     )
 
 

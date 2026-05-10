@@ -89,3 +89,17 @@ class AdminMetrics(BaseModel):
     # mid-rotation, or the operator pinned the set artificially).
     # None when the bot is disabled (no state to inspect).
     accepted_webhook_secrets: int | None = None
+
+    # Issue #32 — currently active prompt version (from
+    # `pipeline.analysis.AI_PROMPT_VERSION`). The version of every NEW
+    # signal stamped from this process. Operator compares against
+    # `signal_counts_by_prompt_version` below to see how the cohort
+    # composition is shifting after a bump.
+    current_ai_prompt_version: str
+
+    # Distribution of `signals.ai_prompt_version` across the full table.
+    # Useful for spotting "we have 2000 v2 signals and 30 v3 signals" —
+    # the track-record headline is meaningless until the v3 cohort gets
+    # a meaningful sample. Dict ordering is by descending count for
+    # convenient inspection in dashboards.
+    signal_counts_by_prompt_version: dict[str, int]
