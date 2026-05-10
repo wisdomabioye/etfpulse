@@ -30,6 +30,7 @@ _SESSION_CONSUMERS = (
     "etfpulse.bot.handlers.subscribe",
     "etfpulse.bot.handlers.prefs",
     "etfpulse.bot.handlers.track_record",
+    "etfpulse.bot.handlers.membership",
 )
 
 
@@ -451,3 +452,250 @@ class TestCmdTrackRecord:
         assert "Hit rate not yet computable" in reply_text
         # Sanity — the cold-boot caption MUST NOT fire here.
         assert "No outcomes evaluated yet" not in reply_text
+
+
+# ---- my_chat_member (issue #35) -------------------------------------------
+
+
+def _membership_update(
+    *,
+    chat_id: int = -100600,
+    chat_type: str = Chat.SUPERGROUP,
+    title: str = "Alpha Traders",
+    old_status: str,
+    new_status: str,
+) -> MagicMock:
+    """Build a fake my_chat_member Update.
+
+    `effective_chat` reads from update.my_chat_member.chat for membership
+    updates; we mirror them so the handler picks up the same chat both ways."""
+    update = MagicMock()
+    update.effective_chat.id = chat_id
+    update.effective_chat.type = chat_type
+    update.effective_chat.title = title
+    update.effective_user = MagicMock()
+    update.effective_message.reply_html = AsyncMock()
+
+    event = MagicMock()
+    event.chat.id = chat_id
+    event.chat.type = chat_type
+    event.chat.title = title
+    event.old_chat_member.status = old_status
+    event.new_chat_member.status = new_status
+    update.my_chat_member = event
+    return update
+
+
+class TestMyChatMember:
+    async def test_bot_added_creates_group(self, db_session, patch_session):
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+        from etfpulse.models import TelegramGroup
+
+        upd = _membership_update(
+            chat_id=-100700,
+            title="Alpha Traders",
+            old_status=ChatMember.LEFT,
+            new_status=ChatMember.MEMBER,
+        )
+        await handle_my_chat_member(upd, _ctx())
+
+        group = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -100700))
+        ).scalar_one()
+        assert group.title == "Alpha Traders"
+        assert group.is_active is True
+        upd.effective_message.reply_html.assert_awaited_once()
+        body = upd.effective_message.reply_html.await_args.args[0]
+        assert "ETFPulse is now monitoring this group" in body
+
+    async def test_bot_removed_soft_deletes_group(self, db_session, patch_session):
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+        from etfpulse.models import TelegramGroup
+
+        # First add → registers.
+        await handle_my_chat_member(
+            _membership_update(
+                chat_id=-100800,
+                old_status=ChatMember.LEFT,
+                new_status=ChatMember.MEMBER,
+            ),
+            _ctx(),
+        )
+        # Then remove.
+        await handle_my_chat_member(
+            _membership_update(
+                chat_id=-100800,
+                old_status=ChatMember.MEMBER,
+                new_status=ChatMember.LEFT,
+            ),
+            _ctx(),
+        )
+
+        group = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -100800))
+        ).scalar_one()
+        assert group.is_active is False
+
+    async def test_readd_reactivates_existing_group(self, db_session, patch_session):
+        """Same chat removed then re-added — preserves prefs, flips is_active back on."""
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+        from etfpulse.models import TelegramGroup
+
+        await handle_my_chat_member(
+            _membership_update(
+                chat_id=-100900,
+                title="Original",
+                old_status=ChatMember.LEFT,
+                new_status=ChatMember.MEMBER,
+            ),
+            _ctx(),
+        )
+        # Mutate prefs on this group so we can verify they survive the
+        # remove → re-add cycle (soft-delete must preserve user config).
+        seeded = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -100900))
+        ).scalar_one()
+        seeded.pref_min_confidence = 9
+        seeded.pref_assets = ["BTC"]
+        await db_session.flush()
+
+        await handle_my_chat_member(
+            _membership_update(
+                chat_id=-100900,
+                old_status=ChatMember.MEMBER,
+                new_status=ChatMember.BANNED,
+            ),
+            _ctx(),
+        )
+        # Re-add with a new title.
+        await handle_my_chat_member(
+            _membership_update(
+                chat_id=-100900,
+                title="Renamed",
+                old_status=ChatMember.BANNED,
+                new_status=ChatMember.MEMBER,
+            ),
+            _ctx(),
+        )
+
+        group = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -100900))
+        ).scalar_one()
+        assert group.is_active is True
+        assert group.title == "Renamed"  # title refreshed on re-add
+        # Prefs from before removal must still be intact — that's the
+        # whole point of soft-delete vs hard-delete on bot removal.
+        assert group.pref_min_confidence == 9
+        assert group.pref_assets == ["BTC"]
+
+    async def test_promotion_is_noop(self, db_session, patch_session):
+        """member → administrator should not create a new row or touch state."""
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+        from etfpulse.models import TelegramGroup
+
+        # Seed via initial add.
+        await handle_my_chat_member(
+            _membership_update(
+                chat_id=-101000,
+                old_status=ChatMember.LEFT,
+                new_status=ChatMember.MEMBER,
+            ),
+            _ctx(),
+        )
+        before = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -101000))
+        ).scalar_one()
+        before_updated_at = before.updated_at
+
+        # Promotion.
+        upd = _membership_update(
+            chat_id=-101000,
+            old_status=ChatMember.MEMBER,
+            new_status=ChatMember.ADMINISTRATOR,
+        )
+        await handle_my_chat_member(upd, _ctx())
+
+        # No reply, no DB change.
+        upd.effective_message.reply_html.assert_not_called()
+        await db_session.refresh(before)
+        assert before.updated_at == before_updated_at
+
+    async def test_dm_ignored(self, db_session, patch_session):
+        """my_chat_member fires for DMs too (e.g. the user blocks the bot).
+        Handler should no-op — DM state lives on User.is_active via /start."""
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+        from etfpulse.models import TelegramGroup
+
+        upd = _membership_update(
+            chat_id=42,
+            chat_type=Chat.PRIVATE,
+            title=None,
+            old_status=ChatMember.MEMBER,
+            new_status=ChatMember.BANNED,
+        )
+        await handle_my_chat_member(upd, _ctx())
+
+        # No row created.
+        n = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == 42))
+        ).scalar_one_or_none()
+        assert n is None
+        upd.effective_message.reply_html.assert_not_called()
+
+    async def test_remove_unknown_group_is_noop(self, db_session, patch_session):
+        """Bot removed from a group we never registered (pre-handler legacy).
+        Should log + return cleanly, not error."""
+        from telegram import ChatMember
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+
+        upd = _membership_update(
+            chat_id=-999999,
+            old_status=ChatMember.MEMBER,
+            new_status=ChatMember.LEFT,
+        )
+        await handle_my_chat_member(upd, _ctx())
+        # Just shouldn't raise.
+
+    # NOTE on concurrency: `_on_added` catches IntegrityError on the
+    # chat_id UNIQUE constraint and re-resolves, mirroring the same
+    # pattern in `_common.py:_resolve_or_create_group`. Neither path is
+    # unit-tested for the IntegrityError branch because the SAVEPOINT
+    # fixture (`patch_session`) can't compose with a `commit + rollback`
+    # cycle inside the handler — the rollback unwinds the outer test
+    # transaction. The code is short, parallel to the well-worn
+    # `_resolve_or_create_group` shape, and the same race in production
+    # exercises it.
+
+    async def test_welcome_send_failure_does_not_undo_registration(self, db_session, patch_session):
+        """If reply_html raises (no send permission), the group is still
+        registered — commit happens before the reply."""
+        from telegram import ChatMember
+        from telegram.error import TelegramError
+
+        from etfpulse.bot.handlers.membership import handle_my_chat_member
+        from etfpulse.models import TelegramGroup
+
+        upd = _membership_update(
+            chat_id=-101100,
+            old_status=ChatMember.LEFT,
+            new_status=ChatMember.MEMBER,
+        )
+        upd.effective_message.reply_html = AsyncMock(side_effect=TelegramError("no permission"))
+
+        await handle_my_chat_member(upd, _ctx())
+
+        group = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -101100))
+        ).scalar_one()
+        assert group.is_active is True

@@ -64,5 +64,16 @@ jobs:
       - name: Type check
         run: uv run mypy etfpulse/
 
+      # Issue #22 — every migration must declare a non-trivial downgrade().
+      # Static check (no DB needed); fast guardrail before the round-trip.
+      - name: Migration rollback (static)
+        run: uv run poe migrate-check
+
+      # Issue #22 — verify the most recent migration's downgrade SQL is
+      # valid against a real Postgres. Runs before tests so a broken
+      # downgrade fails CI fast and clearly.
+      - name: Migration rollback (round-trip)
+        run: uv run poe migrate-roundtrip
+
       - name: Test + coverage
         run: uv run poe cov

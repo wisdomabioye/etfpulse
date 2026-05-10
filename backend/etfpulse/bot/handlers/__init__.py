@@ -11,9 +11,10 @@ is the composition: listing every command name + handler pair.
 
 from __future__ import annotations
 
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Application, ChatMemberHandler, CommandHandler
 
 from etfpulse.bot.handlers.help import cmd_help
+from etfpulse.bot.handlers.membership import handle_my_chat_member
 from etfpulse.bot.handlers.prefs import cmd_prefs
 from etfpulse.bot.handlers.start import cmd_start
 from etfpulse.bot.handlers.subscribe import cmd_subscribe, cmd_unsubscribe
@@ -42,6 +43,15 @@ def register_handlers(application: Application) -> None:
     """
     for name, handler in _COMMANDS:
         application.add_handler(CommandHandler(name, handler))  # type: ignore[arg-type]
+
+    # my_chat_member — auto-register groups (issue #35). The MY_CHAT_MEMBER
+    # filter narrows to updates about THIS bot's membership; the sibling
+    # CHAT_MEMBER fires for other users joining/leaving and needs admin
+    # rights to receive — which we don't have or want. Lives outside
+    # `_COMMANDS` because it's not a CommandHandler.
+    application.add_handler(
+        ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
 
 
 __all__ = ["register_handlers"]

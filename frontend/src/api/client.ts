@@ -45,9 +45,13 @@ function buildUrl(path: string, params?: object): string {
   return qs ? `${API_BASE}${path}?${qs}` : `${API_BASE}${path}`;
 }
 
-export async function apiGet<T>(path: string, params?: object): Promise<T> {
+export async function apiGet<T>(
+  path: string,
+  params?: object,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(buildUrl(path, params), {
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', ...(extraHeaders ?? {}) },
   });
 
   if (!res.ok) {

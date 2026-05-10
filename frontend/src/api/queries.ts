@@ -13,6 +13,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { ApiError, apiGet } from './client';
 import type {
+  AdminMetrics,
   DashboardStats,
   PaginatedSignals,
   PaginatedTrackRecord,
@@ -90,6 +91,25 @@ export function useTrackRecord(filters?: TrackRecordFilters) {
   return useQuery({
     queryKey: ['track-record', filters ?? {}],
     queryFn: () => apiGet<PaginatedTrackRecord>('/api/track-record', filters),
+  });
+}
+
+/** Admin metrics — gated by `X-Admin-Key`. The hook is disabled while
+ * `adminKey` is empty so we don't fire requests with no auth (would 401
+ * and add noise to logs). Refetches every 15s — operator dashboards want
+ * fresh state, not 30s-stale snapshots. Retries are off because a 401 or
+ * 503 is a config issue, not transient.
+ */
+export function useAdminMetrics(adminKey: string) {
+  return useQuery({
+    queryKey: ['admin', 'metrics', adminKey],
+    queryFn: () =>
+      apiGet<AdminMetrics>('/api/admin/metrics', undefined, {
+        'X-Admin-Key': adminKey,
+      }),
+    enabled: adminKey.length > 0,
+    refetchInterval: 15_000,
+    retry: false,
   });
 }
 

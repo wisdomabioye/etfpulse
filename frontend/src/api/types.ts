@@ -279,3 +279,40 @@ export interface RegimeResponse {
   macro_events_nearby: string[];
   classified_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+export interface SignalStatusCounts {
+  pending: number;
+  alerted: number;
+  expired: number;
+}
+
+export interface DeliveryStatusCounts {
+  pending: number;
+  delivered: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface SchedulerJobInfo {
+  id: string;
+  /** ISO-8601 UTC datetime; null when the job is paused or not yet scheduled. */
+  next_run_at: string | null;
+  trigger: string;
+  pending: boolean;
+}
+
+/** Response from `GET /api/admin/metrics` (admin-keyed). */
+export interface AdminMetrics {
+  signal_status_counts: SignalStatusCounts;
+  delivery_status_counts: DeliveryStatusCounts;
+  signals_overdue_unreaped: number;
+  signals_null_confidence: number;
+  deliveries_stuck_pending: number;
+  deliveries_reaper_failures: number;
+  /** Null when run_scheduler=false in the backend. */
+  scheduler_jobs: SchedulerJobInfo[] | null;
+}
