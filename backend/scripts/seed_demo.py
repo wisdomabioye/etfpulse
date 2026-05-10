@@ -27,6 +27,13 @@ What you get (12 signals total):
   - One `RegimeSnapshot` row so `/regime` returns 200 and the TopNav badge
     + home tile light up. Three `NewsItem` rows so the news ingestion
     surface looks live (also feeds the news_context query in dev).
+  - Stage 8-P10: SignalOutcome rows on most aged signals (skipping the
+    "pending" + AI-failed cases) so /track-record + the home hit-rate
+    tile + the Telegram /track-record command all render with non-trivial
+    data on first dev boot. 9 outcomes total — 4 target-hits, 2 stop-hits,
+    3 neither — produces a 4/9 ≈ 44% hit rate. The public track record's
+    value proposition is transparency, not cherry-picking; the demo
+    showing some misses + a sub-50% rate IS the proof point.
 """
 
 from __future__ import annotations
@@ -176,6 +183,20 @@ SIGNALS: list[dict] = [
             "time_horizon": "swing",
         },
         "alerted_to_count": 8,
+        # Stage 8-P10 — short signal hit its target as inflows reversed.
+        "outcome": {
+            "direction": "short",
+            "target_price": Decimal("82500.00"),
+            "stop_price": Decimal("85800.00"),
+            "price_at_signal": Decimal("84200.00"),
+            "price_after_24h": Decimal("83100.00"),
+            "price_after_72h": Decimal("82300.00"),
+            "hit_target": True,
+            "hit_stop": False,
+            "max_favorable": Decimal("0.0226"),
+            "max_adverse": Decimal("0.0048"),
+            "evaluated_at": _ago(0.3) + timedelta(hours=72),
+        },
     },
     # 1 — ETH magnitude, confidence 8, pending. Stage 7-P10: carries
     # markup-regime context + the matching news set.
@@ -247,6 +268,21 @@ SIGNALS: list[dict] = [
             "time_horizon": "scalp",
         },
         "alerted_to_count": 3,
+        # Stage 8-P10 — low-conviction acceleration signal; no decisive
+        # move within the 72h window, neither target nor stop touched.
+        "outcome": {
+            "direction": "long",
+            "target_price": Decimal("85800.00"),
+            "stop_price": Decimal("83100.00"),
+            "price_at_signal": Decimal("84200.00"),
+            "price_after_24h": Decimal("84050.00"),
+            "price_after_72h": Decimal("83880.00"),
+            "hit_target": False,
+            "hit_stop": False,
+            "max_favorable": Decimal("0.0072"),
+            "max_adverse": Decimal("0.0089"),
+            "evaluated_at": _ago(4) + timedelta(hours=72),
+        },
     },
     # 3 — ETH divergence, confidence 7, alerted
     {
@@ -281,6 +317,21 @@ SIGNALS: list[dict] = [
             "time_horizon": "swing",
         },
         "alerted_to_count": 10,
+        # Stage 8-P10 — divergence resolved as anticipated; spot caught
+        # up with flows over the 72h window. Target hit.
+        "outcome": {
+            "direction": "long",
+            "target_price": Decimal("2620.00"),
+            "stop_price": Decimal("2390.00"),
+            "price_at_signal": Decimal("2480.50"),
+            "price_after_24h": Decimal("2515.00"),
+            "price_after_72h": Decimal("2640.00"),
+            "hit_target": True,
+            "hit_stop": False,
+            "max_favorable": Decimal("0.0644"),
+            "max_adverse": Decimal("0.0067"),
+            "evaluated_at": _ago(8) + timedelta(hours=72),
+        },
     },
     # 4 — BTC magnitude, confidence 6, pending, NULL ai_analysis (AI failed)
     {
@@ -332,6 +383,21 @@ SIGNALS: list[dict] = [
             "time_horizon": "scalp",
         },
         "alerted_to_count": 5,
+        # Stage 8-P10 — mid-confidence streak break that didn't follow
+        # through; price drifted into the stop zone.
+        "outcome": {
+            "direction": "long",
+            "target_price": Decimal("85100.00"),
+            "stop_price": Decimal("83400.00"),
+            "price_at_signal": Decimal("84200.00"),
+            "price_after_24h": Decimal("83700.00"),
+            "price_after_72h": Decimal("83250.00"),
+            "hit_target": False,
+            "hit_stop": True,
+            "max_favorable": Decimal("0.0024"),
+            "max_adverse": Decimal("0.0149"),
+            "evaluated_at": _ago(22) + timedelta(hours=72),
+        },
     },
     # 6 — ETH regime_shift, confidence 10, alerted — top-tier signal, has outcome.
     # Stage 7-P10: trigger_data uses the live Wyckoff enum values
@@ -414,6 +480,21 @@ SIGNALS: list[dict] = [
             "time_horizon": "swing",
         },
         "alerted_to_count": 4,
+        # Stage 8-P10 — divergence persisted but spot didn't break either
+        # level within 72h; flat-ish range trade.
+        "outcome": {
+            "direction": "long",
+            "target_price": Decimal("85000.00"),
+            "stop_price": Decimal("83400.00"),
+            "price_at_signal": Decimal("84200.00"),
+            "price_after_24h": Decimal("84080.00"),
+            "price_after_72h": Decimal("83960.00"),
+            "hit_target": False,
+            "hit_stop": False,
+            "max_favorable": Decimal("0.0061"),
+            "max_adverse": Decimal("0.0091"),
+            "evaluated_at": _ago(42) + timedelta(hours=72),
+        },
     },
     # 8 — BTC acceleration, confidence 3 (neg bucket), alerted, evaluated (missed)
     {
@@ -506,6 +587,22 @@ SIGNALS: list[dict] = [
             "time_horizon": "scalp",
         },
         "alerted_to_count": 0,
+        # Stage 8-P10 — low-confidence ETH magnitude signal stopped out;
+        # demo proves the public surface shows misses honestly even at the
+        # bottom of the confidence band (anti-cherry-pick signal).
+        "outcome": {
+            "direction": "long",
+            "target_price": Decimal("2580.00"),
+            "stop_price": Decimal("2440.00"),
+            "price_at_signal": Decimal("2495.00"),
+            "price_after_24h": Decimal("2462.00"),
+            "price_after_72h": Decimal("2438.00"),
+            "hit_target": False,
+            "hit_stop": True,
+            "max_favorable": Decimal("0.0024"),
+            "max_adverse": Decimal("0.0228"),
+            "evaluated_at": _ago(70) + timedelta(hours=72),
+        },
     },
     # 11 — Oldest, BTC regime_shift, confidence 7, EXPIRED (past expires_at).
     # Stage 7-P10: live Wyckoff transition (markup → distribution) +
@@ -544,8 +641,29 @@ SIGNALS: list[dict] = [
             "time_horizon": "position",
         },
         "alerted_to_count": 6,
+        # Stage 8-P10 — high-conf regime shift played out as anticipated;
+        # markup → distribution call hit its lower target by the close of
+        # the 72h window. Last expired-status signal in the seed.
+        "outcome": {
+            "direction": "short",
+            "target_price": Decimal("82500.00"),
+            "stop_price": Decimal("85800.00"),
+            "price_at_signal": Decimal("84500.00"),
+            "price_after_24h": Decimal("83400.00"),
+            "price_after_72h": Decimal("82100.00"),
+            "hit_target": True,
+            "hit_stop": False,
+            "max_favorable": Decimal("0.0284"),
+            "max_adverse": Decimal("0.0083"),
+            "evaluated_at": _ago(80) + timedelta(hours=72),
+        },
     },
 ]
+
+# Snapshot the outcome count BEFORE `main()`'s `spec.pop("outcome", ...)`
+# loop mutates SIGNALS in-place. Used only for the trailing print —
+# diagnostic/UX, not part of the seed contract.
+_outcome_count = sum(1 for spec in SIGNALS if "outcome" in spec)
 
 
 async def main() -> None:
@@ -744,7 +862,7 @@ async def main() -> None:
         await s.commit()
 
     print(
-        f"Seeded {len(SIGNALS)} signals + 2 outcomes + deliveries "
+        f"Seeded {len(SIGNALS)} signals + {_outcome_count} outcomes + deliveries "
         "+ 1 regime snapshot + 3 news items."
     )
 
