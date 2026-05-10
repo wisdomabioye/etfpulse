@@ -239,6 +239,132 @@ class TestCmdPrefs:
         assert "Usage" in reply_text
 
 
+# ---- /prefs in groups — admin gate (issue #39) ----------------------------
+
+
+def _group_ctx(args: list[str], *, member_status: str | None) -> MagicMock:
+    """Build a ContextTypes-like mock whose `bot.get_chat_member` resolves
+    to a ChatMember with the given status. `member_status=None` makes the
+    API call raise — exercises the fail-closed branch."""
+    from telegram.error import TelegramError
+
+    ctx = MagicMock()
+    ctx.args = args
+    if member_status is None:
+        ctx.bot.get_chat_member = AsyncMock(side_effect=TelegramError("api down"))
+    else:
+        member = MagicMock()
+        member.status = member_status
+        ctx.bot.get_chat_member = AsyncMock(return_value=member)
+    return ctx
+
+
+class TestPrefsGroupAdminGate:
+    async def test_group_admin_can_change(self, db_session, patch_session):
+        """Admin (creator/administrator) status → mutation goes through."""
+        from telegram import ChatMember
+
+        from etfpulse.models import TelegramGroup
+
+        upd = _group_update(chat_id=-200100, title="AdminTest")
+        await cmd_prefs(
+            upd,
+            _group_ctx(["confidence", "8"], member_status=ChatMember.ADMINISTRATOR),
+        )
+
+        group = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -200100))
+        ).scalar_one()
+        assert group.pref_min_confidence == 8
+        # No denial message — last reply should be the success confirmation.
+        reply_text = upd.effective_message.reply_html.await_args.args[0]
+        assert "Updated" in reply_text
+
+    async def test_group_owner_can_change(self, db_session, patch_session):
+        """Creator (= telegram.ChatMember.OWNER) is also admin."""
+        from telegram import ChatMember
+
+        from etfpulse.models import TelegramGroup
+
+        upd = _group_update(chat_id=-200200)
+        await cmd_prefs(
+            upd,
+            _group_ctx(["assets", "BTC"], member_status=ChatMember.OWNER),
+        )
+
+        group = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -200200))
+        ).scalar_one()
+        assert group.pref_assets == ["BTC"]
+
+    async def test_group_member_cannot_change(self, db_session, patch_session):
+        """Regular member → denial message + prefs untouched + NO group row
+        created (the deny-before-DB check prevents side effects)."""
+        from telegram import ChatMember
+
+        from etfpulse.models import TelegramGroup
+
+        upd = _group_update(chat_id=-200300)
+        await cmd_prefs(
+            upd,
+            _group_ctx(["confidence", "8"], member_status=ChatMember.MEMBER),
+        )
+
+        reply_text = upd.effective_message.reply_html.await_args.args[0]
+        assert "Only group admins" in reply_text
+
+        # No TelegramGroup row was created — gate ran before get_or_create.
+        n = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -200300))
+        ).scalar_one_or_none()
+        assert n is None
+
+    async def test_group_restricted_cannot_change(self, db_session, patch_session):
+        """RESTRICTED members aren't admins — same denial path as regular MEMBER."""
+        from telegram import ChatMember
+
+        upd = _group_update(chat_id=-200400)
+        await cmd_prefs(
+            upd,
+            _group_ctx(["assets", "ETH"], member_status=ChatMember.RESTRICTED),
+        )
+        reply_text = upd.effective_message.reply_html.await_args.args[0]
+        assert "Only group admins" in reply_text
+
+    async def test_group_view_allowed_for_anyone(self, db_session, patch_session):
+        """No-args /prefs in a group is a READ — anyone can run it. The admin
+        check short-circuits because args is empty; no get_chat_member call."""
+        from telegram import ChatMember
+
+        upd = _group_update(chat_id=-200500)
+        ctx = _group_ctx([], member_status=ChatMember.MEMBER)
+        await cmd_prefs(upd, ctx)
+
+        reply_text = upd.effective_message.reply_html.await_args.args[0]
+        assert "Current preferences" in reply_text
+        # get_chat_member shouldn't even have been called for a read.
+        ctx.bot.get_chat_member.assert_not_called()
+
+    async def test_admin_api_failure_fails_closed(self, db_session, patch_session):
+        """If get_chat_member raises (network blip, bot kicked mid-call),
+        treat as non-admin. Safer than letting the mutation through on
+        an unverifiable identity."""
+        from etfpulse.models import TelegramGroup
+
+        upd = _group_update(chat_id=-200600)
+        await cmd_prefs(
+            upd,
+            _group_ctx(["confidence", "9"], member_status=None),
+        )
+        reply_text = upd.effective_message.reply_html.await_args.args[0]
+        assert "Only group admins" in reply_text
+        # Confirm no row was created either.
+        n = (
+            await db_session.execute(select(TelegramGroup).where(TelegramGroup.chat_id == -200600))
+        ).scalar_one_or_none()
+        assert n is None
+
+
 # ---- /help + /track-record (no DB) ---------------------------------------
 
 

@@ -11,18 +11,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import Chat, Update
+from telegram import Chat, ChatMember, Update
 from telegram import User as TgUser
+from telegram.error import TelegramError
+from telegram.ext import ContextTypes
 
 from etfpulse.config import settings
 from etfpulse.models import ChannelType, NotificationChannel, TelegramGroup, User
 
+log = structlog.get_logger()
+
 # Assets we accept in /prefs. Matches what detectors emit and what the
 # ingestion adapter pulls for.
 _VALID_ASSETS = {"BTC", "ETH"}
+
+# ChatMember statuses that grant admin powers in a group/supergroup.
+# `RESTRICTED` and `MEMBER` are NOT included — regular members can read
+# but can't change group settings. Used by `is_group_admin` below.
+_ADMIN_STATUSES = frozenset({ChatMember.OWNER, ChatMember.ADMINISTRATOR})
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +166,44 @@ def parse_asset_list(raw: str) -> list[str]:
             seen.add(p)
             result.append(p)
     return result
+
+
+async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True iff the message sender is creator/administrator of the group.
+
+    Issue #39 — restricts mutating commands (/prefs, future /subscribe in
+    groups) to people who can actually represent the group. Telegram's
+    `getChatMember` is the authoritative source: status ∈ {creator,
+    administrator} is admin, anything else is not. We don't trust a
+    cached/local user-role table because admin status can change at any
+    moment in the group itself.
+
+    On API failure (network blip, bot not in chat anymore, etc) we
+    **fail closed** — return False rather than risk letting a non-admin
+    through. The caller surfaces a generic "only admins" message; the
+    underlying error is logged for diagnosis.
+
+    Returns True for DMs as a defensive default — the caller is expected
+    to gate this with `chat.type == GROUP` first; if it doesn't, allowing
+    the action in DMs is safer than denying it.
+    """
+    chat = update.effective_chat
+    tg_user = update.effective_user
+    if chat is None or tg_user is None:
+        return False
+    if chat.type not in (Chat.GROUP, Chat.SUPERGROUP):
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id=chat.id, user_id=tg_user.id)
+    except TelegramError as exc:
+        log.warning(
+            "group_admin_check_failed",
+            chat_id=chat.id,
+            user_id=tg_user.id,
+            error=str(exc),
+        )
+        return False
+    return member.status in _ADMIN_STATUSES
 
 
 def parse_confidence(raw: str) -> int:

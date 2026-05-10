@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 from etfpulse.bot.handlers._common import (
     get_or_create_target,
+    is_group_admin,
     parse_asset_list,
     parse_confidence,
 )
@@ -31,9 +32,32 @@ _USAGE = (
     "• <code>/prefs confidence 7</code>"
 )
 
+# Surfaced to the user when a group member without admin powers tries to
+# change settings. Reading current prefs (no-args /prefs) is still allowed
+# for everyone — it's information, not mutation.
+_NOT_ADMIN_MSG = (
+    "❌ Only group admins can change preferences.\n"
+    "You can still run <code>/prefs</code> (no args) to view current settings."
+)
+
 
 async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args or []
+
+    # Issue #39 — gate group mutations behind admin status. The check
+    # runs BEFORE opening a DB session so a non-admin attempt doesn't
+    # create the TelegramGroup row as a side effect (`get_or_create_target`
+    # would auto-create on first /prefs from a new group). Reading
+    # current prefs (no args) is allowed for everyone — the no-args
+    # branch falls through below.
+    if args and not await is_group_admin(update, context):
+        await _reply(update, _NOT_ADMIN_MSG)
+        log.info(
+            "bot_prefs_denied_non_admin",
+            chat_id=update.effective_chat.id if update.effective_chat else None,
+            user_id=update.effective_user.id if update.effective_user else None,
+        )
+        return
 
     async with async_session() as session:
         target = await get_or_create_target(session, update)
