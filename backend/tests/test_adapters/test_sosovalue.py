@@ -117,6 +117,65 @@ async def test_rate_limit_retries_once_then_succeeds(httpx_mock, monkeypatch):
     assert result == []
 
 
+async def test_429_with_unknown_message_routes_to_retry_path(httpx_mock, monkeypatch):
+    """Safe-by-construction: if SoSoValue ever changes message wording for
+    EITHER 429 path (per-minute or monthly), substring-match defaults to
+    the retry path. Worst case is one wasted retry on a real monthly
+    event — adapter never crashes on wording drift.
+
+    Live probe (scripts/probe_rate_limit_429.py) couldn't trip per-minute
+    on the upgraded tier with 35 parallel calls/1.88s — this test pins
+    the routing contract so wording drift is detected in CI rather than
+    in production.
+    """
+    monkeypatch.setattr(settings, "sosovalue_use_fixtures", False)
+    monkeypatch.setattr(settings, "sosovalue_api_key", "SOSO-test")
+    monkeypatch.setattr("etfpulse.adapters.sosovalue._RATE_LIMIT_BACKOFF_SECONDS", 0.01)
+
+    url = f"{settings.sosovalue_base_url}/macro/events?page=1&page_size=10"
+    # 1st attempt: 429 with NOVEL wording (not "Monthly quota", not the
+    # historical per-minute string either — pretend SoSoValue rephrased it).
+    httpx_mock.add_response(
+        url=url,
+        status_code=429,
+        json={"code": 402901, "message": "request quota exhausted for this window"},
+    )
+    httpx_mock.add_response(
+        url=url,
+        status_code=200,
+        json={"code": 0, "message": "success", "data": []},
+    )
+
+    client = SoSoValueClient()
+    # Must NOT raise SoSoValueMonthlyQuotaError; must retry; must succeed.
+    result = await client.get_macro_events()
+    assert result == []
+
+
+async def test_monthly_quota_wording_variant_still_routes_correctly(httpx_mock, monkeypatch):
+    """Substring match: any message *containing* 'Monthly quota' (regardless
+    of trailing punctuation, suffix, casing in the surrounding text) routes
+    to MonthlyQuotaError. Pins the contract that wording with the same
+    substring is treated identically.
+    """
+    monkeypatch.setattr(settings, "sosovalue_use_fixtures", False)
+    monkeypatch.setattr(settings, "sosovalue_api_key", "SOSO-test")
+
+    httpx_mock.add_response(
+        url=f"{settings.sosovalue_base_url}/macro/events?page=1&page_size=10",
+        status_code=429,
+        # Variant wording — adds context but keeps the substring.
+        json={
+            "code": 402901,
+            "message": "Monthly quota for this account exhausted; renews 2026-06-01",
+        },
+    )
+
+    client = SoSoValueClient()
+    with pytest.raises(SoSoValueMonthlyQuotaError, match="Monthly quota"):
+        await client.get_macro_events()
+
+
 async def test_server_error_wraps_in_sosovalue_error(httpx_mock, monkeypatch):
     """5xx from upstream must raise `SoSoValueError` — not bare `httpx.HTTPStatusError`."""
     monkeypatch.setattr(settings, "sosovalue_use_fixtures", False)
@@ -206,3 +265,49 @@ async def test_klines_raises_on_wrong_shape(monkeypatch):
     client = SoSoValueClient()
     with pytest.raises(SoSoValueError, match="unexpected response envelope"):
         await client.get_daily_klines("BTC")
+
+
+async def test_sector_spotlight_parses_fixture():
+    """Real-shape fixture: 16 sector + 22 spotlight rows, BTC at 0.5943 dom."""
+    from decimal import Decimal
+
+    client = SoSoValueClient()
+    s = await client.get_sector_spotlight()
+    assert len(s.sector) == 16
+    assert len(s.spotlight) == 22
+
+    # find_sector resolves both BTC and ETH names — verified in the live probe.
+    btc = s.find_sector("BTC")
+    assert btc is not None
+    assert btc.marketcap_dom == Decimal("0.5943")
+    assert btc.change_pct_24h == Decimal("0.006")
+
+    # Defensive lookup returns None on absent name.
+    assert s.find_sector("NotARealSector") is None
+
+    # Leading-whitespace name is stripped on ingestion (see SectorRow validator).
+    assert any(row.name == "PerpDEX" for row in s.spotlight)
+    assert all(row.name == row.name.strip() for row in s.spotlight)
+
+
+async def test_sector_spotlight_raises_on_wrong_envelope(monkeypatch):
+    """If `data` comes back as a list instead of a dict (schema drift), raise."""
+
+    def _broken_fixture(name: str):
+        return {"code": 0, "message": "ok", "data": ["not", "a", "dict"], "details": None}
+
+    monkeypatch.setattr(SoSoValueClient, "_load_fixture", staticmethod(_broken_fixture))
+    client = SoSoValueClient()
+    with pytest.raises(SoSoValueError, match="unexpected response envelope"):
+        await client.get_sector_spotlight()
+
+
+async def test_sector_spotlight_is_cached():
+    """Second call should not re-load the fixture."""
+    from unittest.mock import patch
+
+    client = SoSoValueClient()
+    await client.get_sector_spotlight()
+    with patch.object(SoSoValueClient, "_load_fixture") as load:
+        await client.get_sector_spotlight()
+        load.assert_not_called()

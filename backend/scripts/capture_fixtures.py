@@ -59,9 +59,7 @@ async def main() -> None:
                 await get(c, "/news", language="en", page=1, page_size=20, category=7),
             )
         )
-        out.append(
-            ("sosovalue_macro_events", await get(c, "/macro/events", page=1, page_size=10))
-        )
+        out.append(("sosovalue_macro_events", await get(c, "/macro/events", page=1, page_size=10)))
         out.append(
             (
                 "sosovalue_market_snapshot_btc",

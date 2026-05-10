@@ -299,6 +299,7 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
             signal_posture=classification.signal_posture.value,
             confidence=classification.confidence,
             reasoning=classification.reasoning,
+            btc_dominance=classification.btc_dominance,
             macro_events=(
                 {REGIME_MACRO_EVENTS_KEY: classification.macro_events_nearby}
                 if classification.macro_events_nearby

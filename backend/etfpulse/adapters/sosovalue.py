@@ -1,13 +1,21 @@
 """SoSoValue API adapter.
 
-Covers the three endpoints Wave 1 needs: ETF summary history, news feed, and
-macro events. `/currencies/sector-spotlight` is intentionally absent — it was
-not spikeable due to monthly-quota exhaustion (see docs/API_REFERENCE.md:199
-and pipeline/ingestor.py:ingest_regime_snapshot).
+Covers ETF summary history, news feed, macro events, market snapshot,
+daily klines, and sector-spotlight. All endpoints share the
+`{code, message, data, details}` envelope — adapter unwraps `data` and
+parses into Pydantic DTOs.
 
-Auth: `x-soso-api-key` header (NOT Bearer token).
-Rate limits: 20 req/min and 100k req/month; both return HTTP 429 with the same
-error code (402901) but different `message` text — we distinguish by message.
+Auth: `x-soso-api-key` header (NOT Bearer token). Missing/invalid key →
+HTTP 401 with `{"code":400101, "message":"API Key is invalid or does not exist"}`.
+
+Rate limits: per-minute + monthly-quota; both return HTTP 429 with the same
+error code (402901), distinguished by `message` substring. Documented
+per-minute floor is "20 req/min" but a live probe (35 parallel calls in
+1.88s) returned 200 across the board on the upgraded tier — actual
+floor is at least ~1100/min, well above any normal call pattern. Monthly
+quota body shape is pinned in `fixtures/sosovalue_error_monthly_quota.json`.
+Substring match on `"Monthly quota"` keeps us safe even if exact wording
+drifts (see `_classify_and_raise_429` docstring).
 """
 
 from __future__ import annotations
@@ -219,6 +227,72 @@ class KlinePoint(BaseModel):
         return datetime.fromtimestamp(self.timestamp / 1000, tz=UTC).date()
 
 
+class SectorRow(BaseModel):
+    """One row in `data.sector` (source: GET /currencies/sector-spotlight).
+
+    Fields verified live (probe_sector_spotlight.py): `name` is always str,
+    both numeric fields are always float (never strings, never null). The
+    16 sector `marketcap_dom` values sum to 1.0000 — these are exhaustive
+    market-share fractions, not relative-to-something rates.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    change_pct_24h: Decimal
+    marketcap_dom: Decimal
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v: Any) -> Any:
+        # One observed row is `' PerpDEX'` (leading whitespace). Strip on
+        # ingestion so downstream lookups by name don't have to.
+        return v.strip() if isinstance(v, str) else v
+
+
+class SpotlightRow(BaseModel):
+    """One row in `data.spotlight`. No `marketcap_dom` field — narrower
+    thematic baskets (Solana Ecosystem, ETF Candidates, fund portfolios)
+    that don't carry market-share weights.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    change_pct_24h: Decimal
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v: Any) -> Any:
+        return v.strip() if isinstance(v, str) else v
+
+
+class SectorSpotlight(BaseModel):
+    """Full /currencies/sector-spotlight payload.
+
+    The endpoint accepts a `currency_id` query param but the response is
+    byte-identical regardless of value (verified against BTC id, ETH id,
+    no-param, and a garbage string). The adapter calls it without params.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sector: list[SectorRow]
+    spotlight: list[SpotlightRow]
+
+    def find_sector(self, name: str) -> SectorRow | None:
+        """Lookup a sector row by exact name match. Returns None if absent.
+
+        Defensive: nothing in the API contract guarantees a particular name
+        is present. Today (verified) the `sector` list contains 16 entries
+        including `BTC` and `ETH`, but callers MUST handle absence.
+        """
+        for row in self.sector:
+            if row.name == name:
+                return row
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -242,6 +316,10 @@ class SoSoValueClient:
         # trigger spam during testing.
         self._spot_cache: TTLCache[str, Decimal] = TTLCache(maxsize=5, ttl=60)
         self._klines_cache: TTLCache[str, list[KlinePoint]] = TTLCache(maxsize=20, ttl=3600)
+        # Sector-spotlight changes slowly (sector weights drift over weeks).
+        # 24h TTL matches macro_cache; one fetch per daily cycle in the
+        # steady state.
+        self._sector_cache: TTLCache[str, SectorSpotlight] = TTLCache(maxsize=1, ttl=86400)
 
     @property
     def use_fixtures(self) -> bool:
@@ -269,8 +347,23 @@ class SoSoValueClient:
             if response.status_code == 429:
                 self._classify_and_raise_429(response, path)
                 # Per-minute rate limit — wait briefly then retry once.
+                # We log the message verbatim so wording drift is visible in
+                # ops logs without us having to re-burn quota verifying it.
+                # (The new-tier per-minute floor is high enough that the
+                # documented "20 req/min" never actually triggers in
+                # production; we'd never see a 429 unless we changed our
+                # call patterns. See scripts/probe_rate_limit_429.py for
+                # the verification record.)
+                try:
+                    body_for_log = response.json()
+                except ValueError:
+                    body_for_log = {}
                 log.warning(
-                    "sosovalue_rate_limited", path=path, backoff=_RATE_LIMIT_BACKOFF_SECONDS
+                    "sosovalue_rate_limited",
+                    path=path,
+                    backoff=_RATE_LIMIT_BACKOFF_SECONDS,
+                    upstream_message=str(body_for_log.get("message", "")),
+                    upstream_code=body_for_log.get("code"),
                 )
                 await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
                 try:
@@ -308,6 +401,19 @@ class SoSoValueClient:
         """Raise `SoSoValueMonthlyQuotaError` if the 429 is monthly-quota.
 
         Rate-limit 429s return without raising so the caller can retry.
+
+        Routing is by **substring match on the `message` field**, not by
+        `code` (both 429 paths share code=402901). Substring `"Monthly quota"`
+        is verified against `fixtures/sosovalue_error_monthly_quota.json`.
+        Per-minute wording on the new tier was not live-verifiable
+        (see scripts/probe_rate_limit_429.py — 35 parallel calls/1.88s
+        all returned 200, so the per-minute floor is well above ~1100/min
+        and we'd never trip it in production).
+
+        Safe by construction: if SoSoValue ever changes monthly-quota
+        wording, this matcher returns silently → caller retries once →
+        429 fires again → caller raises `SoSoValueRateLimitError`. We
+        never crash; worst case is one wasted retry per quota event.
         """
         try:
             body = response.json()
@@ -519,6 +625,38 @@ class SoSoValueClient:
         self._klines_cache[cache_key] = klines
         log.info("sosovalue_klines_fetched", asset=asset, count=len(klines))
         return klines
+
+    async def get_sector_spotlight(self) -> SectorSpotlight:
+        """Sector + thematic-basket dominance and 24h returns.
+
+        No query params: the endpoint's `currency_id` parameter is ignored
+        by the API (verified — bodies identical across BTC id, ETH id, no
+        param, and garbage string).
+
+        Cached 24h. Caller chains: `regime_monitor.classify_regime` reads
+        `find_sector("BTC").marketcap_dom` to derive btc_dominance.
+        """
+        cache_key = "sector_spotlight"
+        if cache_key in self._sector_cache:
+            return self._sector_cache[cache_key]
+
+        if self.use_fixtures:
+            raw = self._load_fixture("sosovalue_sector_spotlight")
+        else:
+            raw = await self._request("GET", "/currencies/sector-spotlight")
+
+        data = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(data, dict):
+            raise SoSoValueError("sector-spotlight: unexpected response envelope")
+
+        spotlight = SectorSpotlight.model_validate(data)
+        self._sector_cache[cache_key] = spotlight
+        log.info(
+            "sosovalue_sector_spotlight_fetched",
+            sector_count=len(spotlight.sector),
+            spotlight_count=len(spotlight.spotlight),
+        )
+        return spotlight
 
 
 # Module-level singleton. Tests that need isolation should instantiate

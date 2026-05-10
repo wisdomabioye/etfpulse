@@ -8,20 +8,26 @@ Two endpoints with different failure semantics:
   must not cause restart loops.
 
 - `/api/health/ready` (readiness) — 200 only when the DB is reachable within
-  2s. Failure returns 503 so the load balancer takes us out of rotation
-  without killing the container. Correct behaviour for a DB blip: stop
-  serving traffic, recover when DB recovers.
+  2s AND production env-var preflight has no hard errors. Failure returns
+  503 so the load balancer takes us out of rotation without killing the
+  container. Correct behaviour for a DB blip: stop serving traffic, recover
+  when DB recovers. Same model for prod misconfig: pull the pod from
+  rotation rather than killing it (so logs survive for diagnosis).
+  Warnings (e.g. partial Telegram config) are 200 but surface in the
+  response body so ops alerting can pick them up.
 """
 
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from etfpulse.api.config_check import check_config_health
 from etfpulse.api.deps import get_db_engine
 
 log = structlog.get_logger()
@@ -49,11 +55,24 @@ async def liveness() -> dict[str, str]:
 async def readiness(
     response: Response,
     engine: AsyncEngine = Depends(get_db_engine),
-) -> dict[str, str]:
-    if await _ping_db(engine):
-        return {"status": "ok", "db": "ok"}
-    response.status_code = 503
-    return {"status": "degraded", "db": "error"}
+) -> dict[str, Any]:
+    """Composite readiness — DB reachable AND production env-var preflight clean.
+
+    Body shape is stable across success/failure so monitoring can parse it
+    uniformly. `config.errors` and `config.warnings` are always present,
+    empty in dev (preflight is no-op outside production).
+    """
+    config = check_config_health()
+    db_ok = await _ping_db(engine)
+
+    body: dict[str, Any] = {
+        "status": "ok" if (db_ok and config.ok) else "degraded",
+        "db": "ok" if db_ok else "error",
+        "config": {"errors": config.errors, "warnings": config.warnings},
+    }
+    if not (db_ok and config.ok):
+        response.status_code = 503
+    return body
 
 
 async def _ping_db(engine: AsyncEngine) -> bool:

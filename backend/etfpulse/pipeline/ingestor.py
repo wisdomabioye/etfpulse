@@ -118,12 +118,9 @@ async def ingest_news(
     return inserted
 
 
-async def ingest_regime_snapshot(session: AsyncSession) -> None:
-    """Populate a RegimeSnapshot row.
-
-    Blocked on the SoSoValue `/currencies/sector-spotlight` endpoint, which
-    was un-spikeable when Stage 03 shipped (monthly quota exhausted; see
-    docs/API_REFERENCE.md:199 and open_issues.md:126). Wire this up in a
-    post-quota micro-stage once a real response shape is captured.
-    """
-    raise NotImplementedError("see post-quota micro-stage")
+# NOTE: A previous `ingest_regime_snapshot` stub used to live here. It was
+# never called — `RegimeSnapshot` rows are written by
+# `pipeline.signal_builder.run_daily_cycle` (which calls
+# `pipeline.regime_monitor.classify_regime`). Since Stage 9 wired
+# sector-spotlight into the classifier, the stub is dead code and was
+# removed.

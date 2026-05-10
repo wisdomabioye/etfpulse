@@ -117,16 +117,47 @@ def _no_macro_events(monkeypatch):
     monkeypatch.setattr(sosovalue_client, "get_macro_events", _empty)
 
 
+@pytest.fixture
+def _sector_spotlight_fails(monkeypatch):
+    """Force the sector-spotlight call to raise so we can test the
+    `available: False` reasoning + NULL btc_dominance path."""
+    from etfpulse.adapters.sosovalue import SoSoValueError
+
+    async def _raise():
+        raise SoSoValueError("simulated network error")
+
+    monkeypatch.setattr(sosovalue_client, "get_sector_spotlight", _raise)
+
+
 class TestClassifyRegime:
     async def test_empty_db_yields_uncertain(self, db_session, _no_macro_events):
         """No flows, no news, no macro → score 0 → UNCERTAIN, posture from default
-        map (CAUTIOUS for UNCERTAIN). Confidence = 1 (low magnitude)."""
+        map (CAUTIOUS for UNCERTAIN). Confidence = 1 (low magnitude).
+        Sector-spotlight fixture provides BTC dominance — value is persisted on
+        the snapshot but does not affect the score (see classify_regime
+        docstring for rationale)."""
         c = await classify_regime(db_session)
         assert c.regime == MarketRegime.UNCERTAIN
         assert c.signal_posture == SignalPosture.CAUTIOUS
         assert c.confidence == 1
         assert c.macro_events_nearby == []
+        # Dominance is sourced from sosovalue_sector_spotlight.json fixture
+        # which records BTC at 0.5943 marketcap_dom.
+        assert c.reasoning["dominance"]["available"] is True
+        assert c.btc_dominance == Decimal("0.5943")
+        assert c.reasoning["dominance"]["btc_dominance"] == "0.5943"
+
+    async def test_dominance_unavailable_when_adapter_fails(
+        self, db_session, _no_macro_events, _sector_spotlight_fails
+    ):
+        """SoSoValueError on sector-spotlight is non-fatal — classifier still
+        returns a regime; btc_dominance is None and reasoning records the
+        fetch_error rather than a value."""
+        c = await classify_regime(db_session)
+        assert c.regime == MarketRegime.UNCERTAIN
+        assert c.btc_dominance is None
         assert c.reasoning["dominance"]["available"] is False
+        assert c.reasoning["dominance"]["fetch_error"] == "SoSoValueError"
 
     async def test_strong_positive_flows_drive_markup(self, db_session, _no_macro_events):
         """Seed 7d of large positive BTC flows → score saturates positive →

@@ -251,6 +251,50 @@ class TestDeliveryJobs:
 
 
 # ---------------------------------------------------------------------------
+# Reaper jobs (issues #30 + #36) — registered alongside outcome_eval, not
+# bot-gated, since they touch DB state that affects the web UI regardless
+# of Telegram delivery.
+# ---------------------------------------------------------------------------
+
+
+class TestReaperJobs:
+    async def test_both_reapers_registered_when_scheduler_enabled(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """Both reapers register even with the bot disabled — they affect
+        web UI state that's independent of Telegram."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            job_ids = {j.id for j in app.state.scheduler.get_jobs()}
+            assert "signal_expiry_reaper" in job_ids
+            assert "delivery_reaper" in job_ids
+
+    async def test_reapers_use_configured_intervals(self, monkeypatch, stub_cycle, stub_no_catchup):
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        monkeypatch.setattr(settings, "signal_expiry_reaper_interval_seconds", 120)
+        monkeypatch.setattr(settings, "delivery_reaper_interval_seconds", 240)
+        app = FastAPI()
+        async with start_scheduler(app):
+            sj = app.state.scheduler.get_job("signal_expiry_reaper")
+            dj = app.state.scheduler.get_job("delivery_reaper")
+            assert int(sj.trigger.interval.total_seconds()) == 120
+            assert int(dj.trigger.interval.total_seconds()) == 240
+
+    async def test_reapers_max_instances_one_and_coalesce(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """D19. Idempotent bulk-UPDATE means coalescing missed fires is safe."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            for jid in ("signal_expiry_reaper", "delivery_reaper"):
+                job = app.state.scheduler.get_job(jid)
+                assert job.max_instances == 1
+                assert job.coalesce is True
+
+
+# ---------------------------------------------------------------------------
 # _send_with_session wrapper
 # ---------------------------------------------------------------------------
 
@@ -652,3 +696,54 @@ class TestOutcomeEvalWrapper:
         assert result is None
         fake_session.rollback.assert_awaited()
         fake_session.commit.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Reaper wrapper smoke tests — same pattern as TestOutcomeEvalWrapper.
+# Stub the underlying bulk-UPDATE so we don't need a DB; just verify the
+# commit/rollback contract.
+# ---------------------------------------------------------------------------
+
+
+class TestSignalExpiryReaperWrapper:
+    async def test_returns_summary_on_success(self, monkeypatch):
+        from etfpulse.pipeline.scheduler import _signal_expiry_reaper_with_session
+
+        async def _stub(session):
+            return {"expired": 4}
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.expire_overdue_signals", _stub)
+        result = await _signal_expiry_reaper_with_session()
+        assert result == {"expired": 4}
+
+    async def test_returns_none_on_exception(self, monkeypatch):
+        from etfpulse.pipeline.scheduler import _signal_expiry_reaper_with_session
+
+        async def _stub(session):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.expire_overdue_signals", _stub)
+        result = await _signal_expiry_reaper_with_session()
+        assert result is None
+
+
+class TestDeliveryReaperWrapper:
+    async def test_returns_summary_on_success(self, monkeypatch):
+        from etfpulse.pipeline.scheduler import _delivery_reaper_with_session
+
+        async def _stub(session):
+            return {"stuck_failed": 2}
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.fail_stuck_deliveries", _stub)
+        result = await _delivery_reaper_with_session()
+        assert result == {"stuck_failed": 2}
+
+    async def test_returns_none_on_exception(self, monkeypatch):
+        from etfpulse.pipeline.scheduler import _delivery_reaper_with_session
+
+        async def _stub(session):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.fail_stuck_deliveries", _stub)
+        result = await _delivery_reaper_with_session()
+        assert result is None

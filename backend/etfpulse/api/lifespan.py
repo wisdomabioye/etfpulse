@@ -44,16 +44,45 @@ from etfpulse.pipeline.scheduler import start_scheduler  # noqa: E402
 STARTUP_TASKS.extend([start_scheduler, start_bot])
 
 
+def _log_config_preflight() -> None:
+    """Log the env-var preflight report at startup.
+
+    Errors → ERROR level (deploy logs surface them in red).
+    Warnings → WARNING level.
+    Clean (or non-production) → single INFO line, no noise.
+
+    Logging only — does NOT abort startup. The readiness probe gates LB
+    inclusion separately, so the pod can boot, log the misconfig, then
+    sit out of rotation until ops fixes the env. That's the same model
+    we use for transient DB failure (don't kill the container, take it
+    out of LB rotation).
+    """
+    from etfpulse.api.config_check import check_config_health
+
+    report = check_config_health()
+    if report.errors:
+        for msg in report.errors:
+            log.error("config_preflight_error", message=msg)
+    if report.warnings:
+        for msg in report.warnings:
+            log.warning("config_preflight_warning", message=msg)
+    if not report.errors and not report.warnings:
+        log.info("config_preflight_clean")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan — drives startup and shutdown for the app.
 
     Logging is configured first so any failures during task startup are
-    captured in the configured format. Tasks then enter in order via
-    AsyncExitStack; on the way out, they exit in reverse order.
+    captured in the configured format. Config preflight runs next so
+    deploy logs immediately show any misconfig before tasks attempt to
+    use the missing values. Tasks then enter in order via AsyncExitStack;
+    on the way out, they exit in reverse order.
     """
     configure_logging()
     log.info("app_startup", tasks=len(STARTUP_TASKS))
+    _log_config_preflight()
 
     async with AsyncExitStack() as stack:
         for task in STARTUP_TASKS:

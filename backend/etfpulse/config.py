@@ -113,6 +113,18 @@ class Settings(BaseSettings):
     # is wasted work because no new bars become available between ticks.
     # 60s floor protects against accidental sub-minute configs in tests.
     outcome_eval_interval_seconds: int = Field(default=3600, ge=60)
+    # Reapers (issues #30 + #36). Both run on the same cadence — neither is
+    # latency-sensitive. 15 min is well under any plausible signal half-life
+    # while infrequent enough that a flapping reaper doesn't burn cycles.
+    # 60s floor for the same reason as outcome_eval (test misconfiguration).
+    signal_expiry_reaper_interval_seconds: int = Field(default=900, ge=60)
+    delivery_reaper_interval_seconds: int = Field(default=900, ge=60)
+    # A SignalDelivery row in PENDING this long after creation is "stuck" —
+    # the send worker should have picked it up within ≈20 ticks at the
+    # default 30s `delivery_worker_interval_seconds`. Reaper flips it to
+    # FAILED with a sentinel error_message so dashboards / debugging see
+    # why it didn't deliver. 60s floor protects against test misconfig.
+    delivery_pending_max_age_seconds: int = Field(default=600, ge=60)
     # Default user preferences applied on /start registration. Comma-separated
     # asset list parsed via `delivery_default_assets_list` property.
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)

@@ -17,11 +17,13 @@ left `regime` undefined when no events were nearby):
        leave the regime unchanged. Macro events change how aggressively we
        fire signals; they don't redefine what phase the market is in.
 
-`btc_dominance` would normally feed this scorer too, but it depends on the
-SoSoValue `/currencies/sector-spotlight` endpoint that is still un-spikeable
-(open issue #25). Until that lands, the classifier ships without dominance —
-the `reasoning.dominance` line records the gap explicitly so it's visible
-on the dashboard rather than hidden in code.
+`btc_dominance` is fetched from SoSoValue `/currencies/sector-spotlight` and
+PERSISTED on the snapshot (column was NULL before this stage). It is NOT
+folded into the directional score — dominance rising vs falling is an
+ambiguous bull/bear signal on its own (rising can mean bear flight-to-safety
+OR early-cycle BTC leadership). Surfacing the value lets the dashboard +
+regime_shift detector reason about it without us encoding an interpretation
+rule we haven't validated.
 
 D14 contract: this module never commits. Callers (run_daily_cycle, /api/regime)
 own the transaction boundary.
@@ -44,6 +46,8 @@ from etfpulse.adapters.sosovalue import (
     sosovalue_client,
 )
 from etfpulse.models import ETFFlow, MarketRegime, NewsItem, RegimeSnapshot, SignalPosture
+
+_BTC_SECTOR_NAME = "BTC"
 
 log = structlog.get_logger()
 
@@ -103,6 +107,10 @@ class RegimeClassification:
     confidence: int
     reasoning: dict[str, Any] = field(default_factory=dict)
     macro_events_nearby: list[str] = field(default_factory=list)
+    # Current BTC market-cap dominance (e.g. 0.5943 = 59.43%). None when
+    # sector-spotlight failed or BTC row was absent. Persisted on
+    # RegimeSnapshot.btc_dominance for transparency.
+    btc_dominance: Decimal | None = None
 
 
 async def classify_regime(session: AsyncSession) -> RegimeClassification:
@@ -122,6 +130,7 @@ async def classify_regime(session: AsyncSession) -> RegimeClassification:
     flow_score, flow_reasoning = await _compute_flow_score(session, today)
     news_score, news_reasoning = await _compute_news_score(session)
     macro_events_nearby, macro_reasoning = await _fetch_macro_events_nearby(today)
+    btc_dominance, dominance_reasoning = await _fetch_btc_dominance()
 
     score = flow_score + news_score
     regime = _regime_from_score(score)
@@ -136,13 +145,7 @@ async def classify_regime(session: AsyncSession) -> RegimeClassification:
         "flow": flow_reasoning,
         "news": news_reasoning,
         "macro": macro_reasoning,
-        # btc_dominance is unavailable until SoSoValue sector-spotlight
-        # comes back online (open issue #25). Surfacing the gap here means
-        # the dashboard shows it explicitly rather than silently dropping it.
-        "dominance": {
-            "available": False,
-            "note": "sector-spotlight endpoint pending — see open issue #25",
-        },
+        "dominance": dominance_reasoning,
     }
 
     classification = RegimeClassification(
@@ -151,6 +154,7 @@ async def classify_regime(session: AsyncSession) -> RegimeClassification:
         confidence=confidence,
         reasoning=reasoning,
         macro_events_nearby=macro_events_nearby,
+        btc_dominance=btc_dominance,
     )
     log.info(
         "regime_classified",
@@ -283,6 +287,45 @@ async def _fetch_macro_events_nearby(
         "window_days": _MACRO_NEARBY_WINDOW_DAYS,
         "events_nearby": nearby_labels,
         "events_total": len(events),
+    }
+
+
+async def _fetch_btc_dominance() -> tuple[Decimal | None, dict[str, Any]]:
+    """Pull current BTC market-cap dominance from sector-spotlight.
+
+    Soft-failure: any `SoSoValueError` (quota, rate-limit, network) is logged
+    and treated as "unavailable" rather than aborting classification — the
+    classifier ships a regime with NULL dominance instead of crashing.
+
+    Returns:
+        (btc_dominance_or_none, reasoning_dict). The reasoning dict is the
+        structured breakdown surfaced on /api/regime — `available` flag plus
+        either the value + 24h change or a `fetch_error` field, never both.
+
+    Defensive: nothing in the API contract guarantees a `name=='BTC'` row
+    is present in `sector`. Today (verified) it is, but if it ever isn't,
+    we return None with `reason='btc_row_absent'`.
+    """
+    try:
+        spotlight = await sosovalue_client.get_sector_spotlight()
+    except SoSoValueError as exc:
+        log.warning(
+            "regime_dominance_fetch_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return None, {"available": False, "fetch_error": type(exc).__name__}
+
+    btc_row = spotlight.find_sector(_BTC_SECTOR_NAME)
+    if btc_row is None:
+        log.warning("regime_dominance_btc_row_absent")
+        return None, {"available": False, "reason": "btc_row_absent"}
+
+    return btc_row.marketcap_dom, {
+        "available": True,
+        "btc_dominance": str(btc_row.marketcap_dom),
+        "btc_change_pct_24h": str(btc_row.change_pct_24h),
+        "sector_count": len(spotlight.sector),
     }
 
 

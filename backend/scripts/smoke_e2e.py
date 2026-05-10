@@ -18,7 +18,7 @@ os.environ.setdefault("RUN_SCHEDULER", "false")
 from sqlalchemy import select  # noqa: E402
 
 from etfpulse.db import async_session  # noqa: E402
-from etfpulse.models import ETFFlow, NewsItem, RegimeSnapshot, Signal, SignalOutcome  # noqa: E402
+from etfpulse.models import ETFFlow, NewsItem, Signal, SignalOutcome  # noqa: E402
 from etfpulse.pipeline.regime_monitor import classify_regime, get_latest_regime  # noqa: E402
 from etfpulse.pipeline.signal_builder import run_daily_cycle  # noqa: E402
 from etfpulse.pipeline.track_record import (  # noqa: E402
@@ -70,7 +70,9 @@ async def main() -> None:
     print(f"   {regime}")
     async with async_session() as s:
         latest = await get_latest_regime(s)
-    print(f"   latest snapshot in DB: regime={latest.regime if latest else None} confidence={latest.confidence if latest else None}")
+    print(
+        f"   latest snapshot in DB: regime={latest.regime if latest else None} confidence={latest.confidence if latest else None}"  # noqa: E501
+    )
 
     # 4. Outcome eval
     print("\n[4] evaluate_pending_outcomes()")
@@ -90,7 +92,9 @@ async def main() -> None:
     # 6. Hit the actual FastAPI routes via TestClient
     print("\n[6] HTTP routes")
     from fastapi.testclient import TestClient
+
     from etfpulse.app import create_app
+
     client = TestClient(create_app())
     for path in (
         "/api/health",
@@ -101,9 +105,14 @@ async def main() -> None:
         "/api/track-record?limit=5",
     ):
         r = client.get(path)
-        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+        body = (
+            r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+        )
         if isinstance(body, dict):
-            preview = {k: (type(v).__name__ if isinstance(v, (list, dict)) else v) for k, v in list(body.items())[:6]}
+            preview = {
+                k: (type(v).__name__ if isinstance(v, (list, dict)) else v)
+                for k, v in list(body.items())[:6]
+            }
         else:
             preview = body
         print(f"   GET {path:40s} -> {r.status_code}  {preview}")

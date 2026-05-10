@@ -55,6 +55,7 @@ from etfpulse.config import settings
 from etfpulse.db import async_session
 from etfpulse.models import ETFFlow, Signal, SignalStatus
 from etfpulse.pipeline.delivery import fan_out_signal, send_pending_deliveries
+from etfpulse.pipeline.reapers import expire_overdue_signals, fail_stuck_deliveries
 from etfpulse.pipeline.signal_builder import run_daily_cycle
 from etfpulse.pipeline.track_record import evaluate_pending_outcomes
 
@@ -65,6 +66,8 @@ _CATCHUP_JOB_ID = "catchup"
 _DELIVERY_SEND_JOB_ID = "delivery_send"
 _FAN_OUT_PENDING_JOB_ID = "fan_out_pending"
 _OUTCOME_EVAL_JOB_ID = "outcome_eval"
+_SIGNAL_EXPIRY_REAPER_JOB_ID = "signal_expiry_reaper"
+_DELIVERY_REAPER_JOB_ID = "delivery_reaper"
 _CATCHUP_DELAY_SECONDS = 1  # tiny delay so the scheduler picks it up cleanly
 
 
@@ -254,6 +257,65 @@ async def _send_with_session() -> dict[str, int] | None:
             return None
 
 
+async def _signal_expiry_reaper_with_session() -> dict[str, int] | None:
+    """Issue #30 reaper — bulk-flips Signal.status PENDING/ALERTED → EXPIRED
+    when expires_at is in the past.
+
+    Same transaction-boundary contract (D14, D18) as the other wrappers:
+    `expire_overdue_signals` does NOT commit; this wrapper does. Returns
+    None on rollback so an exception doesn't stop the APScheduler job from
+    firing on subsequent ticks.
+
+    Runs every `settings.signal_expiry_reaper_interval_seconds`. NOT gated
+    on `is_bot_enabled` — expiry is a DB-side concept that affects the
+    web UI regardless of Telegram delivery.
+    """
+    async with async_session() as session:
+        try:
+            summary = await expire_overdue_signals(session)
+            await session.commit()
+            # Quiet on no-op ticks — most runs find nothing.
+            if summary.get("expired", 0) > 0:
+                log.info("signal_expiry_reaper_committed", **summary)
+            return summary
+        except Exception as exc:
+            await session.rollback()
+            log.error(
+                "signal_expiry_reaper_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            return None
+
+
+async def _delivery_reaper_with_session() -> dict[str, int] | None:
+    """Issue #36 reaper — bulk-flips long-pending SignalDelivery rows to
+    FAILED with a sentinel error_message.
+
+    Same wrapper pattern as `_signal_expiry_reaper_with_session`. NOT
+    gated on `is_bot_enabled`: even if the bot is disabled mid-flight,
+    accumulated PENDING rows from the prior bot-enabled period should
+    still be reaped to FAILED so the table doesn't carry stale state.
+    """
+    async with async_session() as session:
+        try:
+            summary = await fail_stuck_deliveries(session)
+            await session.commit()
+            if summary.get("stuck_failed", 0) > 0:
+                log.info("delivery_reaper_committed", **summary)
+            return summary
+        except Exception as exc:
+            await session.rollback()
+            log.error(
+                "delivery_reaper_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            return None
+
+
 @asynccontextmanager
 async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
     """StartupTask — wire APScheduler around `run_daily_cycle`.
@@ -309,6 +371,27 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
         _outcome_eval_with_session,
         trigger=IntervalTrigger(seconds=settings.outcome_eval_interval_seconds),
         id=_OUTCOME_EVAL_JOB_ID,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Reapers (issues #30 + #36). Not bot-gated — both touch DB state that
+    # affects the web UI regardless of Telegram delivery (expired signals
+    # render as "expired" on the frontend; stuck PENDING deliveries leak
+    # into dashboards). Bulk-UPDATE only, so per-tick cost is one query
+    # each. `coalesce=True` because both are idempotent — running once
+    # after a missed window catches up cleanly.
+    scheduler.add_job(
+        _signal_expiry_reaper_with_session,
+        trigger=IntervalTrigger(seconds=settings.signal_expiry_reaper_interval_seconds),
+        id=_SIGNAL_EXPIRY_REAPER_JOB_ID,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _delivery_reaper_with_session,
+        trigger=IntervalTrigger(seconds=settings.delivery_reaper_interval_seconds),
+        id=_DELIVERY_REAPER_JOB_ID,
         max_instances=1,
         coalesce=True,
     )

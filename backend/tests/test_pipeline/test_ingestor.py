@@ -6,11 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from etfpulse.models import ETFFlow, NewsCategory, NewsItem
-from etfpulse.pipeline.ingestor import (
-    ingest_etf_flows,
-    ingest_news,
-    ingest_regime_snapshot,
-)
+from etfpulse.pipeline.ingestor import ingest_etf_flows, ingest_news
 
 
 async def test_ingest_etf_flows_inserts_unique_rows(db_session):
@@ -90,8 +86,3 @@ async def test_ingest_news_is_idempotent(db_session):
     second = await ingest_news(db_session, category=NewsCategory.INSTITUTION)
     assert first >= 2
     assert second == 0
-
-
-async def test_ingest_regime_snapshot_is_not_implemented(db_session):
-    with pytest.raises(NotImplementedError, match="post-quota micro-stage"):
-        await ingest_regime_snapshot(db_session)

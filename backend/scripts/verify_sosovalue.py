@@ -52,7 +52,7 @@ async def raw_get(path: str, **params: Any) -> tuple[int, Any]:
 
 
 async def main() -> None:
-    print(f"=== SoSoValue live verification ===")
+    print("=== SoSoValue live verification ===")
     print(f"base_url: {settings.sosovalue_base_url}")
     print(f"key set: {bool(settings.sosovalue_api_key)}")
     print(f"use_fixtures: {settings.sosovalue_use_fixtures}\n")
@@ -70,9 +70,7 @@ async def main() -> None:
     # 2. News (institution category)
     print("\n--- 2. get_news(INSTITUTION, page_size=3) ---")
     try:
-        news = await sosovalue_client.get_news(
-            category=NewsCategory.INSTITUTION, page_size=3
-        )
+        news = await sosovalue_client.get_news(category=NewsCategory.INSTITUTION, page_size=3)
         print(f"  parsed OK, {len(news)} articles")
         if news:
             n = news[0]
