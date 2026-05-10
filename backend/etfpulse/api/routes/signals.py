@@ -1,6 +1,6 @@
 """Public signal API — list (paginated + filtered) and detail.
 
-No auth by design for Wave 1 (landing page is public). See open_issues.md #43.
+No auth by design for Phase 1 (landing page is public). See open_issues.md #43.
 
 Query shape:
     GET /api/signals?asset=BTC&signal_type=flow_anomaly&confidence_min=7

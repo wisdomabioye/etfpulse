@@ -44,7 +44,7 @@ log = structlog.get_logger()
 
 # How to onboard a new asset (e.g. SOL, BNB)
 # -------------------------------------------
-# Wave 1 hardcodes BTC + ETH because that's all SoSoValue's ETF-flows endpoint
+# Phase 1 hardcodes BTC + ETH because that's all SoSoValue's ETF-flows endpoint
 # covers today. Adding a third asset is a multi-file touch — these are every
 # location that needs editing, in the order a change naturally propagates from
 # adapter → pipeline → API → UI:
@@ -186,7 +186,7 @@ class MacroEvent(BaseModel):
 class MarketSnapshot(BaseModel):
     """Live market snapshot (source: GET /currencies/{id}/market-snapshot).
 
-    Only `price` is load-bearing for Wave 1. Other fields (turnover, supply,
+    Only `price` is load-bearing for Phase 1. Other fields (turnover, supply,
     ATH, etc.) are intentionally ignored so schema drift doesn't break signal
     building over a single field change.
 

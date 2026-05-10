@@ -1,7 +1,7 @@
 """Public track-record API — paginated outcomes + same-filter summary.
 
 Stage 8-P4. Reads from `signal_outcomes` rows produced by the
-`outcome_eval` scheduler job (Stage 8-P3). No auth (Wave 1 scope per
+`outcome_eval` scheduler job (Stage 8-P3). No auth (Phase 1 scope per
 open_issues #43, same as `/api/signals` and `/api/regime`).
 
 Three deliberate parallels with `routes/signals.py`:

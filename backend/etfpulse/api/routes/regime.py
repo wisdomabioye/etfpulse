@@ -11,7 +11,7 @@ register_exception_handlers opaque-error policy) rather than 404 — a
 504 would suggest "your request timed out", and 200-with-null-fields
 would let stale clients silently render an empty card.
 
-No auth (Wave 1 scope per open_issues #43, same as /api/signals).
+No auth (Phase 1 scope per open_issues #43, same as /api/signals).
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ Single-query aggregation using Postgres's `FILTER` clause so we don't run
 four separate scans of `signals`. Stage 8-P5 (closes open_issues #44) added
 a parallel aggregate over `signal_outcomes` for the `hit_rate_72h` headline.
 
-No auth (Wave 1 scope per open_issues #43).
+No auth (Phase 1 scope per open_issues #43).
 """
 
 from __future__ import annotations

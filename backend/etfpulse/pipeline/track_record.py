@@ -18,7 +18,7 @@ Why daily granularity is enough:
     close of a UTC trading day. Sub-day price action might be more accurate
     for hit/stop checks, but daily highs/lows are good enough for a public
     track record and stay within the existing kline plumbing — no new
-    intraday-price adapter needed (which would be Wave 2 scope creep).
+    intraday-price adapter needed (which would be Phase 2 scope creep).
 
 Why no upper time cutoff:
     The Stage 8 design doc proposed a 24h-72h window for `Signal.created_at`,

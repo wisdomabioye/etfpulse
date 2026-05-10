@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     binance_base_url: str = "https://data-api.binance.vision"
     binance_use_fixtures: bool = False
 
-    # SoDEX (Wave 3 — demo wallet only)
+    # SoDEX (Phase 3 — demo wallet only)
     sodex_demo_wallet_address: str = ""
     sodex_demo_private_key: str = ""
     sodex_demo_account_id: int = 0

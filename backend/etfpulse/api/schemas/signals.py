@@ -66,7 +66,7 @@ class AIAnalysisOut(BaseModel):
 class SignalOutcomeOut(BaseModel):
     """Signal outcome — populated in Stage 08 when 24h/72h evaluation runs.
 
-    For Wave 1 this is always None on every signal detail response. We
+    For Phase 1 this is always None on every signal detail response. We
     define the shape now so Stage 08 can drop outcome rows in without any
     frontend or contract change.
     """
