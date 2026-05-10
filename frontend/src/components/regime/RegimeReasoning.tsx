@@ -3,9 +3,9 @@
  *
  * The backend's `RegimeResponse.reasoning` is `Record<string, unknown>` (a
  * pass-through of `regime_snapshots.reasoning` JSONB) so we type-guard each
- * sub-field before reading. Today the classifier stamps four top-level keys:
+ * sub-field before reading. Today the classifier stamps five top-level keys:
  *
- *   { score: int, flow: {...}, news: {...}, macro: {...} }
+ *   { score: int, flow: {...}, news: {...}, macro: {...}, dominance: {...} }
  *
  * (See `pipeline/regime_monitor.py:classify`.) Unknown keys are tolerated —
  * the writer can extend the dict freely; this consumer only renders what it
@@ -25,13 +25,18 @@ export function RegimeReasoning({ reasoning }: RegimeReasoningProps) {
   const flow = readObject(reasoning.flow);
   const news = readObject(reasoning.news);
   const macro = readObject(reasoning.macro);
+  const dominance = readObject(reasoning.dominance);
 
   // Cold-boot safety: if reasoning is empty or missing all known keys,
-  // render a single muted line rather than three empty cards. The /regime
+  // render a single muted line rather than four empty cards. The /regime
   // page itself handles the "no snapshot at all" 503 case upstream — this
   // is the "snapshot exists but reasoning JSONB is malformed/legacy" path.
   const hasAny =
-    totalScore !== null || flow !== null || news !== null || macro !== null;
+    totalScore !== null ||
+    flow !== null ||
+    news !== null ||
+    macro !== null ||
+    dominance !== null;
   if (!hasAny) {
     return (
       <div className="border border-border-2 bg-bg-2 rounded-lg px-5 py-4 font-mono text-[12px] text-text-3">
@@ -41,7 +46,7 @@ export function RegimeReasoning({ reasoning }: RegimeReasoningProps) {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
       {flow && (
         <ReasoningCard
           title="Flow"
@@ -69,6 +74,20 @@ export function RegimeReasoning({ reasoning }: RegimeReasoningProps) {
           rows={macroRows(macro)}
         />
       )}
+      {dominance && (
+        <ReasoningCard
+          title="Dominance"
+          // BTC dominance is persisted on the snapshot for transparency but
+          // is intentionally NOT folded into the directional score (see
+          // pipeline/regime_monitor.py docstring — rising vs falling
+          // dominance is ambiguous as a bull/bear signal). Show the raw
+          // dominance % as the headline; no contribution score.
+          score={null}
+          totalScore={null}
+          headline={dominanceHeadline(dominance)}
+          rows={dominanceRows(dominance)}
+        />
+      )}
     </div>
   );
 }
@@ -81,22 +100,41 @@ interface ReasoningCardProps {
    *  own number. Null hides the weight line. */
   totalScore: number | null;
   rows: Array<{ label: string; value: string }>;
+  /** Override for the right-side header text. When set, replaces the
+   *  signed-score readout. Used for the Dominance card whose headline is
+   *  a raw % rather than a contribution score. Color is muted. */
+  headline?: string | null;
 }
 
-function ReasoningCard({ title, score, totalScore, rows }: ReasoningCardProps) {
+function ReasoningCard({
+  title,
+  score,
+  totalScore,
+  rows,
+  headline,
+}: ReasoningCardProps) {
   // Color the contribution by sign: positive = pos, negative = neg, zero =
   // muted. Mirrors the regime/posture color convention so the page reads
-  // consistently top-to-bottom.
+  // consistently top-to-bottom. When `headline` overrides, color is muted
+  // because the value isn't directional.
   const scoreColor =
-    score === null
-      ? 'var(--color-text-3)'
-      : score > 0
-        ? 'var(--color-pos)'
-        : score < 0
-          ? 'var(--color-neg)'
-          : 'var(--color-text-3)';
+    headline != null
+      ? 'var(--color-text-1)'
+      : score === null
+        ? 'var(--color-text-3)'
+        : score > 0
+          ? 'var(--color-pos)'
+          : score < 0
+            ? 'var(--color-neg)'
+            : 'var(--color-text-3)';
   const scoreText =
-    score === null ? '—' : score > 0 ? `+${score}` : String(score);
+    headline != null
+      ? headline
+      : score === null
+        ? '—'
+        : score > 0
+          ? `+${score}`
+          : String(score);
 
   return (
     <div className="border border-border-2 rounded-lg bg-bg-2 overflow-hidden">
@@ -166,6 +204,50 @@ function newsRows(news: Record<string, unknown>): Array<{ label: string; value: 
   return rows;
 }
 
+function dominanceHeadline(dominance: Record<string, unknown>): string | null {
+  // When the sector-spotlight fetch failed, the classifier writes
+  // `{available: false, fetch_error: ...}`. Show "—" so the header reads
+  // intentionally empty rather than fake "0%".
+  if (dominance.available !== true) return '—';
+  // Backend serialises Decimal → string ("0.5943") to dodge JS-number
+  // precision loss; reformat for display only.
+  const raw = readString(dominance.btc_dominance);
+  if (raw === null) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+function dominanceRows(
+  dominance: Record<string, unknown>,
+): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+
+  // Failure path: just one row carrying the fetch error so users know the
+  // dominance reading is intentionally blank, not "0%". Mirrors macro's
+  // `fetch_error` surfacing.
+  if (dominance.available !== true) {
+    const fetchError = readString(dominance.fetch_error);
+    if (fetchError !== null) {
+      rows.push({ label: 'fetch', value: `failed: ${fetchError}` });
+    } else {
+      const reason = readString(dominance.reason);
+      rows.push({ label: 'state', value: reason ?? 'unavailable' });
+    }
+    return rows;
+  }
+
+  const dom = readString(dominance.btc_dominance);
+  if (dom !== null) rows.push({ label: 'btc', value: formatPct(dom) });
+  const chg = readString(dominance.btc_change_pct_24h);
+  if (chg !== null) rows.push({ label: '24h Δ', value: formatSignedPct(chg) });
+  const sectorCount = readNumber(dominance.sector_count);
+  if (sectorCount !== null) {
+    rows.push({ label: 'sectors', value: String(sectorCount) });
+  }
+  return rows;
+}
+
 function macroRows(macro: Record<string, unknown>): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
   const windowDays = readNumber(macro.window_days);
@@ -214,4 +296,19 @@ function formatUsd(raw: string): string {
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`;
   return `${sign}$${abs.toFixed(0)}`;
+}
+
+// Sector-spotlight numerics are fractions ("0.5943" = 59.43%, "0.006" = 0.60%).
+// Decimal precision arrives as strings; reformat to percent for display.
+function formatPct(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  return `${(n * 100).toFixed(2)}%`;
+}
+
+function formatSignedPct(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  const pct = (n * 100).toFixed(2);
+  return n > 0 ? `+${pct}%` : `${pct}%`;
 }
