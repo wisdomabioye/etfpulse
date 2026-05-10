@@ -28,15 +28,20 @@ Anti-drift rule installed by this stage:
           they're still listed in `get_jobs()`.
 
 Known limitations:
-    - `shutdown(wait=False)` returns instantly. In-flight jobs become orphan
-      asyncio tasks that FastAPI cancels on event-loop teardown. Issue #28
-      tracks the deeper graceful-shutdown work — for Wave 1 the simpler
-      behaviour is fine.
     - Counter / state for OpenRouter cap is process-local (issue #12).
+
+Graceful shutdown (issue #28 — resolved post-Stage-08): on lifespan exit
+we (1) `pause()` the scheduler so no new jobs dispatch, (2) call
+`shutdown(wait=True)` inside `asyncio.to_thread` so it waits for in-flight
+jobs to finish without blocking the event loop, (3) cap the total wait at
+`settings.scheduler_shutdown_grace_seconds` via `asyncio.wait_for`. On
+timeout we log a warning and let event-loop teardown cancel orphans
+(same fallback as before, but now only after the grace expires).
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -434,6 +439,42 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         log.info("scheduler_shutdown_begin")
-        # `wait=False` — see module docstring + issue #28.
+        await _graceful_shutdown(scheduler, settings.scheduler_shutdown_grace_seconds)
+
+
+async def _graceful_shutdown(scheduler: AsyncIOScheduler, grace_seconds: int) -> None:
+    """Drain in-flight jobs with a bounded wait, then shut down (issue #28).
+
+    Sequence:
+        1. `pause()` — stop dispatching new fires. Already-running jobs
+           keep going.
+        2. `await asyncio.wait_for(to_thread(shutdown, wait=True), grace)`
+           — drain in-flight jobs in a worker thread so the event loop
+           stays responsive, capped at `grace` seconds.
+        3. On timeout, log + fall through. Event-loop teardown at process
+           exit cancels any remaining orphan tasks (same end-state as the
+           pre-#28 `wait=False` path, but only reached if drain exceeds
+           the grace budget).
+
+    `grace_seconds = 0` skips the bounded drain entirely and goes straight
+    to `wait=False` — preserves the legacy behaviour for ops who want the
+    old fast-shutdown.
+    """
+    if grace_seconds <= 0:
         scheduler.shutdown(wait=False)
-        log.info("scheduler_shutdown_complete")
+        log.info("scheduler_shutdown_complete", reason="grace_disabled")
+        return
+
+    scheduler.pause()
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(scheduler.shutdown, wait=True),
+            timeout=grace_seconds,
+        )
+        log.info("scheduler_shutdown_complete", reason="drained")
+    except TimeoutError:
+        log.warning(
+            "scheduler_shutdown_timeout",
+            grace_seconds=grace_seconds,
+            note="orphan tasks will be cancelled by event-loop teardown",
+        )

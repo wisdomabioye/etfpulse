@@ -153,6 +153,14 @@ class Settings(BaseSettings):
     acceleration_min_prior_usd: Decimal = Field(default=Decimal("1000000"), ge=Decimal("0"))
     divergence_lookback_days: int = Field(default=3, ge=1)
 
+    # Bounded wait at scheduler shutdown (issue #28). 10s gives in-flight
+    # jobs (a daily cycle, an outcome eval batch) a chance to finish their
+    # current DB transaction before SIGTERM forces the event loop down.
+    # Coolify's deploy timeout is generous; 10s isn't visible to users and
+    # avoids partial-state writes from cancelled transactions. 0 disables
+    # the grace entirely (legacy wait=False behaviour).
+    scheduler_shutdown_grace_seconds: int = Field(default=10, ge=0)
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 

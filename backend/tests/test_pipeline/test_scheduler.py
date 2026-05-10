@@ -747,3 +747,77 @@ class TestDeliveryReaperWrapper:
         monkeypatch.setattr("etfpulse.pipeline.scheduler.fail_stuck_deliveries", _stub)
         result = await _delivery_reaper_with_session()
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _graceful_shutdown — issue #28
+# ---------------------------------------------------------------------------
+
+
+class TestGracefulShutdown:
+    async def test_grace_zero_skips_drain_and_shuts_down_immediately(self):
+        """`grace_seconds=0` preserves legacy fast-shutdown — pause is NOT
+        called, shutdown(wait=False) fires once."""
+        from unittest.mock import MagicMock
+
+        from etfpulse.pipeline.scheduler import _graceful_shutdown
+
+        scheduler = MagicMock()
+
+        await _graceful_shutdown(scheduler, grace_seconds=0)
+
+        scheduler.pause.assert_not_called()
+        scheduler.shutdown.assert_called_once_with(wait=False)
+
+    async def test_drain_completes_within_grace(self, monkeypatch):
+        """Happy path — pause + shutdown(wait=True) completes well under the
+        grace budget. Order: pause first, then shutdown."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from etfpulse.pipeline.scheduler import _graceful_shutdown
+
+        scheduler = MagicMock()
+        call_order: list[str] = []
+        scheduler.pause.side_effect = lambda: call_order.append("pause")
+
+        def _fast_shutdown(wait: bool) -> None:
+            call_order.append(f"shutdown(wait={wait})")
+
+        scheduler.shutdown.side_effect = _fast_shutdown
+
+        # Replace `to_thread` with a same-loop call so the test doesn't pay
+        # for a real thread spin-up. Equivalent for control-flow purposes:
+        # the wrapped sync call still runs to completion.
+        async def _inline_to_thread(fn, *args, **kwargs):
+            fn(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
+
+        await _graceful_shutdown(scheduler, grace_seconds=10)
+
+        assert call_order == ["pause", "shutdown(wait=True)"]
+
+    async def test_drain_timeout_logs_warning_and_returns(self, monkeypatch):
+        """Drain exceeds grace → asyncio.TimeoutError caught, control
+        returns. No second shutdown call (event-loop teardown handles
+        orphans)."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from etfpulse.pipeline.scheduler import _graceful_shutdown
+
+        scheduler = MagicMock()
+
+        async def _hang_forever(fn, *args, **kwargs):
+            # Simulate shutdown(wait=True) blocking longer than grace.
+            await asyncio.sleep(10)
+
+        monkeypatch.setattr(asyncio, "to_thread", _hang_forever)
+
+        # Tight grace so the test is fast.
+        await _graceful_shutdown(scheduler, grace_seconds=1)
+
+        # Pause was the only sync call; shutdown was attempted via
+        # to_thread (which we hung), but never completed within grace.
+        scheduler.pause.assert_called_once()
