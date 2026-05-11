@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from etfpulse.api.routes.admin import router as admin_router
+from etfpulse.api.routes.analytics import router as analytics_router
 from etfpulse.api.routes.dashboard import router as dashboard_router
 from etfpulse.api.routes.health import router as health_router
 from etfpulse.api.routes.regime import router as regime_router
@@ -31,4 +32,5 @@ ALL_ROUTERS: list[APIRouter] = [
     dashboard_router,
     regime_router,
     track_record_router,
+    analytics_router,
 ]
