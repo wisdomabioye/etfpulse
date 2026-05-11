@@ -71,6 +71,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import structlog
+from cachetools import TTLCache
 from sqlalchemy import Numeric, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -344,7 +345,56 @@ async def _histograms(session: AsyncSession) -> tuple[list[HistogramBucket], lis
 
 
 # ---------------------------------------------------------------------------
-# Public surface
+# Cache — 5-min single-key TTLCache. Mirrors the pattern in
+# `pipeline/delivery.py:_track_record_cache` (Stage 8-P8): module-level
+# TTLCache, single key, miss-falls-through-to-DB. Per CLAUDE.md ("No Redis,
+# no Celery") this is in-process — multi-worker deploys would each carry
+# their own copy, which is acceptable for a public dashboard (the worst
+# case is one extra DB roundtrip per worker every 5 minutes).
+#
+# Five minutes balances two concerns:
+#   * Freshness — outcome eval ticks once an hour; numbers don't actually
+#     change minute-to-minute, so a slightly stale cache is invisible.
+#   * Stampede protection — a Hacker News link drop won't hit the DB on
+#     every page view; just one DB query per 5-min window per worker.
+#
+# No asyncio.Lock around the populate path — concurrent cache misses
+# during a TTL boundary can race and both run the query (5 queries × 2
+# concurrent = 10 queries, once every 5 min). Acceptable for this volume;
+# add a lock if monitoring ever shows it matters.
+# ---------------------------------------------------------------------------
+
+
+_BREAKDOWN_CACHE_TTL_SEC = 300
+_BREAKDOWN_CACHE_KEY = "current"
+_breakdown_cache: TTLCache[str, TrackRecordBreakdown] = TTLCache(
+    maxsize=1, ttl=_BREAKDOWN_CACHE_TTL_SEC
+)
+
+
+async def get_cached_track_record_breakdown(session: AsyncSession) -> TrackRecordBreakdown:
+    """Public, cached entry point — what the HTTP route calls.
+
+    Cache miss: runs `get_track_record_breakdown` (5 queries) and stores.
+    Cache hit: zero DB roundtrips, returns the previously-computed instance.
+
+    The uncached `get_track_record_breakdown` stays public so tests can
+    bypass the cache without needing to call `_breakdown_cache.clear()`
+    on every test (autouse fixture can still clear if a test asserts on
+    cache behaviour specifically).
+    """
+    cached = _breakdown_cache.get(_BREAKDOWN_CACHE_KEY)
+    if cached is not None:
+        return cached
+    fresh = await get_track_record_breakdown(session)
+    _breakdown_cache[_BREAKDOWN_CACHE_KEY] = fresh
+    return fresh
+
+
+# ---------------------------------------------------------------------------
+# Uncached public surface — preferred for tests and any caller that needs
+# a guaranteed-fresh snapshot. Production HTTP path goes through the
+# cached wrapper above.
 # ---------------------------------------------------------------------------
 
 
