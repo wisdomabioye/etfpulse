@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Footer, TopNav } from './components/layout';
 import { Admin } from './pages/Admin';
+import { Analytics } from './pages/Analytics';
 import { Home } from './pages/Home';
 import { Regime } from './pages/Regime';
 import { SignalDetail } from './pages/SignalDetail';
@@ -20,6 +21,7 @@ function App() {
               <Route path="/signals/:id" element={<SignalDetail />} />
               <Route path="/regime" element={<Regime />} />
               <Route path="/track-record" element={<TrackRecord />} />
+              <Route path="/analytics" element={<Analytics />} />
               {/* Unlisted from TopNav — operator route, accessed by direct URL. */}
               <Route path="/admin" element={<Admin />} />
             </Routes>

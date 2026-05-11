@@ -19,6 +19,10 @@ const NAV_ITEMS: NavItem[] = [
   // hit_rate_72h carried on the home tile, plus per-asset/per-type
   // filtered views.
   { label: 'Track Record', to: '/track-record', matches: ['/track-record'] },
+  // Analytics (Stage 8-P10) — diagnostic breakdown over the same data
+  // /track-record surfaces. Placed AFTER Track Record so the nav reads
+  // narrowest-to-widest: feed → list → breakdown → regime context.
+  { label: 'Analytics', to: '/analytics', matches: ['/analytics'] },
   // Regime went live in Stage 7-P8 — RegimeBadge below the link surfaces
   // the current classification inline so users can see the regime without
   // navigating. The "Regime" string itself is also a link to /regime.
