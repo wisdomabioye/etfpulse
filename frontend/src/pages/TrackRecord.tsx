@@ -332,49 +332,68 @@ function OutcomeRow({ item }: { item: TrackRecordItem }) {
   const pctClass =
     pctReturn === null ? 'text-text-4' : pctReturn >= 0 ? 'text-pos' : 'text-neg';
 
-  return (
-    <li
-      className={`flex items-center gap-4 px-4 py-3 bg-bg-2 rounded-md ${toneClasses[tone]}`}
+  const assetLink = (
+    <Link
+      to={`/signals/${item.signal_id}`}
+      className="hover:text-accent transition-colors"
     >
-      {/* Asset + type — fixed width so prices align */}
-      <div className="w-24 shrink-0">
-        <div className="text-[13px] text-text-1 font-semibold">
-          <Link
-            to={`/signals/${item.signal_id}`}
-            className="hover:text-accent transition-colors"
-          >
-            {item.asset}
-          </Link>
+      {item.asset}
+    </Link>
+  );
+  const typeLabel = formatSignalType(item.signal_type);
+  const ago = formatAgo(item.evaluated_at);
+
+  return (
+    <li className={`px-4 py-3 bg-bg-2 rounded-md ${toneClasses[tone]}`}>
+      {/* ----------------------------- Mobile (<md) -----------------------------
+          Two rows. Top row gives the actionable answer at a glance: asset,
+          verdict, % return. Bottom row carries the metadata strip: type ·
+          direction · confidence · time-since-eval. Splitting at md keeps
+          everything readable on a 360px viewport without sacrificing any
+          column from the desktop layout. */}
+      <div className="md:hidden flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[14px] text-text-1 font-semibold">{assetLink}</div>
+          <div className="flex items-center gap-3 font-mono text-[12px] tabular-nums">
+            <span className="text-[11px]">{outcomeBadge}</span>
+            <span className={pctClass}>{pctText}</span>
+          </div>
         </div>
-        <div className="font-mono text-[10px] text-text-3 uppercase tracking-[0.08em]">
-          {formatSignalType(item.signal_type)}
+        <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-text-3 uppercase tracking-[0.08em]">
+          <div className="truncate">
+            {typeLabel} · {item.direction} · conf {item.confidence}/10
+          </div>
+          <div className="text-text-4 shrink-0">{ago}</div>
         </div>
       </div>
 
-      {/* Direction + confidence */}
-      <div className="w-24 shrink-0">
-        <div className="text-[12px] text-text-2 uppercase">{item.direction}</div>
-        <div className="font-mono text-[11px] text-text-3">
-          conf {item.confidence}/10
+      {/* ----------------------------- Desktop (≥md) ----------------------------
+          Original 5-column layout — unchanged. Fixed widths align the
+          columns visually across rows so a reader can scan down a single
+          dimension (e.g. "all the +X% returns") without re-tracking. */}
+      <div className="hidden md:flex md:items-center md:gap-4">
+        <div className="w-24 shrink-0">
+          <div className="text-[13px] text-text-1 font-semibold">{assetLink}</div>
+          <div className="font-mono text-[10px] text-text-3 uppercase tracking-[0.08em]">
+            {typeLabel}
+          </div>
         </div>
-      </div>
-
-      {/* Outcome verdict */}
-      <div className="w-28 shrink-0 font-mono text-[11px] tabular-nums">
-        {outcomeBadge}
-      </div>
-
-      {/* 72h return */}
-      <div className={`w-20 shrink-0 font-mono text-[12px] tabular-nums ${pctClass}`}>
-        {pctText}
-      </div>
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* Eval timestamp */}
-      <div className="font-mono text-[10px] text-text-4 tabular-nums shrink-0">
-        {formatAgo(item.evaluated_at)}
+        <div className="w-24 shrink-0">
+          <div className="text-[12px] text-text-2 uppercase">{item.direction}</div>
+          <div className="font-mono text-[11px] text-text-3">
+            conf {item.confidence}/10
+          </div>
+        </div>
+        <div className="w-28 shrink-0 font-mono text-[11px] tabular-nums">
+          {outcomeBadge}
+        </div>
+        <div className={`w-20 shrink-0 font-mono text-[12px] tabular-nums ${pctClass}`}>
+          {pctText}
+        </div>
+        <div className="flex-1" />
+        <div className="font-mono text-[10px] text-text-4 tabular-nums shrink-0">
+          {ago}
+        </div>
       </div>
     </li>
   );
