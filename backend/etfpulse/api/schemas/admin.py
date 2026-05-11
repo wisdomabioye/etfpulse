@@ -120,6 +120,27 @@ class RetryAiErrorSample(BaseModel):
     detail: str
 
 
+class EvalOutcomesResponse(BaseModel):
+    """Result of a single `POST /api/admin/signals/eval-outcomes` invocation.
+
+    Mirrors the per-tick summary `evaluate_pending_outcomes` returns. The
+    operator-facing fields are `evaluated` (success count) and `remaining`
+    (candidates left over after the limit truncation — > 0 means click
+    again to drain). Skip/error counters help diagnose why a candidate
+    didn't produce an outcome (NULL direction, unknown asset, no klines
+    in window, etc).
+    """
+
+    candidates: int = Field(ge=0)
+    evaluated: int = Field(ge=0)
+    skipped_no_direction: int = Field(ge=0)
+    skipped_unknown_asset: int = Field(ge=0)
+    skipped_no_klines: int = Field(ge=0)
+    skipped_no_bars_in_window: int = Field(ge=0)
+    errored: int = Field(ge=0)
+    remaining: int = Field(ge=0)
+
+
 class RetryAiResponse(BaseModel):
     """Result of a single `POST /api/admin/signals/retry-ai` invocation.
 

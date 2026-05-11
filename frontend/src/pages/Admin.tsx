@@ -2,9 +2,11 @@ import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   useAdminMetrics,
+  useEvalOutcomes,
   useRetryAiNullSignals,
   useRotateWebhookSecret,
   useTriggerSignalCycle,
+  type EvalOutcomesResult,
   type RetryAiResult,
   type RotateWebhookSecretResult,
   type TriggerCycleResponse,
@@ -136,6 +138,7 @@ export function Admin() {
 function ActionsPanel({ adminKey }: { adminKey: string }) {
   const trigger = useTriggerSignalCycle(adminKey);
   const retryAi = useRetryAiNullSignals(adminKey);
+  const evalOutcomes = useEvalOutcomes(adminKey);
   const rotate = useRotateWebhookSecret(adminKey);
   const [confirmRotate, setConfirmRotate] = useState(false);
 
@@ -184,6 +187,28 @@ function ActionsPanel({ adminKey }: { adminKey: string }) {
       </div>
       {retryAi.error && <ActionError error={retryAi.error} />}
       {retryAi.data && <RetryAiResultDisplay result={retryAi.data} />}
+
+      {/* Evaluate outcomes on demand -------------------------------------- */}
+      <div className="flex flex-wrap items-start gap-3 border-t border-border-2 pt-4">
+        <div className="flex-1 min-w-[260px]">
+          <div className="text-[14px] font-semibold text-text-1">
+            Evaluate outcomes now
+          </div>
+          <div className="text-[12px] text-text-3">
+            Scores aged signals (≥72h old, with price + confidence) into <code className="font-mono">SignalOutcome</code> rows. The scheduled job runs hourly capped at <code className="font-mono">OUTCOME_EVAL_BATCH_LIMIT</code> (default 50); this button uses a smaller per-click cap of 20 to stay safely below SoSoValue's rate limit. Re-fire while <code className="font-mono">remaining &gt; 0</code> to drain a backlog.
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={() => evalOutcomes.mutate(20)}
+          disabled={evalOutcomes.isPending}
+        >
+          {evalOutcomes.isPending ? 'Evaluating…' : 'Evaluate (20)'}
+        </Button>
+      </div>
+      {evalOutcomes.error && <ActionError error={evalOutcomes.error} />}
+      {evalOutcomes.data && <EvalOutcomesResultDisplay result={evalOutcomes.data} />}
 
       {/* Rotate webhook secret -------------------------------------------- */}
       <div className="flex flex-wrap items-start gap-3 border-t border-border-2 pt-4">
@@ -341,6 +366,70 @@ function RetryAiResultDisplay({ result }: { result: RetryAiResult }) {
                 <span className="text-text-3">— {s.detail}</span>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+    </Callout>
+  );
+}
+
+function EvalOutcomesResultDisplay({ result }: { result: EvalOutcomesResult }) {
+  // Tone selection mirrors operator-facing meaning, same convention as
+  // RetryAiResultDisplay:
+  //   - 0 candidates → info (backlog empty — nothing to do)
+  //   - all evaluated → green (full success)
+  //   - partial / errored / skipped → warn (re-fire or investigate)
+  const tone: 'pos' | 'warn' | 'info' =
+    result.candidates === 0
+      ? 'info'
+      : result.evaluated === result.candidates
+        ? 'pos'
+        : 'warn';
+  const skipped =
+    result.skipped_no_direction +
+    result.skipped_unknown_asset +
+    result.skipped_no_klines +
+    result.skipped_no_bars_in_window;
+  return (
+    <Callout tone={tone}>
+      <div className="font-mono text-[12px] space-y-2">
+        <div className="flex flex-wrap gap-x-6 gap-y-1">
+          <ResultLine label="Candidates" value={result.candidates} />
+          <ResultLine label="Evaluated" value={result.evaluated} />
+          <ResultLine
+            label="Skipped"
+            value={skipped}
+            tone={skipped > 0 ? 'warn' : undefined}
+          />
+          <ResultLine
+            label="Errored"
+            value={result.errored}
+            tone={result.errored > 0 ? 'warn' : undefined}
+          />
+          <ResultLine
+            label="Remaining"
+            value={result.remaining}
+            tone={result.remaining > 0 ? 'warn' : undefined}
+          />
+        </div>
+        {result.candidates === 0 && (
+          <div className="text-[11px] text-text-3">
+            No aged signals to score — backlog is empty (or the next eligible
+            signal is still under 72h old).
+          </div>
+        )}
+        {result.remaining > 0 && (
+          <div className="text-[11px] text-text-2">
+            {result.remaining} more eligible signal{result.remaining === 1 ? '' : 's'} left
+            after this batch — click again to continue draining.
+          </div>
+        )}
+        {skipped > 0 && (
+          <div className="text-[11px] text-text-3 pt-1 border-t border-border-2">
+            Skipped breakdown: no_direction={result.skipped_no_direction} ·
+            unknown_asset={result.skipped_unknown_asset} ·
+            no_klines={result.skipped_no_klines} ·
+            no_bars_in_window={result.skipped_no_bars_in_window}
           </div>
         )}
       </div>

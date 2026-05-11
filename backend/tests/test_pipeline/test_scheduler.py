@@ -635,7 +635,9 @@ class TestOutcomeEvalJobRegistration:
 class TestOutcomeEvalWrapper:
     async def test_returns_summary_on_success(self, monkeypatch):
         """Happy path — wrapper awaits evaluate_pending_outcomes, commits,
-        returns the summary dict verbatim."""
+        returns the summary dict verbatim. Confirms the wrapper passes the
+        env-driven `outcome_eval_batch_limit` so a fresh-deploy backlog
+        can't trip upstream rate limits in a single tick."""
         from etfpulse.pipeline.scheduler import _outcome_eval_with_session
 
         expected = {
@@ -646,15 +648,20 @@ class TestOutcomeEvalWrapper:
             "skipped_no_klines": 0,
             "skipped_no_bars_in_window": 0,
             "errored": 0,
+            "remaining": 0,
         }
+        captured: dict = {}
 
-        async def _stub(session):
+        async def _stub(session, *, limit):
+            captured["limit"] = limit
             return expected
 
         monkeypatch.setattr("etfpulse.pipeline.scheduler.evaluate_pending_outcomes", _stub)
+        monkeypatch.setattr(settings, "outcome_eval_batch_limit", 50)
 
         result = await _outcome_eval_with_session()
         assert result == expected
+        assert captured["limit"] == 50
 
     async def test_returns_none_on_exception(self, monkeypatch):
         """Exception in the orchestrator must NOT propagate — APScheduler
@@ -662,7 +669,7 @@ class TestOutcomeEvalWrapper:
         logs, returns None so the next interval still ticks."""
         from etfpulse.pipeline.scheduler import _outcome_eval_with_session
 
-        async def _stub(session):
+        async def _stub(session, *, limit):
             raise RuntimeError("boom")
 
         monkeypatch.setattr("etfpulse.pipeline.scheduler.evaluate_pending_outcomes", _stub)
@@ -686,7 +693,7 @@ class TestOutcomeEvalWrapper:
         async def _yielder():
             yield fake_session
 
-        async def _stub(session):
+        async def _stub(session, *, limit):
             raise RuntimeError("boom")
 
         monkeypatch.setattr("etfpulse.pipeline.scheduler.async_session", _yielder)

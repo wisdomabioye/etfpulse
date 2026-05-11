@@ -749,3 +749,145 @@ class TestGetStatsByConfidenceFloor:
 
         stat = await get_stats_by_confidence_floor(db_session)
         assert stat.hit_rate_pct(7) == 43
+
+
+# ---------------------------------------------------------------------------
+# Limit + remaining — protects upstream klines APIs from fresh-deploy backlogs
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluatePendingOutcomesLimit:
+    """`limit` caps batch size to bound upstream klines fetch volume.
+    `remaining` reports the leftover so the caller (admin button or operator
+    log) knows whether to click again."""
+
+    async def test_limit_caps_candidates_processed(self, db_session, stub_klines):
+        """5 aged eligible signals + limit=2 → only 2 in candidates AND
+        only 2 klines fetches happen (proved via stub call count)."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        for i in range(5):
+            sig = _make_signal(created_at=t0, fingerprint_extra=f"limit-{i}")
+            sig.created_at = t0 - timedelta(seconds=i)  # deterministic ordering
+            db_session.add(sig)
+        await db_session.flush()
+
+        t0_ms = int(t0.timestamp() * 1000)
+        stub_klines["bars"] = [
+            PriceBar(
+                timestamp_ms=t0_ms + i * 24 * 3600 * 1000,
+                open=Decimal("84200"),
+                high=Decimal("84300"),
+                low=Decimal("84100"),
+                close=Decimal("84200"),
+            )
+            for i in range(3)
+        ]
+
+        summary = await evaluate_pending_outcomes(db_session, limit=2)
+        assert summary["candidates"] == 2
+        assert summary["evaluated"] == 2
+        # Only 2 klines calls — proves the LIMIT is applied at the SQL level,
+        # not after a 5-row materialization.
+        assert len(stub_klines["calls"]) == 2
+
+    async def test_remaining_reports_leftover_when_limit_filled(self, db_session, stub_klines):
+        """Limit=2 with 5 eligible → remaining=3. Operator can re-click
+        until remaining=0 to drain the backlog."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        for i in range(5):
+            sig = _make_signal(created_at=t0, fingerprint_extra=f"rem-{i}")
+            sig.created_at = t0 - timedelta(seconds=i)
+            db_session.add(sig)
+        await db_session.flush()
+
+        t0_ms = int(t0.timestamp() * 1000)
+        stub_klines["bars"] = [
+            PriceBar(
+                timestamp_ms=t0_ms,
+                open=Decimal("84200"),
+                high=Decimal("84300"),
+                low=Decimal("84100"),
+                close=Decimal("84200"),
+            )
+        ]
+
+        summary = await evaluate_pending_outcomes(db_session, limit=2)
+        assert summary["candidates"] == 2
+        assert summary["remaining"] == 3
+
+    async def test_remaining_is_zero_when_limit_not_filled(self, db_session, stub_klines):
+        """3 eligible + limit=10 → remaining=0 (no need for another click).
+        Avoids the COUNT roundtrip on the common under-limit path."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        for i in range(3):
+            sig = _make_signal(created_at=t0, fingerprint_extra=f"under-{i}")
+            sig.created_at = t0 - timedelta(seconds=i)
+            db_session.add(sig)
+        await db_session.flush()
+
+        stub_klines["bars"] = [
+            PriceBar(
+                timestamp_ms=int(t0.timestamp() * 1000),
+                open=Decimal("84200"),
+                high=Decimal("84300"),
+                low=Decimal("84100"),
+                close=Decimal("84200"),
+            )
+        ]
+
+        summary = await evaluate_pending_outcomes(db_session, limit=10)
+        assert summary["candidates"] == 3
+        assert summary["remaining"] == 0
+
+    async def test_remaining_zero_in_unlimited_mode(self, db_session, stub_klines):
+        """`limit=None` (scheduler default in current call site) → remaining
+        always 0. The unlimited path is fully drained by definition; we
+        skip the COUNT roundtrip entirely."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        for i in range(3):
+            sig = _make_signal(created_at=t0, fingerprint_extra=f"unlim-{i}")
+            sig.created_at = t0 - timedelta(seconds=i)
+            db_session.add(sig)
+        await db_session.flush()
+
+        stub_klines["bars"] = [
+            PriceBar(
+                timestamp_ms=int(t0.timestamp() * 1000),
+                open=Decimal("84200"),
+                high=Decimal("84300"),
+                low=Decimal("84100"),
+                close=Decimal("84200"),
+            )
+        ]
+
+        summary = await evaluate_pending_outcomes(db_session, limit=None)
+        assert summary["candidates"] == 3
+        assert summary["remaining"] == 0
+
+    async def test_oldest_signals_processed_first(self, db_session, stub_klines):
+        """FIFO drain — oldest signals score first when the limit truncates.
+        Same operator intuition as the AI-retry backfill."""
+        now = datetime.now(UTC)
+        old = _make_signal(created_at=now - timedelta(hours=200), fingerprint_extra="OLD")
+        old.created_at = now - timedelta(hours=200)
+        new = _make_signal(created_at=now - timedelta(hours=80), fingerprint_extra="NEW")
+        new.created_at = now - timedelta(hours=80)
+        db_session.add_all([new, old])  # insert order ≠ created_at order
+        await db_session.flush()
+
+        stub_klines["bars"] = [
+            PriceBar(
+                timestamp_ms=int((now - timedelta(hours=200)).timestamp() * 1000),
+                open=Decimal("84200"),
+                high=Decimal("84300"),
+                low=Decimal("84100"),
+                close=Decimal("84200"),
+            )
+        ]
+
+        summary = await evaluate_pending_outcomes(db_session, limit=1)
+        assert summary["evaluated"] == 1
+        # Only one outcome row inserted — for the OLDER signal.
+        outcomes = (await db_session.execute(select(SignalOutcome))).scalars().all()
+        assert len(outcomes) == 1
+        assert outcomes[0].signal_id == old.id

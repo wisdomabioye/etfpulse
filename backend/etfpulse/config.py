@@ -123,6 +123,16 @@ class Settings(BaseSettings):
     # is wasted work because no new bars become available between ticks.
     # 60s floor protects against accidental sub-minute configs in tests.
     outcome_eval_interval_seconds: int = Field(default=3600, ge=60)
+    # Per-tick cap on outcome-eval batch size. Each candidate signal triggers
+    # one upstream klines fetch (SoSoValue primary, ~100 req/min cap), so an
+    # uncapped tick on a fresh deploy with a stranded backlog of 200+
+    # signals would risk tripping the rate limit AND exhausting the tick's
+    # asyncio time budget. Default 50 leaves comfortable headroom against
+    # both — at 50 sequential klines fetches this is ~30s wall time, well
+    # within the 1h tick. Steady-state ticks rarely have ≥10 candidates.
+    # Bounds: [1, 500]. Values >500 defeat the purpose of a cap; <1 would
+    # halt evaluation entirely.
+    outcome_eval_batch_limit: int = Field(default=50, ge=1, le=500)
     # Reapers (issues #30 + #36). Both run on the same cadence — neither is
     # latency-sensitive. 15 min is well under any plausible signal half-life
     # while infrequent enough that a flapping reaper doesn't burn cycles.

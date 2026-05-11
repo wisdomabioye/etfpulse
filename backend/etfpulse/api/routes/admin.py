@@ -27,6 +27,7 @@ from etfpulse.api.deps import get_db_session, require_admin_key
 from etfpulse.api.schemas.admin import (
     AdminMetrics,
     DeliveryStatusCounts,
+    EvalOutcomesResponse,
     RetryAiErrorSample,
     RetryAiResponse,
     SchedulerJobInfo,
@@ -43,6 +44,7 @@ from etfpulse.pipeline.ai_backfill import backfill_null_ai
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
 from etfpulse.pipeline.scheduler import _run_cycle_with_session
+from etfpulse.pipeline.track_record import evaluate_pending_outcomes
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -76,6 +78,45 @@ async def trigger_signal_cycle() -> dict[str, Any]:
         )
     log.info("admin_trigger_cycle_done", **summary)
     return summary
+
+
+@router.post(
+    "/signals/eval-outcomes",
+    response_model=EvalOutcomesResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def eval_outcomes_now(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> EvalOutcomesResponse:
+    """Run the outcome evaluator on demand, capped at `limit` candidates.
+
+    The scheduled job runs hourly and is bounded by
+    `OUTCOME_EVAL_BATCH_LIMIT` (default 50). This endpoint is the
+    operator-facing escape hatch for "drain my fresh-deploy backlog
+    without waiting an hour" — same semantics, smaller default cap (20)
+    so a click can't accidentally fire 100 sequential klines requests.
+
+    Re-fire with the response's `remaining` value to drain a larger
+    backlog: when `remaining == 0`, the queue is empty.
+
+    Owns its own commit (consistent with other admin actions). Per-signal
+    failures are absorbed by the helper's catch-and-continue loop and
+    counted in `errored`; a catastrophic failure (DB drop, unexpected
+    raise) propagates so the operator sees the actual exception rather
+    than a silent partial commit.
+    """
+    log.info("admin_eval_outcomes_begin", limit=limit)
+    summary = await evaluate_pending_outcomes(session, limit=limit)
+    await session.commit()
+    log.info(
+        "admin_eval_outcomes_done",
+        candidates=summary["candidates"],
+        evaluated=summary["evaluated"],
+        remaining=summary["remaining"],
+    )
+    return EvalOutcomesResponse(**summary)
 
 
 @router.post(

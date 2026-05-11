@@ -163,6 +163,50 @@ export function useTriggerSignalCycle(adminKey: string) {
   });
 }
 
+/** Response shape of `POST /api/admin/signals/eval-outcomes`. Mirrors
+ *  the per-tick summary `evaluate_pending_outcomes` returns on the backend.
+ *  `remaining > 0` means the limit truncated the batch — operator should
+ *  re-fire to drain the rest. `evaluated + skipped_* + errored == candidates`
+ *  in every well-formed response. */
+export interface EvalOutcomesResult {
+  candidates: number;
+  evaluated: number;
+  skipped_no_direction: number;
+  skipped_unknown_asset: number;
+  skipped_no_klines: number;
+  skipped_no_bars_in_window: number;
+  errored: number;
+  remaining: number;
+}
+
+/** Run the outcome evaluator on demand. Bounded by `limit` (server enforces
+ *  [1, 100], default 20) so a click can't fire 100+ klines requests. Use
+ *  the response's `remaining` to decide whether another click is needed.
+ *  On success we invalidate `track-record` (the public hit-rate page reads
+ *  SignalOutcome) and `signals` (signal status flips evaluated→evaluated). */
+export function useEvalOutcomes(adminKey: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (limit: number = 20) =>
+      apiPost<EvalOutcomesResult>(
+        `/api/admin/signals/eval-outcomes?limit=${limit}`,
+        undefined,
+        { 'X-Admin-Key': adminKey },
+      ),
+    retry: false,
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'metrics'] });
+      // Skip the wider invalidation when no row actually scored — saves
+      // a few unnecessary refetches on empty-backlog clicks.
+      if (result.evaluated > 0) {
+        qc.invalidateQueries({ queryKey: ['track-record'] });
+        qc.invalidateQueries({ queryKey: ['signals'] });
+        qc.invalidateQueries({ queryKey: ['dashboard'] });
+      }
+    },
+  });
+}
+
 /** Per-row failure detail emitted by `POST /api/admin/signals/retry-ai`.
  *  Mirrors `RetryAiErrorSample` on the backend. Capped to 3 entries by
  *  the server. */

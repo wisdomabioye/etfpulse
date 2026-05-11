@@ -623,3 +623,98 @@ class TestRetryAiRoute:
         )
         assert r.status_code == 200
         assert captured["limit"] == 10
+
+
+class TestEvalOutcomesRoute:
+    """`POST /api/admin/signals/eval-outcomes` — auth gate + the same
+    helper-orchestration contract as Retry AI. The helper itself is
+    unit-tested in `tests/test_pipeline/test_track_record.py`; here we
+    just verify the route wires limit + key gate correctly."""
+
+    _SAMPLE_SUMMARY = {
+        "candidates": 3,
+        "evaluated": 2,
+        "skipped_no_direction": 1,
+        "skipped_unknown_asset": 0,
+        "skipped_no_klines": 0,
+        "skipped_no_bars_in_window": 0,
+        "errored": 0,
+        "remaining": 5,
+    }
+
+    async def test_disabled_when_admin_key_empty(self, db_session, monkeypatch):
+        monkeypatch.setattr(settings, "admin_api_key", "")
+        app = create_app()
+
+        async def _override() -> AsyncIterator:
+            yield db_session
+
+        app.dependency_overrides[get_db_session] = _override
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.post("/api/admin/signals/eval-outcomes")
+        app.dependency_overrides.clear()
+        assert r.status_code == 503
+
+    async def test_wrong_key_returns_401(self, metrics_client):
+        r = await metrics_client.post(
+            "/api/admin/signals/eval-outcomes", headers={"X-Admin-Key": "wrong"}
+        )
+        assert r.status_code == 401
+
+    async def test_invalid_limit_returns_422(self, metrics_client):
+        """Bounds [1, 100] enforced via Query. Operator can't drain
+        thousands in one click."""
+        r = await metrics_client.post(
+            "/api/admin/signals/eval-outcomes?limit=0",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 422
+
+    async def test_limit_above_cap_returns_422(self, metrics_client):
+        r = await metrics_client.post(
+            "/api/admin/signals/eval-outcomes?limit=101",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 422
+
+    async def test_route_passes_limit_through_and_returns_summary(
+        self, metrics_client, monkeypatch
+    ):
+        """Route forwards `limit` to the helper and returns the typed summary."""
+        captured: dict = {}
+
+        async def _stub(session, *, limit):
+            captured["limit"] = limit
+            return self._SAMPLE_SUMMARY
+
+        monkeypatch.setattr("etfpulse.api.routes.admin.evaluate_pending_outcomes", _stub)
+
+        r = await metrics_client.post(
+            "/api/admin/signals/eval-outcomes?limit=15",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 200
+        assert captured["limit"] == 15
+        body = r.json()
+        assert body["evaluated"] == 2
+        assert body["remaining"] == 5
+        assert body["skipped_no_direction"] == 1
+
+    async def test_default_limit_is_twenty(self, metrics_client, monkeypatch):
+        """Default `limit=20` — smaller than the scheduled job's 50 cap
+        so a click can't accidentally fire 50+ klines requests."""
+        captured: dict = {}
+
+        async def _stub(session, *, limit):
+            captured["limit"] = limit
+            return self._SAMPLE_SUMMARY
+
+        monkeypatch.setattr("etfpulse.api.routes.admin.evaluate_pending_outcomes", _stub)
+
+        r = await metrics_client.post(
+            "/api/admin/signals/eval-outcomes",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 200
+        assert captured["limit"] == 20

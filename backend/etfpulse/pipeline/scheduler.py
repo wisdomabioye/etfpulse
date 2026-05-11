@@ -211,7 +211,13 @@ async def _outcome_eval_with_session() -> dict[str, int] | None:
     """
     async with async_session() as session:
         try:
-            summary = await evaluate_pending_outcomes(session)
+            # Cap the per-tick batch via env (default 50). Bounds the
+            # upstream klines-fetch volume so a fresh-deploy backlog can't
+            # trip SoSoValue's 100 req/min cap. Backlog larger than the
+            # cap gets drained over subsequent ticks.
+            summary = await evaluate_pending_outcomes(
+                session, limit=settings.outcome_eval_batch_limit
+            )
             await session.commit()
             # Quiet on no-op ticks — most hourly runs find no new candidates.
             if summary.get("candidates", 0) > 0:

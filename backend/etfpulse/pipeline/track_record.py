@@ -313,13 +313,29 @@ async def get_recent_outcomes(session: AsyncSession, *, limit: int = 5) -> list[
     return list(result.scalars().all())
 
 
-async def evaluate_pending_outcomes(session: AsyncSession) -> dict[str, int]:
-    """Score every aged signal that doesn't yet have an outcome.
+async def evaluate_pending_outcomes(
+    session: AsyncSession, *, limit: int | None = None
+) -> dict[str, int]:
+    """Score aged signals that don't yet have an outcome.
 
     Returns a per-tick summary dict — same convention as
     `pipeline.delivery.send_pending_deliveries`. Useful for admin/log
     visibility: how many candidates, how many actually got an outcome
     inserted, how many were skipped and why.
+
+    `limit` (None = unlimited) caps the batch size to bound upstream
+    klines API spend per invocation. Important on fresh deploys with
+    a large stranded backlog: a single tick processing 200+ candidates
+    would fire 200+ klines fetches sequentially, risking SoSoValue's
+    100 req/min cap. The scheduler wrapper passes
+    `settings.outcome_eval_batch_limit`; the admin route exposes it
+    as a query param. Steady-state ticks usually have ≤ a handful of
+    candidates so the cap is rarely binding.
+
+    `summary["remaining"]` reports candidates left over after the limit
+    truncation — operators see "we processed 50 of 247, click again".
+    `0` means the backlog is drained and the next scheduled tick has
+    nothing to do.
 
     Does NOT commit (D14/D18). Caller's session wrapper owns the
     transaction boundary — the scheduler job in P3 wraps a fresh
@@ -333,24 +349,46 @@ async def evaluate_pending_outcomes(session: AsyncSession) -> dict[str, int]:
         "skipped_no_klines": 0,
         "skipped_no_bars_in_window": 0,
         "errored": 0,
+        # Eligible candidates left over after the limit truncation. 0 in the
+        # unlimited / fully-drained case; > 0 means another tick (or another
+        # button click) will pick up where this one left off.
+        "remaining": 0,
     }
 
     cutoff = datetime.now(UTC) - timedelta(hours=_EVAL_DELAY_HOURS)
 
     # LEFT JOIN to filter out signals that already have an outcome row,
     # rather than a NOT IN subquery — cheaper plan + clearer.
+    base_filters = (
+        Signal.price_at_creation.is_not(None),
+        Signal.confidence.is_not(None),
+        Signal.created_at <= cutoff,
+    )
     stmt = (
         select(Signal)
         .outerjoin(SignalOutcome, SignalOutcome.signal_id == Signal.id)
         .where(SignalOutcome.id.is_(None))
-        .where(Signal.created_at <= cutoff)
-        .where(Signal.price_at_creation.is_not(None))
-        .where(Signal.confidence.is_not(None))
+        .where(*base_filters)
         .order_by(Signal.created_at)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     signals = list(result.scalars().all())
     summary["candidates"] = len(signals)
+
+    # Compute `remaining` only when a limit was applied AND the batch
+    # filled it — that's the only case where there COULD be more. Avoids
+    # an unnecessary COUNT roundtrip on the (common) unlimited path and
+    # on the (common) under-limit-batch path.
+    if limit is not None and len(signals) == limit:
+        total_eligible = await session.scalar(
+            select(func.count(Signal.id))
+            .outerjoin(SignalOutcome, SignalOutcome.signal_id == Signal.id)
+            .where(SignalOutcome.id.is_(None))
+            .where(*base_filters)
+        )
+        summary["remaining"] = max(0, (total_eligible or 0) - len(signals))
 
     for signal in signals:
         # Per-signal try/except mirrors `run_daily_cycle`'s D13 contract: a
