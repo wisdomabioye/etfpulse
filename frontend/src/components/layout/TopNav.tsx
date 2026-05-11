@@ -2,6 +2,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { useDashboardStats } from '../../api/queries';
 import { narrowRegime } from '../../lib/format';
 import { RegimeBadge } from '../regime/RegimeBadge';
+import { LivePulse } from './LivePulse';
 import { Logo } from './Logo';
 
 interface NavItem {
@@ -43,8 +44,9 @@ export function TopNav() {
   return (
     <nav className="flex items-center justify-between px-6 sm:px-8 py-4 border-b border-border-2">
       <Logo size={15} />
-      <div className="flex items-center gap-1">
-        {NAV_ITEMS.map((item) => {
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1">
+          {NAV_ITEMS.map((item) => {
           if (item.to === null) {
             return (
               <span
@@ -78,6 +80,9 @@ export function TopNav() {
             </NavLink>
           );
         })}
+        </div>
+        <span className="hidden sm:inline-block w-px h-4 bg-border-2" aria-hidden />
+        <LivePulse />
       </div>
     </nav>
   );

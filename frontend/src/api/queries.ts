@@ -23,6 +23,62 @@ import type {
   TrackRecordFilters,
 } from './types';
 
+/** Readiness body returned by `GET /api/health/ready`. Shape is stable across
+ *  200 (ok) and 503 (degraded) — see backend `health.py:readiness`. We read
+ *  the body in both cases so the UI can distinguish "DB down" from "warnings
+ *  only" rather than collapsing both into a single error state. */
+export interface ReadinessResponse {
+  status: 'ok' | 'degraded';
+  db: 'ok' | 'error';
+  config: { errors: string[]; warnings: string[] };
+}
+
+/** Three-state liveness derived from readiness:
+ *  - `live` — 200, no config errors/warnings
+ *  - `degraded` — 200 with warnings, OR 503 with warnings only (DB fine)
+ *  - `down` — 503 with `db: error`, or network failure */
+export type LivenessState = 'live' | 'degraded' | 'down';
+
+export interface Liveness {
+  state: LivenessState;
+  readiness: ReadinessResponse | null;
+}
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+
+/** Custom fetch — readiness returns 503 with a JSON body on degraded, which
+ *  the standard `apiGet` would throw on. We read the body in both cases. */
+async function fetchReadiness(): Promise<Liveness> {
+  try {
+    const res = await fetch(`${API_BASE}/api/health/ready`, {
+      headers: { Accept: 'application/json' },
+    });
+    const body = (await res.json()) as ReadinessResponse;
+    if (res.ok && body.status === 'ok') {
+      return { state: 'live', readiness: body };
+    }
+    if (body.db === 'error') {
+      return { state: 'down', readiness: body };
+    }
+    return { state: 'degraded', readiness: body };
+  } catch {
+    return { state: 'down', readiness: null };
+  }
+}
+
+/** Liveness pulse — polls /api/health/ready every 30s. Tolerant of 503
+ *  (degraded body is informative, not an error). Never retries — the next
+ *  poll tick is the retry. */
+export function useLiveness() {
+  return useQuery({
+    queryKey: ['liveness'],
+    queryFn: fetchReadiness,
+    refetchInterval: 30_000,
+    retry: false,
+    staleTime: 0,
+  });
+}
+
 /** Home page headline tiles. Refetches every 30s (TanStack staleTime default). */
 export function useDashboardStats() {
   return useQuery({
