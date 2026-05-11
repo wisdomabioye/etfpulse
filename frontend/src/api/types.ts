@@ -292,6 +292,57 @@ export interface RegimeResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Analytics — backs `/analytics` page (Stage 8-P10).
+// Mirrors backend `api/schemas/analytics.py` exactly. Field-for-field rename
+// in either layer breaks the FE; keep the two in sync in the same change.
+// ---------------------------------------------------------------------------
+
+/** One row of a categorical breakdown (detector / asset / direction /
+ *  confidence-bucket). `hit_rate_pct` is null when `targeted === 0` — the
+ *  null-vs-zero distinction is load-bearing; render null as "—" or "pending",
+ *  never as "0%". */
+export interface BreakdownStat {
+  label: string;
+  total: number;
+  /** Subset of `total` where the source signal had a target_price (i.e. AI
+   *  set a target). Denominator for `hit_rate_pct`. */
+  targeted: number;
+  hits: number;
+  /** 0..100, rounded to 2dp by `compute_hit_rate_pct` on the backend. */
+  hit_rate_pct: number | null;
+}
+
+/** One bin of the MFE/MAE histogram. `lower` inclusive, `upper` exclusive.
+ *  The final bucket has `upper: null` (open-ended ≥10%). Both bounds are
+ *  unsigned fractions — 0.025 means 2.5%. */
+export interface HistogramBucket {
+  label: string;
+  lower: number;
+  upper: number | null;
+  count: number;
+}
+
+/** Response from `GET /api/analytics/breakdown` (public).
+ *
+ *  All four categorical breakdowns share the `BreakdownStat[]` shape so the
+ *  frontend renders them with a single component. The two histograms share
+ *  the `HistogramBucket[]` shape for the same reason.
+ *
+ *  `total_outcomes` is the global denominator captioned at the top of the
+ *  page ("Based on N evaluated signals") — answers the statistical-thinness
+ *  question every track-record reader has. Cold-boot returns 0 and the page
+ *  renders the empty state. */
+export interface TrackRecordBreakdown {
+  total_outcomes: number;
+  by_detector: BreakdownStat[];
+  by_asset: BreakdownStat[];
+  by_confidence_bucket: BreakdownStat[];
+  by_direction: BreakdownStat[];
+  mfe_histogram: HistogramBucket[];
+  mae_histogram: HistogramBucket[];
+}
+
+// ---------------------------------------------------------------------------
 // Admin
 // ---------------------------------------------------------------------------
 

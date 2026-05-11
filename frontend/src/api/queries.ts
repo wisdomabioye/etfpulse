@@ -20,6 +20,7 @@ import type {
   RegimeResponse,
   SignalDetail,
   SignalFilters,
+  TrackRecordBreakdown,
   TrackRecordFilters,
 } from './types';
 
@@ -131,6 +132,23 @@ export function useRegime() {
       if (error instanceof ApiError && error.status === 503) return false;
       return failureCount < 1;
     },
+  });
+}
+
+/** Diagnostic breakdown for `/analytics` (Stage 8-P10).
+ *
+ *  Backend caches the result for 5 min in-process (`pipeline.analytics`), so
+ *  there's no benefit to a long FE staleTime — we let TanStack's default
+ *  (30s) handle re-render hops within a session, but the actual DB query
+ *  fires at most once per 5-min window per backend worker regardless.
+ *
+ *  Retry off — cold-boot returns 200 with empty arrays (not 503), so any
+ *  error here is a config / network issue that won't fix itself on retry. */
+export function useAnalyticsBreakdown() {
+  return useQuery({
+    queryKey: ['analytics', 'breakdown'],
+    queryFn: () => apiGet<TrackRecordBreakdown>('/api/analytics/breakdown'),
+    retry: false,
   });
 }
 
