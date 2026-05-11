@@ -21,6 +21,7 @@ from etfpulse.api.deps import get_db_session
 from etfpulse.api.schemas.dashboard import DashboardStats
 from etfpulse.models import Signal, SignalOutcome
 from etfpulse.pipeline.regime_monitor import get_latest_regime
+from etfpulse.pipeline.track_record import compute_hit_rate_pct
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -92,7 +93,7 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
     # between fraction and percent. None when no signal had a target —
     # better than rendering "0%" for an empty cohort.
     targeted = outcome_row.targeted_count
-    hit_rate_72h = round((outcome_row.targets_hit / targeted) * 100, 2) if targeted > 0 else None
+    hit_rate_72h = compute_hit_rate_pct(outcome_row.targets_hit, targeted)
 
     return DashboardStats(
         total_signals=row.total_signals,

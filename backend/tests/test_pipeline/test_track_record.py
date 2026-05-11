@@ -20,9 +20,43 @@ from etfpulse.pipeline.detectors import compute_fingerprint
 from etfpulse.pipeline.prices import PriceBar
 from etfpulse.pipeline.track_record import (
     _compute_metrics,
+    compute_hit_rate_pct,
     evaluate_pending_outcomes,
     get_stats_by_confidence_floor,
 )
+
+# ---------------------------------------------------------------------------
+# compute_hit_rate_pct — canonical helper, single source of truth for the
+# `(hits / targeted) * 100` math used by API routes, bot handler, and
+# TrackRecordStat. Pinned here so a regression in any of those callsites
+# fails this test rather than a downstream integration test where the
+# error message is "frontend renders 0% instead of None".
+# ---------------------------------------------------------------------------
+
+
+class TestComputeHitRatePct:
+    def test_empty_cohort_returns_none(self):
+        # The None-vs-zero distinction is load-bearing — see helper docstring.
+        assert compute_hit_rate_pct(0, 0) is None
+
+    def test_zero_hits_returns_zero_not_none(self):
+        # Zero hits with a non-empty cohort IS zero percent (not None).
+        assert compute_hit_rate_pct(0, 5) == 0.0
+
+    def test_perfect_hit_rate(self):
+        assert compute_hit_rate_pct(7, 7) == 100.0
+
+    def test_rounds_to_two_decimal_places(self):
+        # 5/6 = 0.83333... → 83.33%
+        assert compute_hit_rate_pct(5, 6) == 83.33
+
+    def test_returns_float_type(self):
+        # Float (not int) is the canonical type — callers wanting an int
+        # round at render time. Pinning here so the contract doesn't drift.
+        result = compute_hit_rate_pct(3, 10)
+        assert isinstance(result, float)
+        assert result == 30.0
+
 
 # ---------------------------------------------------------------------------
 # Pure-function helpers

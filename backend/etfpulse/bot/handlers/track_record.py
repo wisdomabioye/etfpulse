@@ -27,6 +27,7 @@ from etfpulse.config import settings
 from etfpulse.db import async_session
 from etfpulse.models import SignalOutcome
 from etfpulse.pipeline.track_record import (
+    compute_hit_rate_pct,
     get_recent_outcomes,
     get_stats_by_confidence_floor,
 )
@@ -101,8 +102,13 @@ def _format_track_record_message(
     parts: list[str] = ["📊 <b>Signal track record</b>", ""]
 
     if targeted > 0:
-        # Path 2 — hit-rate summary.
-        hit_rate = round((hits / targeted) * 100)
+        # Path 2 — hit-rate summary. Helper returns float (2dp); we render
+        # as integer here — precision is a presentation concern and Telegram
+        # messages prefer compact whole-percent. Helper only returns None
+        # when targeted == 0, which the outer guard already ruled out.
+        pct = compute_hit_rate_pct(hits, targeted)
+        assert pct is not None  # noqa: S101 — narrows the Optional for the round() below
+        hit_rate = round(pct)
         parts.append(f"<b>Total evaluated:</b> {targeted}")
         parts.append(f"<b>Targets hit:</b> {hits} ({hit_rate}%)")
     else:

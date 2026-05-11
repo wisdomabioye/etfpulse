@@ -44,6 +44,7 @@ from etfpulse.api.schemas.track_record import (
     TrackRecordSummary,
 )
 from etfpulse.models import Signal, SignalOutcome
+from etfpulse.pipeline.track_record import compute_hit_rate_pct
 
 # Generic so `_apply_filters` returns the same Select shape it accepts —
 # keeps the row query and the aggregate query sharing one WHERE-builder.
@@ -135,7 +136,7 @@ async def get_track_record(
     avg_hits = summary_row.avg_conf_hits
     avg_misses = summary_row.avg_conf_misses
     targeted = summary_row.targeted_count
-    hit_rate = round((summary_row.targets_hit / targeted) * 100, 2) if targeted > 0 else None
+    hit_rate = compute_hit_rate_pct(summary_row.targets_hit, targeted)
 
     summary = TrackRecordSummary(
         total_evaluated=summary_row.total_evaluated,

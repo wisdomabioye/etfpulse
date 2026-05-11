@@ -221,6 +221,28 @@ def _narrow_asset(asset: str) -> _KnownAsset | None:
     return None
 
 
+def compute_hit_rate_pct(hits: int, targeted: int) -> float | None:
+    """Canonical hit-rate computation — single source of truth across the codebase.
+
+    Returns the percent (0.0–100.0, rounded to 2dp) of `hits / targeted`, or
+    `None` when `targeted == 0`. The None-vs-zero distinction is load-bearing:
+    a cohort with no targeted signals has UNKNOWN hit rate, not 0%, and the
+    public/Telegram surfaces render the None as "pending"/"not yet computable"
+    rather than a misleading "0%".
+
+    Callers that want an integer percent (Telegram bot, TrackRecordStat) wrap
+    the result with `round()` at render time — precision is a presentation
+    concern, not the helper's job.
+
+    Inputs are non-negative ints by contract; `targeted < 0` or `hits > targeted`
+    would indicate a caller bug and is NOT defensively rejected here (would
+    mask the bug rather than fix it).
+    """
+    if targeted == 0:
+        return None
+    return round((hits / targeted) * 100, 2)
+
+
 @dataclass(frozen=True, slots=True)
 class TrackRecordStat:
     """Cumulative hit-rate stats keyed by confidence floor.
@@ -245,9 +267,8 @@ class TrackRecordStat:
 
     def hit_rate_pct(self, confidence_floor: int) -> int | None:
         targeted, hits = self.by_floor.get(confidence_floor, (0, 0))
-        if targeted == 0:
-            return None
-        return round((hits / targeted) * 100)
+        pct = compute_hit_rate_pct(hits, targeted)
+        return round(pct) if pct is not None else None
 
     def targeted_count(self, confidence_floor: int) -> int:
         """Cohort size — count of signals with confidence >= floor that had
