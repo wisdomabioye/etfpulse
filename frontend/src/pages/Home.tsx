@@ -59,8 +59,12 @@ export function Home() {
               <br />
               <span className="text-text-3">Before they move.</span>
             </h1>
-            <p className="text-[16px] leading-[1.5] text-text-2 mb-7 max-w-[520px]">
-              Crypto ETF flow signals. AI-explained. Delivered to Telegram.
+            <p className="text-[16px] leading-[1.5] text-text-2 mb-2 max-w-[520px] font-medium">
+              Bound the loss. Let the rest compound.
+            </p>
+            <p className="text-[14px] leading-[1.5] text-text-3 mb-7 max-w-[520px]">
+              Crypto ETF flow signals with published outcomes. AI-explained.
+              Delivered to Telegram.
             </p>
             <div className="flex flex-wrap gap-2.5">
               <Button
