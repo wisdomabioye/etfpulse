@@ -52,7 +52,7 @@ export function Analytics() {
   }
 
   return (
-    <Container>
+    <Container className="pt-10 pb-16">
       <PageHeader
         title="Analytics"
         meta={
@@ -64,7 +64,7 @@ export function Analytics() {
         }
       />
 
-      <p className="mt-3 text-[14px] text-text-2 max-w-2xl">
+      <p className="mt-5 text-[14px] text-text-2 max-w-2xl leading-relaxed">
         Where does the track record come from? This page breaks the global hit
         rate down by detector, asset, confidence, and direction — plus the shape
         of how close near-misses got to target or stop.
@@ -134,11 +134,11 @@ export function Analytics() {
       </section>
 
       {/* Honest caveats. Read this if you're tempted to draw conclusions. */}
-      <section className="mt-8 border-t border-border-2 pt-6">
-        <h3 className="text-[12px] font-mono uppercase tracking-[0.1em] text-text-3 mb-3">
+      <section className="mt-10 bg-bg-2 border border-border-2 rounded-md px-7 py-6">
+        <h3 className="text-[12px] font-mono uppercase tracking-[0.1em] text-text-3 mb-4">
           Caveats
         </h3>
-        <ul className="space-y-2 text-[13px] text-text-2 list-disc pl-5">
+        <ul className="space-y-3 text-[13px] text-text-2 leading-relaxed list-disc pl-5">
           <li>
             Hit rate divides <span className="font-mono">hits / targeted</span>,
             not <span className="font-mono">hits / total</span> — signals where
