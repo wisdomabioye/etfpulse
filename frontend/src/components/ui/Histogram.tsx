@@ -2,136 +2,103 @@ import type { HistogramBucket } from '../../api/types';
 
 interface HistogramProps {
   buckets: HistogramBucket[];
-  /** Chart height in pixels. Default 140 — tall enough to see distribution
-   *  shape without dominating the page. Width is responsive (100% of parent). */
+  /** Total chart height in pixels (count labels + bars + x-axis labels).
+   *  Default 160 — tall enough to read distribution shape without dominating
+   *  the page. Width is responsive (100% of parent). */
   height?: number;
-  /** ARIA label for the chart. Required when a Histogram is the only
-   *  visual conveying the data — screen readers otherwise see only bar
-   *  rectangles with no context. */
+  /** ARIA label for the chart. Required because screen readers can't infer
+   *  meaning from the bar visuals alone. */
   ariaLabel: string;
 }
 
-// SVG viewBox dimensions — actual rendered size is 100% width × `height`
-// via the wrapper div. Using a fixed viewBox lets the SVG scale crisply
-// without rewriting positions on resize.
-const _VB_WIDTH = 600;
-const _VB_HEIGHT = 200;
-// Insets reserve room for the count labels (top) and bucket labels (bottom).
-// Tuned by eye against a 600×200 viewBox; safe margin for typical fonts.
-const _INSET_TOP = 22;
-const _INSET_BOTTOM = 28;
-const _BAR_GAP = 6;
+// Reserved vertical space (px) for the count labels above bars and the
+// category labels below the x-axis. Subtracted from `height` to get the
+// remaining bar area. Tuned for the 11px monospace text used below.
+const _COUNT_LABEL_HEIGHT = 18;
+const _AXIS_LABEL_HEIGHT = 22;
 
 /**
- * Reusable SVG bar chart for `HistogramBucket[]`. Used twice on the
- * Analytics page (MFE + MAE) — kept generic so any future bucket-count
+ * Reusable bar chart for `HistogramBucket[]`. Used twice on the Analytics
+ * page (MFE + MAE) — generic enough that any future bucket-count
  * distribution renders through the same component.
  *
  * Bar heights are normalized against the MAX count in the dataset
- * (tallest bar = full chart height). This means a chart with `[5, 1, 1]`
- * and a chart with `[500, 100, 100]` look identical in shape — the
- * caption above the chart carries the absolute totals so readers see
- * statistical weight without the bars being misleadingly tiny.
+ * (tallest bar = full bar-area height). The shape is preserved regardless
+ * of total — a chart with `[5, 1, 1]` and a chart with `[500, 100, 100]`
+ * look identical. The page-level caption carries the absolute totals so
+ * statistical weight is visible without misleadingly tiny bars.
  *
- * Pure SVG — no Recharts, no Chart.js. Bundle stays small (Stage 06
- * "no chart library" trade-off documented in CLAUDE.md).
+ * Why HTML+CSS instead of SVG (revised from the initial SVG cut):
+ * making the SVG responsive required `preserveAspectRatio="none"`, which
+ * stretches text horizontally — letters appeared squashed in height
+ * relative to their width. Native DOM text + flexbox bars side-steps
+ * the issue entirely: text picks up the page's font metrics directly,
+ * bars scale via flex + pixel heights with no aspect-ratio gymnastics.
  *
- * Empty state (all counts === 0): renders the bucket labels along the
- * x-axis but no bars. The chart structure stays visible so cold-boot
- * readers see the dimension exists.
+ * Empty state (all counts === 0): renders the x-axis labels with no
+ * visible bars. The chart structure stays present so cold-boot readers
+ * still see what dimension the chart will show once data arrives.
  */
-export function Histogram({ buckets, height = 140, ariaLabel }: HistogramProps) {
-  // Guard against zero-bucket input — pure defense; never happens in
-  // practice (the backend always returns 6 buckets), but a render call
-  // with `buckets={[]}` shouldn't NaN through dividing by zero.
+export function Histogram({ buckets, height = 160, ariaLabel }: HistogramProps) {
+  // Defensive — never happens in practice (backend always returns 6
+  // buckets), but a render call with `buckets={[]}` shouldn't NaN.
   if (buckets.length === 0) {
     return null;
   }
 
   const maxCount = Math.max(...buckets.map((b) => b.count));
-  const chartTop = _INSET_TOP;
-  const chartBottom = _VB_HEIGHT - _INSET_BOTTOM;
-  const chartHeight = chartBottom - chartTop;
-
-  // Equal-width bars across the viewBox, with a small gap between them.
-  // Math: total bar space = viewWidth, divided into N bars with (N-1)*GAP
-  // of gap removed first, leaves bar width.
-  const totalGap = _BAR_GAP * (buckets.length - 1);
-  const barWidth = (_VB_WIDTH - totalGap) / buckets.length;
+  const barAreaHeight = height - _COUNT_LABEL_HEIGHT - _AXIS_LABEL_HEIGHT;
 
   return (
-    <svg
-      viewBox={`0 0 ${_VB_WIDTH} ${_VB_HEIGHT}`}
-      width="100%"
-      height={height}
-      role="img"
-      aria-label={ariaLabel}
-      preserveAspectRatio="none"
-    >
-      {/* Baseline rule — subtle border so an all-zero chart still has
-          a visible x-axis. */}
-      <line
-        x1={0}
-        y1={chartBottom}
-        x2={_VB_WIDTH}
-        y2={chartBottom}
-        stroke="var(--color-border-2)"
-        strokeWidth={1}
-      />
-      {buckets.map((bucket, i) => {
-        const x = i * (barWidth + _BAR_GAP);
-        // Normalized bar height — 0 when count is 0 (no bar drawn), full
-        // chart height when count === maxCount. `maxCount === 0` collapses
-        // to a no-op via the multiplier check.
-        const barHeight = maxCount === 0 ? 0 : (bucket.count / maxCount) * chartHeight;
-        const barY = chartBottom - barHeight;
-        // Label centering — same x for bar and the labels above/below it.
-        const labelX = x + barWidth / 2;
-        return (
-          <g key={bucket.label}>
-            {/* Bar — only rendered when there's something to show. A
-                zero-height bar would render as a thin line, which reads
-                as a non-empty bucket. */}
-            {bucket.count > 0 && (
-              <rect
-                x={x}
-                y={barY}
-                width={barWidth}
-                height={barHeight}
-                fill="var(--color-accent)"
-                opacity={0.85}
-                rx={2}
-              />
-            )}
-            {/* Count label above bar — only when there's a bar to label.
-                Renders inside the top inset reserved at viewBox creation. */}
-            {bucket.count > 0 && (
-              <text
-                x={labelX}
-                y={barY - 6}
-                textAnchor="middle"
-                fontSize={11}
-                fill="var(--color-text-2)"
-                fontFamily="ui-monospace, SFMono-Regular, monospace"
+    <div role="img" aria-label={ariaLabel} style={{ height }}>
+      {/* Bars row — flex column per bucket, bottom-aligned so bar grows
+          upward from the baseline. Count label reserves its own space
+          via `visibility: hidden` when count is 0, so columns stay
+          visually aligned across the chart. */}
+      <div
+        className="flex items-end gap-1.5"
+        style={{ height: _COUNT_LABEL_HEIGHT + barAreaHeight }}
+      >
+        {buckets.map((bucket) => {
+          const barHeight =
+            maxCount === 0 ? 0 : (bucket.count / maxCount) * barAreaHeight;
+          return (
+            <div
+              key={bucket.label}
+              className="flex-1 flex flex-col items-center justify-end"
+            >
+              <span
+                className="text-[11px] font-mono text-text-2 mb-1 leading-none"
+                style={{ visibility: bucket.count > 0 ? 'visible' : 'hidden' }}
               >
                 {bucket.count}
-              </text>
-            )}
-            {/* Bucket label below baseline — always rendered so the
-                x-axis is readable even with all-zero data. */}
-            <text
-              x={labelX}
-              y={chartBottom + 18}
-              textAnchor="middle"
-              fontSize={11}
-              fill="var(--color-text-3)"
-              fontFamily="ui-monospace, SFMono-Regular, monospace"
-            >
-              {bucket.label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+              </span>
+              {/* Bar — only rendered with `height > 0`. A bar with `count=0`
+                  has `barHeight=0`; the div still renders but at zero
+                  height, which is what we want (no visual artifact). */}
+              <div
+                className="w-full bg-accent rounded-t-sm"
+                style={{ height: `${barHeight}px`, opacity: 0.85 }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      {/* X-axis labels — separate flex row matching the bar gap so columns
+          line up. Border-top on this row gives the chart its baseline rule. */}
+      <div
+        className="flex gap-1.5 border-t border-border-2 pt-1.5"
+        style={{ height: _AXIS_LABEL_HEIGHT }}
+      >
+        {buckets.map((bucket) => (
+          <div
+            key={bucket.label}
+            className="flex-1 text-center text-[11px] font-mono text-text-3 leading-none"
+          >
+            {bucket.label}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
