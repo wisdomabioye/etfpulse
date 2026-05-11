@@ -4,6 +4,7 @@ export { Callout } from './Callout';
 export { CTABanner } from './CTABanner';
 export { EmptyState } from './EmptyState';
 export { FilterPill } from './FilterPill';
+export { Histogram } from './Histogram';
 export { Kicker } from './Kicker';
 export { PageHeader } from './PageHeader';
 export { Pager } from './Pager';
