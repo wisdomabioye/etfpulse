@@ -10,8 +10,8 @@
  * fresh object references) hit the cache.
  */
 
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { ApiError, apiGet } from './client';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ApiError, apiGet, apiPost } from './client';
 import type {
   AdminMetrics,
   DashboardStats,
@@ -110,6 +110,132 @@ export function useAdminMetrics(adminKey: string) {
     enabled: adminKey.length > 0,
     refetchInterval: 15_000,
     retry: false,
+  });
+}
+
+/** Shape of `POST /api/admin/signals/trigger` response — same as the cycle
+ *  summary the scheduler logs. Kept inline here (not in `types.ts`) because
+ *  no other surface consumes it; promote when a second caller appears. */
+export interface TriggerCycleResponse {
+  ingested: Record<string, number>;
+  ingest_errors: [string, string][];
+  news_ingested: Record<string, number>;
+  news_errors: [string, string][];
+  prices: Record<string, { source: string; price: string }>;
+  price_errors: string[];
+  regime: {
+    regime: string;
+    signal_posture: string;
+    confidence: number;
+    macro_events_nearby: string[];
+  } | null;
+  regime_error: string | null;
+  detectors_run: number;
+  detector_errors: [string, string][];
+  signals_new: number;
+  signals_duplicate: number;
+  ai_succeeded: number;
+  ai_failed: number;
+}
+
+/** Fire one synchronous run of the daily signal cycle.
+ *
+ * Mutation, not query: the operator decides when to fire (button click).
+ * On success we invalidate the metrics query so the dashboard reflects
+ * the new state immediately rather than waiting up to 15s for the next
+ * auto-refresh tick. Retry off — a 4xx/5xx is a config / pipeline issue,
+ * not a transient blip, and re-firing the cycle wastes API budget. */
+export function useTriggerSignalCycle(adminKey: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiPost<TriggerCycleResponse>('/api/admin/signals/trigger', undefined, {
+        'X-Admin-Key': adminKey,
+      }),
+    retry: false,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'metrics'] });
+      // Cycle may have produced new signals / regime / dashboard counts.
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['signals'] });
+      qc.invalidateQueries({ queryKey: ['regime'] });
+    },
+  });
+}
+
+/** Per-row failure detail emitted by `POST /api/admin/signals/retry-ai`.
+ *  Mirrors `RetryAiErrorSample` on the backend. Capped to 3 entries by
+ *  the server. */
+export interface RetryAiErrorSample {
+  signal_id: number;
+  kind: string;
+  detail: string;
+}
+
+/** Response shape of `POST /api/admin/signals/retry-ai`. `updated + failed
+ *  == scanned` in every well-formed response; operators re-fire until
+ *  `scanned === 0` to drain the backlog. */
+export interface RetryAiResult {
+  scanned: number;
+  updated: number;
+  failed: number;
+  error_samples: RetryAiErrorSample[];
+}
+
+/** Re-run AI enrichment on Signals stranded with NULL `ai_analysis` (the
+ *  backfill that the daily cycle deliberately doesn't perform — D12 only
+ *  enriches NEWLY-inserted rows). Bounded by `limit` (server enforces
+ *  [1, 50]) so a click can't drain OpenRouter quota on a large backlog.
+ *  Successful enrichment unblocks fan-out (NULL-confidence signals are
+ *  skipped by the delivery worker), so we invalidate dashboard + signals
+ *  caches in addition to admin metrics. */
+export function useRetryAiNullSignals(adminKey: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (limit: number = 10) =>
+      apiPost<RetryAiResult>(
+        `/api/admin/signals/retry-ai?limit=${limit}`,
+        undefined,
+        { 'X-Admin-Key': adminKey },
+      ),
+    retry: false,
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'metrics'] });
+      // Only invalidate downstream caches when at least one row enriched —
+      // a 0-update click means the backlog is empty or every row failed,
+      // and the dashboard / signals lists haven't changed shape.
+      if (result.updated > 0) {
+        qc.invalidateQueries({ queryKey: ['dashboard'] });
+        qc.invalidateQueries({ queryKey: ['signals'] });
+      }
+    },
+  });
+}
+
+/** Response shape of `POST /api/admin/telegram/rotate-webhook-secret`. */
+export interface RotateWebhookSecretResult {
+  secret: string;
+  note: string;
+}
+
+/** Rotate the Telegram webhook secret. One-time disclosure of the new
+ *  value — operator MUST mirror it into the deploy env before the next
+ *  container restart. See backend `rotate_webhook_secret` docstring for
+ *  the race-free widen→push→shrink protocol. */
+export function useRotateWebhookSecret(adminKey: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiPost<RotateWebhookSecretResult>(
+        '/api/admin/telegram/rotate-webhook-secret',
+        undefined,
+        { 'X-Admin-Key': adminKey },
+      ),
+    retry: false,
+    onSuccess: () => {
+      // accepted_webhook_secrets count changes after rotation.
+      qc.invalidateQueries({ queryKey: ['admin', 'metrics'] });
+    },
   });
 }
 

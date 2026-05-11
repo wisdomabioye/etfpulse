@@ -14,19 +14,19 @@ const STEPS = [
     n: '01',
     tag: 'MONITOR',
     title: 'Monitor',
-    body: 'Track daily inflows and outflows across 13 BTC ETFs and 8 ETH ETFs.',
+    body: 'Daily inflows and outflows across every US-listed BTC and ETH ETF.',
   },
   {
     n: '02',
     tag: 'ANALYZE',
     title: 'Analyze',
-    body: 'Five statistical detectors plus GPT-grade reasoning produce a signal with confidence 1–10.',
+    body: 'Five detectors plus AI reasoning produce a signal with confidence 1–10.',
   },
   {
     n: '03',
     tag: 'ALERT',
     title: 'Alert',
-    body: 'Delivered to Telegram within minutes. Full reasoning and track record public.',
+    body: 'Delivered to Telegram in minutes. Full reasoning and track record public.',
   },
 ];
 

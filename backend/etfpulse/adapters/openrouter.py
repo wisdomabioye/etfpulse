@@ -53,8 +53,40 @@ log = structlog.get_logger()
 
 
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _strip_markdown_fence(raw: str) -> str:
+    """Strip a leading/trailing ```json...``` (or plain ```...```) wrapper.
+
+    Some OpenRouter providers ignore `response_format: json_object` and
+    wrap the response in a markdown fenced code block. The wrapper varies:
+    ` ```json\\n…\\n``` `, ` ```\\n…\\n``` `, or with trailing whitespace.
+    `json.loads` chokes on the fence chars; this helper unwraps so the
+    payload parses cleanly.
+
+    Returns `raw` unchanged when no fence is present — safe to call
+    unconditionally on every model response.
+    """
+    s = raw.strip()
+    if not s.startswith("```"):
+        return raw
+    # Drop the opening fence line: ```json or ``` (with optional language tag).
+    nl = s.find("\n")
+    if nl == -1:
+        return raw  # one-line ``` — bail; nothing useful to unwrap
+    body = s[nl + 1 :]
+    # Drop the trailing fence — must end with ``` (possibly with trailing space).
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3]
+    return body.strip()
+
+
 _REQUEST_TIMEOUT = 60.0  # AI completions are slower than data fetches.
-_MAX_TOKENS = 1024  # AISignalAnalysis is small — 1k is comfortable headroom.
+# Default max_tokens — overridden per-call by `settings.openrouter_max_tokens`
+# (env-tunable for low-credit dev/preview deploys; see config.py comment).
+# Kept as a module-level fallback for tests that instantiate the client
+# without going through pydantic-settings.
+_MAX_TOKENS = 1024
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures"
 
@@ -260,38 +292,62 @@ class OpenRouterClient:
     ) -> AISignalAnalysis | None:
         """Generate a typed analysis for a detector hit, or None on any failure.
 
-        `regime` and `news_context` are Stage 7-P6 additions — when supplied,
-        they're injected into the v2 prompt as additional context. Both
-        default to None for backward-compat with callers that haven't been
-        updated; the system prompt instructs the model to fall back to
-        trigger-data-only reasoning when they're absent.
+        Existing R6 contract — returns None on any failure, all reasons
+        logged but not surfaced to the caller. Used by the daily cycle
+        (`signal_builder.build_signal`) where a failed enrichment is
+        tolerated silently and the signal persists without AI.
 
-        `current_price` is the Stage 8-P1 anchor for the entry/stop/target
-        rules in the v3 system prompt. When omitted (legacy callers, or
-        spot-price-fetch failure), the system prompt instructs the model to
-        return null entry/stop/target rather than guess from training data.
+        Callers that need to report the failure reason (e.g. the admin
+        retry-AI backfill) should use `analyze_with_reason()` instead —
+        it returns `(analysis, reason)` so a UI can show the operator
+        why a retry didn't take.
+        """
+        analysis, _reason = await self.analyze_with_reason(
+            signal_type, asset, trigger_data, regime, news_context, current_price
+        )
+        return analysis
 
-        Resolution R6 — never raises. Failure modes (all → None, all logged):
-            - Empty API key (config missing)
-            - Daily cap hit
-            - Network error / 4xx / 5xx
-            - Mid-stream `choices[0].finish_reason="error"` (200 status,
-              provider-side error per OpenRouter docs)
-            - Malformed JSON in response
-            - JSON parses but doesn't satisfy AISignalAnalysis
-            - Fixture mode + missing fixture file/key
+    async def analyze_with_reason(
+        self,
+        signal_type: str,
+        asset: str,
+        trigger_data: dict[str, Any],
+        regime: RegimeClassification | None = None,
+        news_context: list[NewsContextItem] | None = None,
+        current_price: Decimal | None = None,
+    ) -> tuple[AISignalAnalysis | None, str | None]:
+        """Same orchestration as `analyze()` but returns the failure reason.
+
+        Returns `(analysis, None)` on success and `(None, reason)` on every
+        documented failure mode below. The reason is short, operator-facing,
+        and safe to surface in admin UIs (no API keys or large response
+        bodies leaked — preview is bounded to 200 chars).
+
+        Failure modes (all → `(None, reason)`, all logged):
+            - "missing OpenRouter API key"
+            - "daily call cap reached"
+            - "request failed: <err>" (network / 4xx / 5xx / mid-stream)
+            - "invalid JSON in response: <err>"
+            - "response did not match AISignalAnalysis schema"
+            - "fixture missing for signal_type=…" (fixture mode)
+
+        `regime` / `news_context` / `current_price` are forwarded to the
+        prompt builder unchanged — see `analyze()` for their semantics.
         """
         if self.use_fixtures:
-            return self._analyze_from_fixture(signal_type)
+            entry = self._load_fixture(signal_type)
+            if entry is None:
+                return None, f"fixture missing for signal_type={signal_type}"
+            return self._parse_analysis(json.dumps(entry), signal_type)
 
         if not self.api_key:
             log.warning("openrouter_no_api_key", signal_type=signal_type)
-            return None
+            return None, "missing OpenRouter API key"
 
         try:
             self._check_and_bump_counter()
-        except OpenRouterQuotaError:
-            return None
+        except OpenRouterQuotaError as exc:
+            return None, f"daily call cap reached: {exc}"
 
         try:
             raw_content = await self._call_chat_completions(
@@ -304,20 +360,26 @@ class OpenRouterClient:
                 asset=asset,
                 error=str(exc),
             )
-            return None
+            return None, f"request failed: {str(exc)[:160]}"
 
         return self._parse_analysis(raw_content, signal_type)
 
-    def _analyze_from_fixture(self, signal_type: str) -> AISignalAnalysis | None:
-        entry = self._load_fixture(signal_type)
-        if entry is None:
-            return None
-        return self._parse_analysis(json.dumps(entry), signal_type)
-
     @staticmethod
-    def _parse_analysis(raw_content: str, signal_type: str) -> AISignalAnalysis | None:
+    def _parse_analysis(
+        raw_content: str, signal_type: str
+    ) -> tuple[AISignalAnalysis | None, str | None]:
+        """Parse + validate the model response. Returns `(analysis, None)` on
+        success, `(None, reason)` on parse / schema failure.
+
+        Strips markdown ```json fences before parsing — some OpenRouter
+        providers don't strictly honor `response_format: json_object` and
+        wrap the JSON in a fenced code block. Without this strip, parsing
+        chokes on the leading ` ``` ` and the row gets stranded with a
+        misleading "invalid JSON" error.
+        """
+        cleaned = _strip_markdown_fence(raw_content)
         try:
-            payload = json.loads(raw_content)
+            payload = json.loads(cleaned)
         except ValueError as exc:
             log.warning(
                 "openrouter_invalid_json",
@@ -325,16 +387,21 @@ class OpenRouterClient:
                 error=str(exc),
                 preview=raw_content[:200],
             )
-            return None
+            return None, f"invalid JSON in response: {exc}"
         try:
-            return AISignalAnalysis.model_validate(payload)
+            return AISignalAnalysis.model_validate(payload), None
         except ValidationError as exc:
             log.warning(
                 "openrouter_schema_mismatch",
                 signal_type=signal_type,
                 errors=exc.errors(),
             )
-            return None
+            # Pydantic's full error list can be long; surface only the first
+            # few errors to keep the operator UI readable.
+            first_errs = "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:2]
+            )
+            return None, f"schema mismatch: {first_errs}"
 
     # --- HTTP ---------------------------------------------------------------
 
@@ -357,7 +424,7 @@ class OpenRouterClient:
                 signal_type, asset, trigger_data, regime, news_context, current_price
             ),
             "response_format": {"type": "json_object"},
-            "max_tokens": _MAX_TOKENS,
+            "max_tokens": settings.openrouter_max_tokens,
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",

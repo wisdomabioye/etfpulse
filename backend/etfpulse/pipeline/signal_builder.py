@@ -50,7 +50,7 @@ from etfpulse.models import (
     RegimeSnapshot,
     Signal,
 )
-from etfpulse.pipeline.analysis import AI_PROMPT_VERSION, compute_expires_at
+from etfpulse.pipeline.analysis import AI_PROMPT_VERSION, apply_analysis_to_signal
 from etfpulse.pipeline.detectors import ALL_DETECTORS, DetectorHit
 from etfpulse.pipeline.ingestor import ingest_etf_flows, ingest_news
 from etfpulse.pipeline.news_context import NewsContextItem, gather_news_context
@@ -171,21 +171,11 @@ async def build_signal(
         current_price=price_at_creation,
     )
     if analysis is not None:
-        # `mode="json"` so the JSONB column gets a JSON-friendly dict
-        # (Decimal → str), while the column-level fields below get the
-        # native Decimal directly off the schema. Same value flowing into
-        # two destinations — JSONB for audit, columns for queryable
-        # canonical projection. Mirrors the `confidence` pattern.
-        signal.ai_analysis = analysis.model_dump(mode="json")
-        signal.confidence = analysis.confidence
-        signal.expires_at = compute_expires_at(analysis.time_horizon)
-        # Stage 8-P1 — mirror the AI-suggested levels onto dedicated columns
-        # for the outcome evaluator + indexable queries. Each is None when
-        # the AI suggested "wait" OR declined to volunteer a level (the
-        # validator drops non-positive + wait-mode prices).
-        signal.entry_price = analysis.entry_price
-        signal.stop_price = analysis.stop_price
-        signal.target_price = analysis.target_price
+        # Single shared helper — see `pipeline.analysis.apply_analysis_to_signal`
+        # for the AI → Signal field mapping. Both this fresh-insert path and
+        # `ai_backfill.backfill_null_ai` (retry path) call it so columns
+        # never drift between the two writers.
+        apply_analysis_to_signal(signal, analysis)
 
     log.info(
         "signal_built",

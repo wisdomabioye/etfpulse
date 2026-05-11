@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram.error import TelegramError
@@ -27,6 +27,8 @@ from etfpulse.api.deps import get_db_session, require_admin_key
 from etfpulse.api.schemas.admin import (
     AdminMetrics,
     DeliveryStatusCounts,
+    RetryAiErrorSample,
+    RetryAiResponse,
     SchedulerJobInfo,
     SignalStatusCounts,
 )
@@ -37,6 +39,7 @@ from etfpulse.api.schemas.telegram_admin import (
 from etfpulse.bot.constants import ALLOWED_UPDATES
 from etfpulse.config import settings
 from etfpulse.models import DeliveryStatus, Signal, SignalDelivery, SignalStatus
+from etfpulse.pipeline.ai_backfill import backfill_null_ai
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
 from etfpulse.pipeline.scheduler import _run_cycle_with_session
@@ -73,6 +76,50 @@ async def trigger_signal_cycle() -> dict[str, Any]:
         )
     log.info("admin_trigger_cycle_done", **summary)
     return summary
+
+
+@router.post(
+    "/signals/retry-ai",
+    response_model=RetryAiResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def retry_ai_for_null_signals(
+    limit: int = Query(default=10, ge=1, le=50),
+    session: AsyncSession = Depends(get_db_session),
+) -> RetryAiResponse:
+    """Re-run AI enrichment on Signals where `ai_analysis IS NULL`.
+
+    `signal_builder.build_signal` only enriches NEWLY-inserted rows (D12),
+    so signals stranded by an earlier OpenRouter outage (insufficient
+    credits, schema drift, daily cap hit) are never retried by the daily
+    cycle. This endpoint is the operator-facing escape hatch.
+
+    `limit` caps OpenRouter spend per click — re-fire the action multiple
+    times to drain a backlog. Idempotent: a second call with `updated > 0`
+    on the first call will skip those now-enriched rows. Defaults to 10
+    (a safe single-click cost) and is bounded at 50.
+
+    The transaction is committed inside this handler so a partial-success
+    batch persists what it managed to enrich (consistent with the
+    `_run_cycle_with_session` wrapper pattern — admin actions own their
+    own commits).
+    """
+    log.info("admin_retry_ai_begin", limit=limit)
+    summary = await backfill_null_ai(session, limit=limit)
+    await session.commit()
+    log.info(
+        "admin_retry_ai_done",
+        scanned=summary["scanned"],
+        updated=summary["updated"],
+        failed=summary["failed"],
+    )
+    return RetryAiResponse(
+        scanned=summary["scanned"],
+        updated=summary["updated"],
+        failed=summary["failed"],
+        error_samples=[RetryAiErrorSample(**s) for s in summary["error_samples"]],
+    )
 
 
 @router.get(

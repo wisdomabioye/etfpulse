@@ -398,3 +398,97 @@ async def test_v3_prompt_omits_current_price_when_none(httpx_mock, live_client):
     body = json.loads(httpx_mock.get_requests()[0].content)
     user_msg = body["messages"][1]["content"]
     assert "Current spot price" not in user_msg
+
+
+# ---- Markdown fence handling (real-world provider quirk) -------------------
+
+
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        "```json\n{json}\n```",
+        "```\n{json}\n```",
+        "```json\n{json}\n```\n",
+        "  ```json\n{json}\n```  ",
+    ],
+)
+async def test_markdown_fenced_response_is_unwrapped(httpx_mock, live_client, wrapped):
+    """Some OpenRouter providers ignore `response_format: json_object` and
+    wrap the response in a ```json…``` fence. Without unwrapping, the row
+    gets stranded with a misleading 'invalid JSON' error. Real-world
+    failure observed against `anthropic/claude-sonnet-4.6` when OpenRouter
+    routed the request to Google's Vertex relay."""
+    fenced = wrapped.replace("{json}", json.dumps(_VALID_ANALYSIS))
+    envelope = {
+        "id": "gen-test",
+        "model": "anthropic/claude-sonnet-4.6",
+        "choices": [{"message": {"role": "assistant", "content": fenced}}],
+    }
+    httpx_mock.add_response(url=_CHAT_URL, json=envelope)
+
+    result = await live_client.analyze(signal_type="flow_anomaly", asset="BTC", trigger_data={})
+    assert result is not None
+    assert result.headline == _VALID_ANALYSIS["headline"]
+
+
+# ---- analyze_with_reason — operator-facing failure surfacing --------------
+
+
+async def test_analyze_with_reason_returns_reason_on_invalid_json(httpx_mock, live_client):
+    """When parsing fails, the operator-facing surface gets a string
+    explaining why — not just None. Powers the admin retry-AI UI's
+    failure samples (see `pipeline.ai_backfill`)."""
+    envelope = {
+        "id": "gen-test",
+        "choices": [{"message": {"role": "assistant", "content": "not-json-at-all"}}],
+    }
+    httpx_mock.add_response(url=_CHAT_URL, json=envelope)
+    result, reason = await live_client.analyze_with_reason(
+        signal_type="flow_anomaly", asset="BTC", trigger_data={}
+    )
+    assert result is None
+    assert reason is not None
+    assert "invalid JSON" in reason
+
+
+async def test_analyze_with_reason_returns_reason_on_schema_mismatch(httpx_mock, live_client):
+    """Pydantic ValidationError → operator sees `schema mismatch: <field>`.
+
+    `confidence` out of range is clamped (R18) so doesn't trigger this path.
+    Use `time_horizon` (Literal) — an unknown value is unambiguously a
+    schema mismatch with no validator-side clamping."""
+    bad = {**_VALID_ANALYSIS, "time_horizon": "decades"}
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(bad))
+    result, reason = await live_client.analyze_with_reason(
+        signal_type="flow_anomaly", asset="BTC", trigger_data={}
+    )
+    assert result is None
+    assert reason is not None
+    assert "schema mismatch" in reason
+
+
+async def test_analyze_with_reason_returns_reason_on_402(httpx_mock, live_client):
+    """HTTP 402 (insufficient credits) — operator sees the upstream
+    message verbatim so they know the actual cause without server logs."""
+    httpx_mock.add_response(
+        url=_CHAT_URL,
+        status_code=402,
+        json={"error": {"message": "Insufficient credits."}},
+    )
+    result, reason = await live_client.analyze_with_reason(
+        signal_type="flow_anomaly", asset="BTC", trigger_data={}
+    )
+    assert result is None
+    assert reason is not None
+    assert "402" in reason
+
+
+async def test_analyze_with_reason_succeeds_returns_none_reason(httpx_mock, live_client):
+    """Happy path — `reason` is None when analysis succeeds. Callers
+    can branch on `if analysis is None` OR `if reason is not None`."""
+    httpx_mock.add_response(url=_CHAT_URL, json=_api_response(_VALID_ANALYSIS))
+    result, reason = await live_client.analyze_with_reason(
+        signal_type="flow_anomaly", asset="BTC", trigger_data={}
+    )
+    assert result is not None
+    assert reason is None

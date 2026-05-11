@@ -168,6 +168,16 @@ class SignalDetail(BaseModel):
     ai_analysis: AIAnalysisOut | None = None
     outcome: SignalOutcomeOut | None = None
 
+    # Live spot price captured at signal-build time + provenance of the
+    # fetch (`sosovalue` primary, `binance` fallback). Surfaced on the
+    # detail page so traders can anchor entry/stop/target levels against
+    # the actual market price when the signal fired — without waiting the
+    # 24-72h until the outcome row exists. NULL when both providers failed
+    # at build time (the backfill script `scripts/backfill_signal_prices.py`
+    # revisits these rows; once filled the field populates retroactively).
+    price_at_creation: float | None = None
+    price_source: str | None = None
+
     @classmethod
     def from_row(
         cls,
@@ -199,6 +209,13 @@ class SignalDetail(BaseModel):
             trigger_data=signal.trigger_data or {},
             ai_analysis=ai_analysis,
             outcome=SignalOutcomeOut.model_validate(outcome) if outcome else None,
+            # Decimal → float cast: same shape as `SignalOutcomeOut.price_*`
+            # fields so the frontend type for prices is uniform across the
+            # response. None passes through.
+            price_at_creation=(
+                float(signal.price_at_creation) if signal.price_at_creation is not None else None
+            ),
+            price_source=signal.price_source,
         )
 
 

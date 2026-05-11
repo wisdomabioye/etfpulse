@@ -53,7 +53,34 @@ export async function apiGet<T>(
   const res = await fetch(buildUrl(path, params), {
     headers: { Accept: 'application/json', ...(extraHeaders ?? {}) },
   });
+  return handleResponse<T>(res);
+}
 
+/** POST helper for admin mutations. JSON body is optional — endpoints like
+ *  `/api/admin/signals/trigger` take no body but still require POST. When
+ *  `body` is undefined the request omits Content-Type/body entirely so a
+ *  zero-byte POST cleanly reaches FastAPI; passing `{}` would send a
+ *  Content-Type that confuses some servers about whether a body is
+ *  expected. Headers shape matches `apiGet` so callers can stamp
+ *  `X-Admin-Key` uniformly. */
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { Accept: 'application/json', ...(extraHeaders ?? {}) },
+  };
+  if (body !== undefined) {
+    init.headers = { ...init.headers, 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(buildUrl(path), init);
+  return handleResponse<T>(res);
+}
+
+async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -68,6 +95,5 @@ export async function apiGet<T>(
     }
     throw new ApiError(res.status, detail);
   }
-
   return res.json() as Promise<T>;
 }

@@ -5,5 +5,6 @@ export { NewsContextSection } from './NewsContextSection';
 export { OutcomeCard } from './OutcomeCard';
 export { SignalCard } from './SignalCard';
 export { SignalTypeBadge } from './SignalTypeBadge';
+export { SpotAtSignal } from './SpotAtSignal';
 export { SuggestedActionPanel } from './SuggestedActionPanel';
 export { TriggerDataTable } from './TriggerDataTable';

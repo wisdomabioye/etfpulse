@@ -106,6 +106,17 @@ export interface SignalDetail {
   trigger_data: Record<string, unknown>;
   ai_analysis: AIAnalysis | null;
   outcome: SignalOutcome | null;
+
+  /** Live spot price (USD) captured at signal-build time + provenance of
+   *  the fetch (`sosovalue` primary, `binance` fallback). Surfaced on the
+   *  detail page so traders can anchor entry/stop/target against the actual
+   *  market price when the signal fired — without waiting the 24-72h until
+   *  the outcome row exists. NULL when both providers failed at build time
+   *  (the backend backfill script revisits these rows; once filled the
+   *  field populates retroactively). Mirrors `SignalDetail` on the
+   *  backend — keep field names + nullability in sync. */
+  price_at_creation: number | null;
+  price_source: string | null;
 }
 
 export interface PaginatedSignals {

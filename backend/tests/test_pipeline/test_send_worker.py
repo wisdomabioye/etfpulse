@@ -71,9 +71,11 @@ class TestFormatSignalMessage:
 
         assert "<b>BTC flow anomaly signal</b>" in msg
         assert "BTC inflows snap 4-day streak" in msg
+        # Decision block carries direction · confidence · horizon on one line.
+        assert "<b>Decision:</b>" in msg
         assert "consider short" in msg
-        assert "Confidence:</i> 7/10" in msg
-        assert "Horizon:</i> swing" in msg
+        assert "Conf 7/10" in msg
+        assert "swing" in msg
         assert "Volume spike" in msg
         assert "Institutional rotation" in msg
         assert "Macro headwind" in msg
@@ -91,8 +93,8 @@ class TestFormatSignalMessage:
         assert "Trigger data" in msg
         assert "streak_length" in msg
         assert "AI analysis unavailable" in msg
-        # Shouldn't render empty confidence/horizon sections.
-        assert "Confidence:" not in msg
+        # No AI + no confidence → no decision block at all.
+        assert "<b>Decision:</b>" not in msg
 
     def test_html_special_chars_escaped(self):
         """LLM might return `<` / `>` / `&` in reasoning. Must escape to
@@ -338,22 +340,24 @@ class TestFormatSignalMessage:
             assert key in msg, f"trigger-dump cap should not have dropped {key}"
 
     # -----------------------------------------------------------------------
-    # Stage 8-P8 — action block (entry/stop/target) + track-record stat line
+    # Decision block — direction + confidence + horizon on line 1, then
+    # spot/entry/stop/target/R:R on line 2. Replaces the old "meta line +
+    # separate Action levels block" — traders see actionable numbers first.
     # -----------------------------------------------------------------------
 
-    def test_action_block_renders_when_signal_has_entry_stop_target(self):
+    def test_decision_block_renders_levels_when_signal_has_entry_stop_target(self):
         signal = _signal_with_ai(
             entry_price=Decimal("84200.00"),
             stop_price=Decimal("82000.00"),
             target_price=Decimal("89500.00"),
         )
         msg = format_signal_message(signal)
-        assert "<b>Action levels:</b>" in msg
+        assert "<b>Decision:</b>" in msg
         assert "Entry:</i> $84,200.00" in msg
         assert "Stop:</i> $82,000.00" in msg
         assert "Target:</i> $89,500.00" in msg
 
-    def test_action_block_includes_risk_reward_when_all_three_set(self):
+    def test_decision_block_includes_risk_reward_when_all_three_set(self):
         # |89500 - 84200| / |84200 - 82000| = 5300 / 2200 ≈ 2.4
         signal = _signal_with_ai(
             entry_price=Decimal("84200.00"),
@@ -363,20 +367,20 @@ class TestFormatSignalMessage:
         msg = format_signal_message(signal)
         assert "R:R</i> 1:2.4" in msg
 
-    def test_action_block_omits_risk_reward_when_any_leg_missing(self):
+    def test_decision_block_omits_risk_reward_when_any_leg_missing(self):
         signal = _signal_with_ai(
             entry_price=Decimal("84200.00"),
             stop_price=None,
             target_price=Decimal("89500.00"),
         )
         msg = format_signal_message(signal)
-        # Action block still shows the parts that ARE set, but no R:R.
-        assert "<b>Action levels:</b>" in msg
+        # Decision block still shows the parts that ARE set, but no R:R.
+        assert "<b>Decision:</b>" in msg
         assert "Entry:</i>" in msg
         assert "Target:</i>" in msg
         assert "R:R" not in msg
 
-    def test_action_block_omits_risk_reward_when_stop_equals_entry(self):
+    def test_decision_block_omits_risk_reward_when_stop_equals_entry(self):
         """Risk distance == 0 would divide by zero — defensive guard mirrors
         frontend `SuggestedActionPanel.computeRiskReward`."""
         signal = _signal_with_ai(
@@ -385,14 +389,29 @@ class TestFormatSignalMessage:
             target_price=Decimal("89500"),
         )
         msg = format_signal_message(signal)
-        assert "<b>Action levels:</b>" in msg
+        assert "<b>Decision:</b>" in msg
         assert "R:R" not in msg
 
-    def test_action_block_omitted_when_no_levels_set(self):
-        """Legacy v1/v2 signal with no AI-suggested prices — section absent."""
+    def test_decision_block_renders_when_only_direction_and_confidence_set(self):
+        """Legacy v1/v2 signal with no AI-suggested prices — decision line
+        still renders (direction · confidence · horizon), prices line absent."""
         signal = _signal_with_ai()  # no entry/stop/target overrides
         msg = format_signal_message(signal)
-        assert "Action levels:" not in msg
+        assert "<b>Decision:</b>" in msg
+        assert "consider short" in msg
+        assert "Conf 7/10" in msg
+        # No price legs → no Entry/Stop/Target/Spot/R:R fragments.
+        assert "Entry:" not in msg
+        assert "Spot:" not in msg
+
+    def test_decision_block_renders_spot_when_price_at_creation_set(self):
+        """price_at_creation (live spot at signal-build time) anchors the
+        decision line so traders see the market price the alert was issued
+        against — independent of whether AI volunteered entry/stop/target."""
+        signal = _signal_with_ai(price_at_creation=Decimal("82352.65"))
+        msg = format_signal_message(signal)
+        assert "<b>Decision:</b>" in msg
+        assert "Spot:</i> $82,352.65" in msg
 
     def test_track_record_stat_renders_when_stat_supplied_and_cohort_has_data(self):
         signal = _signal_with_ai()  # confidence=7

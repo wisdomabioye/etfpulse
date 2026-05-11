@@ -103,3 +103,32 @@ class AdminMetrics(BaseModel):
     # a meaningful sample. Dict ordering is by descending count for
     # convenient inspection in dashboards.
     signal_counts_by_prompt_version: dict[str, int]
+
+
+class RetryAiErrorSample(BaseModel):
+    """Per-row failure detail emitted by `POST /api/admin/signals/retry-ai`.
+
+    Capped to 3 samples per response so a backlog where every row fails
+    for the same reason (e.g. account out of credits → all hit 402)
+    doesn't bloat the payload. The kind / detail pair is enough for an
+    operator to decide whether the next click will help or whether the
+    underlying issue (credits, model slug, schema) needs fixing first.
+    """
+
+    signal_id: int
+    kind: str
+    detail: str
+
+
+class RetryAiResponse(BaseModel):
+    """Result of a single `POST /api/admin/signals/retry-ai` invocation.
+
+    `scanned` is bounded by the request `limit` (caps OpenRouter spend per
+    click). `updated + failed == scanned` in every well-formed response.
+    Operators re-fire until `scanned == 0` to drain the backlog.
+    """
+
+    scanned: int = Field(ge=0)
+    updated: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    error_samples: list[RetryAiErrorSample] = Field(default_factory=list)

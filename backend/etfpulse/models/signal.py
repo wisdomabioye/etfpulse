@@ -48,7 +48,17 @@ class Signal(Base):
     signal_type: Mapped[str] = mapped_column(String(30), nullable=False)
     asset: Mapped[str] = mapped_column(String(10), nullable=False)
     trigger_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    ai_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # `none_as_null=True` is load-bearing: assigning Python `None` writes
+    # SQL `NULL`, not the JSON `null` literal. Without this, `signal.ai_analysis
+    # = None` would persist as a JSON-null *value* (NOT NULL at the SQL level)
+    # and the AI-backfill filter (`ai_analysis IS NULL` in
+    # `pipeline.ai_backfill.backfill_null_ai`) would silently skip the row.
+    # The default INSERT path in `signal_builder` omits the column entirely
+    # so the DB default (SQL NULL) lands, but any explicit `signal.ai_analysis
+    # = None` (e.g. in tests, future "reset this row" tooling, or a hypothetical
+    # "force re-analysis" admin action) MUST resolve to SQL NULL or it gets
+    # stranded outside the backfill query forever.
+    ai_analysis: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=SignalStatus.PENDING, nullable=False)
     price_at_creation: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)

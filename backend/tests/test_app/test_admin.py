@@ -527,3 +527,99 @@ class TestAdminMetricsShape:
         app.dependency_overrides.clear()
         assert r.status_code == 200
         assert r.json()["accepted_webhook_secrets"] == 2
+
+
+class TestRetryAiRoute:
+    """`POST /api/admin/signals/retry-ai` — auth gate + helper-orchestration
+    contract. The helper itself is unit-tested in
+    `tests/test_pipeline/test_ai_backfill.py`; here we just verify the
+    route wires limit, key gate, error-sample passthrough, and commit
+    correctly."""
+
+    async def test_disabled_when_admin_key_empty(self, db_session, monkeypatch):
+        monkeypatch.setattr(settings, "admin_api_key", "")
+        app = create_app()
+
+        async def _override() -> AsyncIterator:
+            yield db_session
+
+        app.dependency_overrides[get_db_session] = _override
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.post("/api/admin/signals/retry-ai")
+        app.dependency_overrides.clear()
+        assert r.status_code == 503
+
+    async def test_wrong_key_returns_401(self, metrics_client):
+        r = await metrics_client.post(
+            "/api/admin/signals/retry-ai", headers={"X-Admin-Key": "wrong"}
+        )
+        assert r.status_code == 401
+
+    async def test_invalid_limit_returns_422(self, metrics_client):
+        """Bounds enforced via FastAPI Query(ge=1, le=50). Below 1 → 422."""
+        r = await metrics_client.post(
+            "/api/admin/signals/retry-ai?limit=0",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 422
+
+    async def test_limit_above_cap_returns_422(self, metrics_client):
+        r = await metrics_client.post(
+            "/api/admin/signals/retry-ai?limit=51",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 422
+
+    async def test_route_passes_limit_through_and_returns_summary(
+        self, metrics_client, monkeypatch
+    ):
+        """Route is a thin wrapper — its job is to forward `limit`, run
+        the helper, return the typed summary. Stubbing the helper isolates
+        the route's contract from the AI logic."""
+        captured: dict = {}
+
+        async def _stub(session, *, limit):
+            captured["limit"] = limit
+            return {
+                "scanned": 3,
+                "updated": 2,
+                "failed": 1,
+                "error_samples": [
+                    {"signal_id": 99, "kind": "AnalyzeReturnedNone", "detail": "out of credits"}
+                ],
+            }
+
+        monkeypatch.setattr("etfpulse.api.routes.admin.backfill_null_ai", _stub)
+
+        r = await metrics_client.post(
+            "/api/admin/signals/retry-ai?limit=7",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 200
+        assert captured["limit"] == 7
+        body = r.json()
+        assert body["scanned"] == 3
+        assert body["updated"] == 2
+        assert body["failed"] == 1
+        assert body["error_samples"] == [
+            {"signal_id": 99, "kind": "AnalyzeReturnedNone", "detail": "out of credits"}
+        ]
+
+    async def test_default_limit_is_ten(self, metrics_client, monkeypatch):
+        """Default `limit=10` — operator click without a query param caps
+        OpenRouter spend at 10 calls."""
+        captured: dict = {}
+
+        async def _stub(session, *, limit):
+            captured["limit"] = limit
+            return {"scanned": 0, "updated": 0, "failed": 0, "error_samples": []}
+
+        monkeypatch.setattr("etfpulse.api.routes.admin.backfill_null_ai", _stub)
+
+        r = await metrics_client.post(
+            "/api/admin/signals/retry-ai",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 200
+        assert captured["limit"] == 10

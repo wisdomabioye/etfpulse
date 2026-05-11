@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     # desired (different prod vs preview attribution).
     openrouter_app_url: str = "https://etfpulse.xpldevelopers.org"
     openrouter_app_title: str = "ETFPulse"
+    # Max output tokens per AI call. AISignalAnalysis is small (typically
+    # ~400-600 tokens), so the historical 1024 default left comfortable
+    # headroom. Exposed as env so low-credit dev/preview deploys can lower
+    # this (OpenRouter returns HTTP 402 with "you requested up to N tokens
+    # but can only afford M" when account balance can't cover N at the
+    # current model's per-token price). 256 is the minimum that reliably
+    # fits the JSON schema; below that risks truncation mid-response.
+    openrouter_max_tokens: int = Field(default=1024, ge=256, le=8192)
 
     # Signal scheduler — fires once daily at HH:MM **UTC**. Timezone is pinned
     # to UTC inside the scheduler module (Issue #31), so these are always UTC

@@ -278,47 +278,77 @@ async def _get_track_record_stat(session: AsyncSession) -> TrackRecordStat:
     return fresh
 
 
-def _format_action_block(signal: Signal) -> str | None:
-    """Render the AI-suggested entry/stop/target as one HTML block, or None.
+def _format_decision_block(signal: Signal, analysis: dict[str, Any]) -> str | None:
+    """Render the trader-facing top-of-message decision summary.
 
-    Stage 8-P8. Reads off the `Signal.entry_price/stop_price/target_price`
-    columns (P1 added these). Returns None when the AI declined to set
-    any of the three (or when this is a legacy v1/v2 signal that never
-    had them) — clearer than rendering "Suggested: $— · Stop: $— · Target: $—".
+    Format (compact, mobile-skimmable):
+        <b>Decision:</b> consider long · Conf 8/10 · swing
+        <i>Spot:</i> $82,352.65 · <i>Entry:</i> $82,400 · <i>Stop:</i> $80,800
+        · <i>Target:</i> $85,800 · <i>R:R</i> 1:2.1
 
-    R:R derived inline as `|target - entry| / |entry - stop|`, magnitude
-    only (caller doesn't switch on long/short; the convention "1:N" is
-    uniform). Skipped when any leg is missing OR when risk distance is 0
-    (would divide by zero on bad data — same guard as the frontend
-    `SuggestedActionPanel.computeRiskReward`).
+    Section order putting direction + levels FIRST (was: headline → meta →
+    action levels separately, then reasoning). Traders skimming on mobile
+    get the actionable numbers in the first two lines; the AI reasoning,
+    regime, news, and risks follow as context for the decision.
+
+    Returns None only when there is genuinely nothing actionable — no
+    suggested_action, no confidence, no price levels. Otherwise renders
+    whatever subset is available so a partial signal still leads with
+    its strongest fact.
     """
+    suggested = html.escape(str(analysis.get("suggested_action", "")))
+    horizon = html.escape(str(analysis.get("time_horizon", "")))
+    confidence = signal.confidence or 0
     entry = signal.entry_price
     stop = signal.stop_price
     target = signal.target_price
-    if entry is None and stop is None and target is None:
+    spot = signal.price_at_creation
+
+    has_decision = bool(suggested or confidence or horizon)
+    has_levels = entry is not None or stop is not None or target is not None or spot is not None
+    if not has_decision and not has_levels:
         return None
 
-    # The all-None early return above guarantees at least one of the three
-    # is non-None, so `bits` is provably non-empty after this block.
-    bits: list[str] = []
-    if entry is not None:
-        bits.append(f"<i>Entry:</i> {_format_usd(entry)}")
-    if stop is not None:
-        bits.append(f"<i>Stop:</i> {_format_usd(stop)}")
-    if target is not None:
-        bits.append(f"<i>Target:</i> {_format_usd(target)}")
+    lines: list[str] = []
 
-    block = "\n<b>Action levels:</b> " + " · ".join(bits)
+    # Line 1 — direction · confidence · horizon. Each piece is optional.
+    if has_decision:
+        decision_bits: list[str] = []
+        if suggested:
+            decision_bits.append(suggested)
+        if confidence:
+            decision_bits.append(f"Conf {confidence}/10")
+        if horizon:
+            decision_bits.append(horizon)
+        lines.append("<b>Decision:</b> " + " · ".join(decision_bits))
 
-    if entry is not None and stop is not None and target is not None:
-        risk = abs(entry - stop)
-        reward = abs(target - entry)
-        if risk > 0:
-            rr = round((float(reward) / float(risk)) * 10) / 10
-            # "1:1.7" — magnitude form, direction-agnostic.
-            block += f" · <i>R:R</i> 1:{rr}"
+    # Line 2 — spot anchor + entry/stop/target + R:R. Skipped wholesale
+    # when there are no prices at all (legacy signals predating P1 + P34
+    # OR signal where both providers failed and AI declined levels).
+    if has_levels:
+        level_bits: list[str] = []
+        if spot is not None:
+            level_bits.append(f"<i>Spot:</i> {_format_usd(spot)}")
+        if entry is not None:
+            level_bits.append(f"<i>Entry:</i> {_format_usd(entry)}")
+        if stop is not None:
+            level_bits.append(f"<i>Stop:</i> {_format_usd(stop)}")
+        if target is not None:
+            level_bits.append(f"<i>Target:</i> {_format_usd(target)}")
 
-    return block
+        # R:R only when all three legs are set + risk distance > 0. Same
+        # guard as the frontend `SuggestedActionPanel.computeRiskReward`.
+        if entry is not None and stop is not None and target is not None:
+            risk = abs(entry - stop)
+            reward = abs(target - entry)
+            if risk > 0:
+                rr = round((float(reward) / float(risk)) * 10) / 10
+                level_bits.append(f"<i>R:R</i> 1:{rr}")
+
+        if level_bits:
+            lines.append(" · ".join(level_bits))
+
+    return "\n" + "\n".join(lines)
 
 
 def _format_track_record_stat_line(signal: Signal, stat: TrackRecordStat | None) -> str | None:
@@ -490,19 +520,22 @@ def format_signal_message(
     `<` / `>` / `&` can't break Telegram's HTML parser or (worst case) inject
     tags. Falls back to a trigger-data summary if `ai_analysis` is NULL.
 
-    Section order (mirrors `/signals/:id` on the web for parity):
+    Section order — trader-actionable info FIRST, context after. Mirrors
+    `/signals/:id` on the web for parity:
         1. Title line — "<asset> <signal_type> signal"
         2. Headline (when AI succeeded)
-        3. Meta line — Suggested action · Confidence · Horizon
-        4. Action block — Entry/Stop/Target/R:R (Stage 8-P8, when AI set prices)
+        3. Decision block — direction · confidence · horizon, then prices
+           (spot at signal · entry · stop · target · R:R). One compact
+           two-line block carrying everything a skimming trader needs
+           on the first screen of a mobile alert.
+        4. Reasoning bullets
         5. Regime block (when `trigger_data.regime_at_creation` present)
-        6. Reasoning bullets
-        7. News context (when `trigger_data.news_context` present)
-        8. Risks bullets
-        9. Track-record stat line (Stage 8-P8, when track_record_stat is
+        6. News context (when `trigger_data.news_context` present)
+        7. Risks bullets
+        8. Track-record stat line (Stage 8-P8, when track_record_stat is
            supplied AND the cohort at this confidence floor has data)
-        10. Footer — signal date · expires
-    Sections 4, 5, 7, 9 are conditional — older / partial signals render
+        9. Footer — signal date · expires
+    Sections 3, 5, 6, 8 are conditional — older / partial signals render
     without them, no rule branch needed at the call site.
 
     `track_record_stat` is opt-in. The pure-formatter test surface omits
@@ -521,33 +554,21 @@ def format_signal_message(
     analysis = signal.ai_analysis
     if analysis:
         headline = html.escape(str(analysis.get("headline", "")))
-        suggested = html.escape(str(analysis.get("suggested_action", "")))
-        horizon = html.escape(str(analysis.get("time_horizon", "")))
-        confidence = signal.confidence or 0
 
         parts.append(f"\n<b>{headline}</b>")
-        meta_bits: list[str] = []
-        if suggested:
-            meta_bits.append(f"<i>Suggested action:</i> {suggested}")
-        if confidence:
-            meta_bits.append(f"<i>Confidence:</i> {confidence}/10")
-        if horizon:
-            meta_bits.append(f"<i>Horizon:</i> {horizon}")
-        if meta_bits:
-            parts.append("\n" + " · ".join(meta_bits))
 
-        action_block = _format_action_block(signal)
-        if action_block:
-            parts.append(action_block)
-
-        regime_block = _format_regime_block(trigger_data)
-        if regime_block:
-            parts.append(regime_block)
+        decision_block = _format_decision_block(signal, analysis)
+        if decision_block:
+            parts.append(decision_block)
 
         reasoning = analysis.get("reasoning") or []
         if reasoning:
             bullets = "\n".join(f"• {html.escape(str(r))}" for r in reasoning)
             parts.append(f"\n<b>Reasoning:</b>\n{bullets}")
+
+        regime_block = _format_regime_block(trigger_data)
+        if regime_block:
+            parts.append(regime_block)
 
         news_block = _format_news_block(trigger_data)
         if news_block:

@@ -433,3 +433,29 @@ class TestDetail:
         r = await client.get(f"/api/signals/{signal.id}")
         assert r.status_code == 200
         assert r.json()["ai_analysis"] is None
+
+    async def test_price_at_creation_and_source_surfaced(self, db_session, client):
+        """`price_at_creation` + `price_source` are populated by signal_builder
+        from the live-spot composer (`get_spot_price_with_source`). The detail
+        route surfaces them so the frontend can show "Spot at signal: $X (via
+        sosovalue)" without waiting the 24-72h until an outcome row exists.
+        Decimal → float on the wire to match the rest of the price fields."""
+        signal = await _seed_signal(db_session)
+        signal.price_at_creation = Decimal("82352.65")
+        signal.price_source = "sosovalue"
+        await db_session.flush()
+
+        r = await client.get(f"/api/signals/{signal.id}")
+        body = r.json()
+        assert body["price_at_creation"] == 82352.65
+        assert body["price_source"] == "sosovalue"
+
+    async def test_price_at_creation_null_when_unset(self, db_session, client):
+        """Both providers may have failed at build time → fields persist NULL.
+        Endpoint serializes as JSON null (not absent), so the frontend type
+        union with `null` is correct."""
+        signal = await _seed_signal(db_session)
+        r = await client.get(f"/api/signals/{signal.id}")
+        body = r.json()
+        assert body["price_at_creation"] is None
+        assert body["price_source"] is None

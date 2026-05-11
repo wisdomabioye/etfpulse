@@ -27,9 +27,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    # Type-only import — avoids a runtime cycle (`models` imports from
+    # `pipeline` only via TYPE_CHECKING too). The helper below mutates a
+    # Signal in-place; callers always pass a real ORM row.
+    from etfpulse.models import Signal
 
 # Time horizon → signal validity window. Resolution R16. These set
 # `Signal.expires_at` so the dashboard can hide stale signals.
@@ -166,6 +172,27 @@ def _strip_drop_truncate(items: list[str], cap: int) -> list[str]:
     cleaned = [s.strip() for s in items]
     nonempty = [s for s in cleaned if s]
     return nonempty[:cap]
+
+
+def apply_analysis_to_signal(signal: Signal, analysis: AISignalAnalysis) -> None:
+    """Mirror an `AISignalAnalysis` onto its `Signal` row.
+
+    The single source of truth for the AI → Signal field mapping. Every
+    column that mirrors an analysis field is assigned HERE; both
+    `signal_builder.build_signal` (fresh-insert path) and
+    `ai_backfill.backfill_null_ai` (retry path) call this so adding a new
+    mirrored column is a one-line edit in one place rather than a
+    coordinated two-file change that drifts.
+
+    Mutation, not return — the Signal is already attached to the caller's
+    session and the caller controls flush/commit (D14).
+    """
+    signal.ai_analysis = analysis.model_dump(mode="json")
+    signal.confidence = analysis.confidence
+    signal.expires_at = compute_expires_at(analysis.time_horizon)
+    signal.entry_price = analysis.entry_price
+    signal.stop_price = analysis.stop_price
+    signal.target_price = analysis.target_price
 
 
 def compute_expires_at(time_horizon: str, now: datetime | None = None) -> datetime:

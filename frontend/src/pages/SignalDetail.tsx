@@ -6,6 +6,7 @@ import {
   NewsContextSection,
   OutcomeCard,
   SignalTypeBadge,
+  SpotAtSignal,
   SuggestedActionPanel,
   TriggerDataTable,
 } from '../components/signals';
@@ -115,10 +116,12 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
         </div>
       )}
 
-      <div className="font-mono text-[12px] text-text-3 mb-8 break-words">
+      <div className="font-mono text-[12px] text-text-3 mb-3.5 break-words">
         Signal #{s.id} · Generated {formatAgo(s.created_at)} · Alerted to{' '}
         {s.alerted_to.toLocaleString()} users · fp:{truncateFingerprint(s.fingerprint)}
       </div>
+
+      <SpotAtSignal price={s.price_at_creation} source={s.price_source} />
 
       {analysis && <SuggestedActionPanel analysis={analysis} />}
 

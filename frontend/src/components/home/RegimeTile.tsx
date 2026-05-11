@@ -3,6 +3,34 @@ import type { MarketRegime, SignalPosture } from '../../api/types';
 import { PostureBadge } from '../regime/PostureBadge';
 import { RegimeBadge } from '../regime/RegimeBadge';
 
+/** Plain-English caption for each Wyckoff-style phase. The badges alone
+ *  ("uncertain", "cautious") are jargon to anyone outside trading — the
+ *  caption is the difference between a confused first-time visitor and one
+ *  who reads the tile and understands what we're saying. Kept short
+ *  (≤ ~120 chars) so the tile stays compact; the longer reasoning lives
+ *  on `/regime`. */
+const REGIME_CAPTIONS: Record<MarketRegime, string> = {
+  accumulation:
+    'Smart money quietly building positions while price is still flat or basing — early bull setup.',
+  markup:
+    'Sustained upward trend with broad participation — bull phase in full swing.',
+  distribution:
+    'Smart money quietly offloading into strength while price holds elevated — late-cycle setup.',
+  markdown:
+    'Sustained downward trend — bear phase in full swing.',
+  uncertain:
+    'No clear directional bias from flows, news, or macro context — wait for confirmation.',
+};
+
+/** What the posture means for our alerting cadence. Operator-facing copy
+ *  ("we'll fire fewer alerts") rather than market commentary. */
+const POSTURE_CAPTIONS: Record<SignalPosture, string> = {
+  aggressive: 'Firing alerts on weaker confirmation — high-conviction regime.',
+  normal: 'Standard alerting — alerts when detectors agree.',
+  cautious: 'Higher bar to alert — only strongest signals get through.',
+  paused: 'Alerts suspended while the regime resolves.',
+};
+
 interface RegimeTileProps {
   regime: MarketRegime | null;
   posture: SignalPosture | null;
@@ -42,10 +70,21 @@ export function RegimeTile({ regime, posture, unavailable }: RegimeTileProps) {
             Regime not yet classified.
           </div>
         ) : (
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <RegimeBadge regime={regime} size="md" />
-            {posture && <PostureBadge posture={posture} />}
-          </div>
+          <>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <RegimeBadge regime={regime} size="md" />
+              {posture && <PostureBadge posture={posture} />}
+            </div>
+            <p className="mt-2.5 text-[13px] leading-[1.55] text-text-2">
+              {REGIME_CAPTIONS[regime]}
+              {posture && (
+                <>
+                  {' '}
+                  <span className="text-text-3">{POSTURE_CAPTIONS[posture]}</span>
+                </>
+              )}
+            </p>
+          </>
         )}
       </div>
     </div>

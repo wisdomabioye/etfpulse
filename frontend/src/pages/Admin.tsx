@@ -1,10 +1,19 @@
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { useAdminMetrics } from '../api/queries';
+import {
+  useAdminMetrics,
+  useRetryAiNullSignals,
+  useRotateWebhookSecret,
+  useTriggerSignalCycle,
+  type RetryAiResult,
+  type RotateWebhookSecretResult,
+  type TriggerCycleResponse,
+} from '../api/queries';
 import { ApiError } from '../api/client';
 import type { AdminMetrics, SchedulerJobInfo } from '../api/types';
 import {
   Button,
+  Callout,
   EmptyState,
   Kicker,
   PageHeader,
@@ -112,8 +121,246 @@ export function Admin() {
 
       {activeKey && query.error && <MetricsError error={query.error} />}
 
+      {activeKey && <ActionsPanel adminKey={activeKey} />}
+
       {activeKey && query.data && <MetricsBody data={query.data} />}
     </div>
+  );
+}
+
+/** Operator-actionable buttons. The metrics dashboard is read-only;
+ *  these are the mutations: kick the daily cycle, rotate the Telegram
+ *  webhook secret. Both are admin-gated server-side; the same key from
+ *  the gate above is reused. Failures stay inline (Callout) rather than
+ *  redirecting — operators want to see exactly what the API returned. */
+function ActionsPanel({ adminKey }: { adminKey: string }) {
+  const trigger = useTriggerSignalCycle(adminKey);
+  const retryAi = useRetryAiNullSignals(adminKey);
+  const rotate = useRotateWebhookSecret(adminKey);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+
+  return (
+    <section className="border border-border-2 bg-bg-2 rounded-md p-4 space-y-4">
+      <Kicker>Actions</Kicker>
+
+      {/* Trigger cycle ----------------------------------------------------- */}
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="flex-1 min-w-[260px]">
+          <div className="text-[14px] font-semibold text-text-1">Trigger signal cycle</div>
+          <div className="text-[12px] text-text-3">
+            Runs the same code path as the scheduled cron — ingest flows + news, run all 5 detectors, enrich with AI. Synchronous; may take ~10–60s.
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={() => trigger.mutate()}
+          disabled={trigger.isPending}
+        >
+          {trigger.isPending ? 'Running…' : 'Run cycle'}
+        </Button>
+      </div>
+      {trigger.error && <ActionError error={trigger.error} />}
+      {trigger.data && <TriggerResult result={trigger.data} />}
+
+      {/* Retry AI on stale NULL-AI signals -------------------------------- */}
+      <div className="flex flex-wrap items-start gap-3 border-t border-border-2 pt-4">
+        <div className="flex-1 min-w-[260px]">
+          <div className="text-[14px] font-semibold text-text-1">
+            Retry AI on stale signals
+          </div>
+          <div className="text-[12px] text-text-3">
+            Re-runs OpenRouter on Signals with NULL <code className="font-mono">ai_analysis</code> (stranded by an earlier credit-out / quota / schema failure — the daily cycle never retries existing rows). Caps at 10 calls per click.
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={() => retryAi.mutate(10)}
+          disabled={retryAi.isPending}
+        >
+          {retryAi.isPending ? 'Retrying…' : 'Retry AI (10)'}
+        </Button>
+      </div>
+      {retryAi.error && <ActionError error={retryAi.error} />}
+      {retryAi.data && <RetryAiResultDisplay result={retryAi.data} />}
+
+      {/* Rotate webhook secret -------------------------------------------- */}
+      <div className="flex flex-wrap items-start gap-3 border-t border-border-2 pt-4">
+        <div className="flex-1 min-w-[260px]">
+          <div className="text-[14px] font-semibold text-text-1">Rotate Telegram webhook secret</div>
+          <div className="text-[12px] text-text-3">
+            Issues a fresh secret and pushes it to Telegram race-free. Mirror the new value into <code className="font-mono">TELEGRAM_WEBHOOK_SECRET</code> before the next container restart, or the boot-time value will overwrite it.
+          </div>
+        </div>
+        {!confirmRotate ? (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setConfirmRotate(true)}
+            disabled={rotate.isPending}
+          >
+            Rotate…
+          </Button>
+        ) : (
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => {
+                rotate.mutate();
+                setConfirmRotate(false);
+              }}
+              disabled={rotate.isPending}
+            >
+              {rotate.isPending ? 'Rotating…' : 'Confirm rotate'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setConfirmRotate(false)}>
+              Cancel
+            </Button>
+          </div>
+        )}
+      </div>
+      {rotate.error && <ActionError error={rotate.error} />}
+      {rotate.data && <RotateResult result={rotate.data} />}
+    </section>
+  );
+}
+
+function ActionError({ error }: { error: Error }) {
+  const detail =
+    error instanceof ApiError ? `HTTP ${error.status} · ${error.detail}` : error.message;
+  return (
+    <Callout tone="neg">
+      <span className="font-mono text-[12px]">{detail}</span>
+    </Callout>
+  );
+}
+
+function TriggerResult({ result }: { result: TriggerCycleResponse }) {
+  const r = result;
+  return (
+    <Callout tone="pos">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-1 font-mono text-[12px]">
+        <ResultLine label="Signals new" value={r.signals_new} />
+        <ResultLine label="Duplicate" value={r.signals_duplicate} />
+        <ResultLine
+          label="AI succeeded"
+          value={r.ai_succeeded}
+          tone={r.ai_succeeded === 0 && r.signals_new > 0 ? 'warn' : undefined}
+        />
+        <ResultLine
+          label="AI failed"
+          value={r.ai_failed}
+          tone={r.ai_failed > 0 ? 'warn' : undefined}
+        />
+        <ResultLine
+          label="BTC price"
+          value={r.prices.BTC ? `$${r.prices.BTC.price}` : '—'}
+        />
+        <ResultLine
+          label="ETH price"
+          value={r.prices.ETH ? `$${r.prices.ETH.price}` : '—'}
+        />
+        <ResultLine label="Detectors run" value={r.detectors_run} />
+        <ResultLine
+          label="Regime"
+          value={r.regime ? `${r.regime.regime} · ${r.regime.signal_posture}` : '—'}
+        />
+      </div>
+      {r.ai_failed > 0 && r.signals_new > 0 && (
+        <div className="mt-2 text-[11px] text-text-3">
+          AI enrichment failed for {r.ai_failed} signal(s) — common causes: insufficient
+          OpenRouter credits (HTTP 402), schema-mismatch on response, or daily call cap
+          reached. Check server logs.
+        </div>
+      )}
+    </Callout>
+  );
+}
+
+function ResultLine({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  tone?: 'warn';
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-text-3">{label}</span>
+      <span className={tone === 'warn' ? 'text-warn font-semibold' : 'text-text-1'}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function RetryAiResultDisplay({ result }: { result: RetryAiResult }) {
+  // Tone selection mirrors the operator-facing meaning:
+  //   - all updated → green (full success)
+  //   - some updated, some failed → warn (partial success, more clicks help)
+  //   - 0 scanned → info (backlog empty — nothing to do)
+  //   - all failed → neg (every retry hit the same wall — fix root cause first)
+  const tone: 'pos' | 'warn' | 'info' | 'neg' =
+    result.scanned === 0
+      ? 'info'
+      : result.updated === result.scanned
+        ? 'pos'
+        : result.updated > 0
+          ? 'warn'
+          : 'neg';
+  return (
+    <Callout tone={tone}>
+      <div className="font-mono text-[12px] space-y-2">
+        <div className="flex flex-wrap gap-x-6 gap-y-1">
+          <ResultLine label="Scanned" value={result.scanned} />
+          <ResultLine label="Updated" value={result.updated} />
+          <ResultLine
+            label="Failed"
+            value={result.failed}
+            tone={result.failed > 0 ? 'warn' : undefined}
+          />
+        </div>
+        {result.scanned === 0 && (
+          <div className="text-[11px] text-text-3">
+            No NULL-AI signals to retry — backlog is empty.
+          </div>
+        )}
+        {result.error_samples.length > 0 && (
+          <div className="space-y-1 pt-1 border-t border-border-2">
+            <div className="text-text-3 uppercase tracking-[0.1em] text-[10px]">
+              Failure samples (first {result.error_samples.length})
+            </div>
+            {result.error_samples.map((s) => (
+              <div key={s.signal_id} className="break-words text-text-2">
+                <span className="text-text-3">#{s.signal_id}</span>{' '}
+                <span className="text-warn">{s.kind}</span>{' '}
+                <span className="text-text-3">— {s.detail}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Callout>
+  );
+}
+
+function RotateResult({ result }: { result: RotateWebhookSecretResult }) {
+  return (
+    <Callout tone="info">
+      <div className="font-mono text-[12px] space-y-2">
+        <div className="text-text-3 uppercase tracking-[0.1em] text-[10px]">
+          New webhook secret (one-time display)
+        </div>
+        <div className="break-all text-text-1 bg-bg-3 border border-border-2 rounded px-3 py-2">
+          {result.secret}
+        </div>
+        <div className="text-text-3">{result.note}</div>
+      </div>
+    </Callout>
   );
 }
 

@@ -3,6 +3,7 @@ import { useDashboardStats, useSignals } from '../api/queries';
 import { HeroHitRatePanel } from '../components/home/HeroHitRatePanel';
 import { HowItWorks } from '../components/home/HowItWorks';
 import { RegimeTile } from '../components/home/RegimeTile';
+import { SignalTypesGrid } from '../components/home/SignalTypesGrid';
 import { SignalCard } from '../components/signals';
 import {
   Button,
@@ -12,14 +13,21 @@ import {
   SkeletonGrid,
 } from '../components/ui';
 import { narrowPosture, narrowRegime } from '../lib/format';
+import { TELEGRAM_BOT_URL } from '../lib/links';
 
 /** Home — HomeV3 (Data-forward) variant.
  *
- * Four sections, dividers via border-b / border-t:
+ * Five sections, dividers via border-b / border-t:
  *   1. Hero (split: copy left, hit-rate panel right)
  *   2. Regime tile (Stage 7-P8 — current Wyckoff phase + posture)
  *   3. Most recent (3-col signal grid)
- *   4. How it works (3-cell connected)
+ *   4. Signal types — 5-cell explainer (what each detector watches for)
+ *   5. How it works (3-cell connected)
+ *
+ * Order rationale: hero pitch → "what's happening right now" (regime +
+ * recent) → "what kinds of alerts you'll get" (types) → "how the pipeline
+ * works" (how-it-works). A first-time visitor sees current state before
+ * marketing copy; a returning user can skip past the explainers.
  *
  * Horizontal padding is a single pattern: px-6 sm:px-8. No breakpoint chains.
  */
@@ -55,7 +63,13 @@ export function Home() {
               Crypto ETF flow signals. AI-explained. Delivered to Telegram.
             </p>
             <div className="flex flex-wrap gap-2.5">
-              <Button as="a" href="#" variant="primary">
+              <Button
+                as="a"
+                href={TELEGRAM_BOT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                variant="primary"
+              >
                 Open Telegram Bot
                 <span className="font-mono opacity-70">↗</span>
               </Button>
@@ -120,6 +134,18 @@ export function Home() {
             hint="Check back after the next daily cycle (04:30 UTC)."
           />
         )}
+      </section>
+
+      <section className="border-t border-border-2 px-6 sm:px-8 py-14 md:py-16">
+        <SectionHeader
+          title="Signal types"
+          action={
+            <span className="text-text-3 text-[13px]">
+              Five detectors, one composite regime read.
+            </span>
+          }
+        />
+        <SignalTypesGrid />
       </section>
 
       <section className="border-t border-border-2 px-6 sm:px-8 py-14 md:py-16">
