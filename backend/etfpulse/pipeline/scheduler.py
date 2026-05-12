@@ -45,6 +45,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import structlog
@@ -67,6 +68,7 @@ from etfpulse.pipeline.track_record import evaluate_pending_outcomes
 log = structlog.get_logger()
 
 _DAILY_JOB_ID = "daily_cycle"
+_INTRADAY_JOB_ID = "intraday_cycle"
 _CATCHUP_JOB_ID = "catchup"
 _DELIVERY_SEND_JOB_ID = "delivery_send"
 _FAN_OUT_PENDING_JOB_ID = "fan_out_pending"
@@ -100,12 +102,18 @@ async def _needs_catchup(session: AsyncSession) -> bool:
     return needed
 
 
-async def _run_cycle_with_session() -> dict[str, Any] | None:
+async def _run_cycle_with_session(*, skip_if_no_new_data: bool = False) -> dict[str, Any] | None:
     """Production cycle wrapper — opens a session, commits on success.
 
-    Called by APScheduler (cron + catch-up) AND by the admin trigger route
-    (`api/routes/admin.py`). Owns the transaction boundary; `run_daily_cycle`
-    itself does not commit (D14).
+    Called by APScheduler (daily cron + catch-up + intra-day interval) AND
+    by the admin trigger route (`api/routes/admin.py`). Owns the transaction
+    boundary; `run_daily_cycle` itself does not commit (D14).
+
+    `skip_if_no_new_data` (Branch 3) is forwarded to `run_daily_cycle`:
+    True for the intra-day interval (most ticks find nothing new and
+    short-circuit), False for the daily cron + admin trigger + catch-up
+    (always run detectors so the guarantees of "fires daily" + "operator
+    can manually re-fire" are unconditional).
 
     Returns the summary dict on success, None on rollback. The scheduler
     discards the return value (logs only); the admin route surfaces it as
@@ -114,9 +122,14 @@ async def _run_cycle_with_session() -> dict[str, Any] | None:
     """
     async with async_session() as session:
         try:
-            summary = await run_daily_cycle(session)
+            summary = await run_daily_cycle(session, skip_if_no_new_data=skip_if_no_new_data)
             await session.commit()
-            log.info("scheduled_cycle_committed", **summary)
+            # Quieter log line when the intra-day skip-guard fires — the
+            # signal_builder already emitted `daily_cycle_skipped_no_new_data`
+            # with detail. Re-emitting the full summary on every no-op tick
+            # would clutter logs without adding info.
+            if not summary.get("skipped"):
+                log.info("scheduled_cycle_committed", **summary)
             return summary
         except Exception as exc:
             await session.rollback()
@@ -367,6 +380,29 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
             max_instances=1,
         )
         log.info("scheduler_catchup_scheduled", delay_seconds=_CATCHUP_DELAY_SECONDS)
+
+    # Branch 3 — intra-day interval. Re-runs the cycle every
+    # `intraday_cycle_interval_minutes`, short-circuiting when no new
+    # ETF / news rows arrived since the last run. Closes the user-visible
+    # gap where data published after the daily cron stayed invisible until
+    # the next day. Disabled when the setting is 0.
+    # `coalesce=True` so a slow tick collapses queued fires; `max_instances=1`
+    # preserves D15.
+    if settings.intraday_cycle_interval_minutes > 0:
+        scheduler.add_job(
+            # `partial` binds the kwarg cleanly — APScheduler introspects
+            # the resulting callable for the job, and the partial preserves
+            # `__name__` of the inner function for log lines.
+            partial(_run_cycle_with_session, skip_if_no_new_data=True),
+            trigger=IntervalTrigger(minutes=settings.intraday_cycle_interval_minutes),
+            id=_INTRADAY_JOB_ID,
+            max_instances=1,
+            coalesce=True,
+        )
+        log.info(
+            "scheduler_intraday_registered",
+            interval_minutes=settings.intraday_cycle_interval_minutes,
+        )
 
     # Outcome evaluator (Stage 08-P3) — scores aged signals into SignalOutcome
     # rows for the public track record + dashboard hit-rate tile. Runs every

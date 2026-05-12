@@ -183,6 +183,38 @@ class TestStartScheduler:
             # pytz.UTC — both stringify cleanly.
             assert "UTC" in str(tz).upper() or str(tz) == "UTC"
 
+    async def test_intraday_registered_when_interval_positive(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """Branch 3 — when `intraday_cycle_interval_minutes` > 0, an
+        IntervalTrigger job called `intraday_cycle` is registered alongside
+        the daily cron. Both fire `_run_cycle_with_session` but the intra-
+        day one passes `skip_if_no_new_data=True` (verified via the
+        underlying signal_builder tests; here we just confirm the job
+        wiring)."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        monkeypatch.setattr(settings, "intraday_cycle_interval_minutes", 30)
+        app = FastAPI()
+        async with start_scheduler(app):
+            job = app.state.scheduler.get_job("intraday_cycle")
+            assert job is not None
+            # IntervalTrigger stores the configured interval as `timedelta`.
+            assert job.trigger.interval == timedelta(minutes=30)
+
+    async def test_intraday_not_registered_when_interval_zero(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        """Setting INTRADAY_CYCLE_INTERVAL_MINUTES=0 disables the intra-day
+        cycle entirely — falls back to daily-cron-only behaviour."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        monkeypatch.setattr(settings, "intraday_cycle_interval_minutes", 0)
+        app = FastAPI()
+        async with start_scheduler(app):
+            assert app.state.scheduler.get_job("intraday_cycle") is None
+            # Daily cron still registered — disabling intra-day must NOT
+            # also disable the cron.
+            assert app.state.scheduler.get_job("daily_cycle") is not None
+
 
 # ---------------------------------------------------------------------------
 # Delivery send worker wiring (#60)

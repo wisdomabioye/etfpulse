@@ -165,6 +165,32 @@ class Settings(BaseSettings):
     # Tune `delivery_retry_base_seconds` to widen / narrow the whole curve.
     delivery_max_attempts: int = Field(default=5, ge=1, le=20)
     delivery_retry_base_seconds: int = Field(default=30, ge=1, le=600)
+    # Branch 3 — intra-day cycle. The daily cron at SCHEDULER_CRON_HOUR:MINUTE
+    # UTC was the only signal-build trigger pre-Branch-3, which meant ETF
+    # data published after 04:30 UTC (or any news arriving during the day)
+    # was ignored until the next day's cron. This interval re-runs the same
+    # `run_daily_cycle` code path on a fixed schedule, with a skip-guard
+    # that short-circuits when no new ETF / news rows landed since last
+    # tick (avoids wasted detector queries and OpenRouter spend on the
+    # common no-op case).
+    #
+    # Set to 0 to disable entirely (falls back to daily-cron-only behaviour).
+    # Lower bound 15 min protects against accidental sub-15-min configs that
+    # could burn through the SoSoValue monthly quota. Upper bound 360 min
+    # (6h) — anything coarser is effectively the daily cron with extra cost.
+    intraday_cycle_interval_minutes: int = Field(default=60, ge=0, le=360)
+
+    @field_validator("intraday_cycle_interval_minutes")
+    @classmethod
+    def _validate_intraday_interval(cls, v: int) -> int:
+        """Allow `0` (disabled) OR a sensible operational range [15, 360].
+        Anything in between (1-14) is almost certainly a misconfiguration
+        — sub-15-min cycles risk burning the SoSoValue monthly quota.
+        Range upper bound (360 = 6h) is enforced by `Field(le=360)`."""
+        if v != 0 and v < 15:
+            raise ValueError("intraday_cycle_interval_minutes must be 0 (disabled) or >= 15")
+        return v
+
     # Default user preferences applied on /start registration. Comma-separated
     # asset list parsed via `delivery_default_assets_list` property.
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)

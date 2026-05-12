@@ -533,6 +533,91 @@ class TestRunDailyCycle:
         rows = (await db_session.execute(select(Signal))).scalars().all()
         assert len(rows) == 1
 
+    async def test_skip_flag_short_circuits_when_no_new_data(
+        self, db_session, monkeypatch, stub_ai
+    ):
+        """Branch 3 — intra-day cycles pass `skip_if_no_new_data=True`. On
+        a second run against the same upstream data, ingest_* return 0 new
+        rows, the cycle short-circuits BEFORE detectors run, and the
+        summary signals the skip.
+
+        Detector that would otherwise fire on every call is monkey-patched
+        in so we can prove it was NOT called on the skipped run."""
+        call_count = {"n": 0}
+
+        class _CountingDetector:
+            name = "counter"
+            signal_type = "flow_anomaly"
+
+            async def detect(self, session):
+                call_count["n"] += 1
+                return []
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.ALL_DETECTORS", [_CountingDetector()])
+
+        # First run primes the DB (fixtures populate ETF + news).
+        first = await run_daily_cycle(db_session, skip_if_no_new_data=True)
+        assert first["skipped"] is False
+        assert call_count["n"] == 1  # detector ran
+
+        # Second run sees zero new rows (idempotent ingest); skip should fire.
+        second = await run_daily_cycle(db_session, skip_if_no_new_data=True)
+        assert second["skipped"] is True
+        # Detector was NOT called the second time — that's the waste we
+        # save by skipping. Counter stays at 1.
+        assert call_count["n"] == 1
+        # Skip happens AFTER ingestion, so ingest summaries are still
+        # populated (with zero counts).
+        assert sum(second["ingested"].values()) == 0
+        assert sum(second["news_ingested"].values()) == 0
+
+    async def test_skip_flag_continues_when_new_data_arrives(
+        self, db_session, monkeypatch, stub_ai
+    ):
+        """Symmetric: when new data IS ingested, the skip-guard does NOT
+        fire — detectors run normally. Proves the skip is conditional on
+        no-new-data, not unconditional."""
+        ran = {"n": 0}
+
+        class _CountingDetector:
+            name = "counter2"
+            signal_type = "flow_anomaly"
+
+            async def detect(self, session):
+                ran["n"] += 1
+                return []
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.ALL_DETECTORS", [_CountingDetector()])
+
+        summary = await run_daily_cycle(db_session, skip_if_no_new_data=True)
+
+        # Fixtures landed new rows on this first call.
+        assert summary["skipped"] is False
+        assert ran["n"] == 1
+        assert sum(summary["ingested"].values()) > 0
+
+    async def test_default_skip_flag_false_always_runs(self, db_session, monkeypatch, stub_ai):
+        """Daily cron + admin trigger pass `skip_if_no_new_data=False`
+        (the default). Even after ingest returns 0 new rows, detectors
+        still execute — operators expect "fire the cycle now" semantics."""
+        ran = {"n": 0}
+
+        class _CountingDetector:
+            name = "counter3"
+            signal_type = "flow_anomaly"
+
+            async def detect(self, session):
+                ran["n"] += 1
+                return []
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.ALL_DETECTORS", [_CountingDetector()])
+
+        await run_daily_cycle(db_session)  # primes DB
+        second = await run_daily_cycle(db_session)  # default skip=False
+
+        assert second["skipped"] is False
+        assert ran["n"] == 2  # detector ran on BOTH calls
+
     async def test_summary_shape(self, db_session, monkeypatch, stub_ai):
         """The returned dict has the documented keys — protects #47/#50 callers."""
         monkeypatch.setattr("etfpulse.pipeline.signal_builder.ALL_DETECTORS", [])
@@ -554,5 +639,7 @@ class TestRunDailyCycle:
             "signals_duplicate",
             "ai_succeeded",
             "ai_failed",
+            # Branch 3 — `True` when the skip-guard short-circuited.
+            "skipped",
         }
         assert set(summary.keys()) == expected_keys

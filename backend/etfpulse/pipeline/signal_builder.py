@@ -188,7 +188,9 @@ async def build_signal(
     return signal
 
 
-async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
+async def run_daily_cycle(
+    session: AsyncSession, *, skip_if_no_new_data: bool = False
+) -> dict[str, Any]:
     """Full daily orchestration. Returns a summary suitable for admin/logging.
 
     Steps:
@@ -197,14 +199,22 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
            with whatever data is already in the DB. Resolution R10.
         2. Ingest news for each category in `_NEWS_CATEGORIES`. Same D13
            catch-and-continue contract.
-        3. Fetch spot prices once per asset (issue #34).
-        4. Classify the current market regime, persist a `RegimeSnapshot`.
+        3. **(Optional, Branch 3)** When `skip_if_no_new_data=True` AND
+           steps 1+2 produced zero new rows, short-circuit the rest of the
+           cycle. Steps 4-6 read from the DB only, so if nothing landed in
+           the DB this tick, they'd produce no new signals (everything
+           hits the (fingerprint, signal_date) dedupe). Skipping saves
+           detector queries + the per-tick OpenRouter / SoSoValue prices
+           round-trip. The daily cron passes `False` (always run); the
+           intra-day interval (60-min default) passes `True`.
+        4. Fetch spot prices once per asset (issue #34).
+        5. Classify the current market regime, persist a `RegimeSnapshot`.
            The snapshot must land BEFORE detectors run so `RegimeShiftDetector`
            can compare it against the prior snapshot.
-        5. Iterate `ALL_DETECTORS`. Each detector internally handles its own
+        6. Iterate `ALL_DETECTORS`. Each detector internally handles its own
            assets. Per D13, every `detect()` call is wrapped in try/except
            so one buggy detector cannot kill the cycle.
-        6. For each hit, call `build_signal`. New rows are counted as
+        7. For each hit, call `build_signal`. New rows are counted as
            `signals_new`; idempotent skips as `signals_duplicate`.
 
     The session is NOT committed (D14) — caller owns the transaction.
@@ -224,6 +234,10 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
         "signals_duplicate": 0,
         "ai_succeeded": 0,
         "ai_failed": 0,
+        # Branch 3 — set to True when steps 4-7 were skipped because nothing
+        # new arrived. Daily cron will never see this; intra-day interval
+        # checks it to log a quieter "no-op" line.
+        "skipped": False,
     }
 
     # --- ETF flow ingestion -------------------------------------------------
@@ -257,6 +271,36 @@ async def run_daily_cycle(session: AsyncSession) -> dict[str, Any]:
                 error=str(exc),
             )
             summary["news_errors"].append((category.name, type(exc).__name__))
+
+    # --- Branch 3 short-circuit (intra-day waste avoidance) ---------------
+    # When called from the intra-day interval (~every 60 min by default),
+    # most ticks find no new data — SoSoValue publishes EOD once daily,
+    # news is sporadic. Continuing past this point would:
+    #   - Make two HTTP calls per asset to SoSoValue/Binance for spot prices
+    #     (issue #34 path) — same prices we fetched 60 min ago.
+    #   - Re-classify the regime, which queries SoSoValue's sector-spotlight.
+    #   - Re-run all 5 detectors against unchanged DB state — every hit
+    #     would dedupe on (fingerprint, signal_date), producing 0 new
+    #     signals and 0 OpenRouter calls in the steady state.
+    # Net: a lot of API + query traffic for a guaranteed no-op. Skip.
+    #
+    # Daily cron (skip_if_no_new_data=False) always continues so detectors
+    # run at least once per day regardless of ingest outcomes — a stale-
+    # data run is harmless (dedupe protects) but the explicit guarantee is
+    # operationally valuable. Admin trigger also runs unconditionally for
+    # the same reason: operators expect "fire the cycle now" to actually
+    # fire it.
+    if skip_if_no_new_data:
+        new_etf_rows = sum(summary["ingested"].values())
+        new_news_rows = sum(summary["news_ingested"].values())
+        if new_etf_rows == 0 and new_news_rows == 0:
+            summary["skipped"] = True
+            log.info(
+                "daily_cycle_skipped_no_new_data",
+                ingest_errors=len(summary["ingest_errors"]),
+                news_errors=len(summary["news_errors"]),
+            )
+            return summary
 
     # --- Spot prices (issue #34) --------------------------------------------
     # One fetch per asset at the top of the cycle. Both failures are
