@@ -740,6 +740,116 @@ class TestOutcomeEvalWrapper:
 
 
 # ---------------------------------------------------------------------------
+# Branch 6 — `retry_null_ai` plumbing through _run_cycle_with_session
+# ---------------------------------------------------------------------------
+
+
+class TestCycleWrapperRetryNullAi:
+    """The intra-day partial sets `retry_null_ai=True`. Daily cron, admin
+    trigger, and catch-up leave it False. These tests pin the contract."""
+
+    async def test_default_false_does_not_invoke_backfill(self, monkeypatch):
+        """Daily cron / admin trigger semantics — backfill MUST stay off
+        unless explicitly requested. Operators control AI spend via the
+        dedicated `/retry-ai` endpoint for those paths."""
+        from etfpulse.pipeline.scheduler import _run_cycle_with_session
+
+        backfill_called = {"n": 0}
+
+        async def _stub_cycle(session, *, skip_if_no_new_data=False):
+            return {"signals_new": 0, "skipped": False}
+
+        async def _stub_backfill(session, *, limit, max_age_hours=None):
+            backfill_called["n"] += 1
+            return {"scanned": 0, "updated": 0, "failed": 0, "error_samples": []}
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.run_daily_cycle", _stub_cycle)
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.backfill_null_ai", _stub_backfill)
+        monkeypatch.setattr(settings, "ai_backfill_enabled", True)
+
+        await _run_cycle_with_session()  # default retry_null_ai=False
+
+        assert backfill_called["n"] == 0, (
+            "backfill must NOT run on the daily cron / admin / catch-up path"
+        )
+
+    async def test_true_invokes_backfill_with_config_limits(self, monkeypatch):
+        """Intra-day partial passes `retry_null_ai=True`. Wrapper forwards
+        the configured `ai_backfill_limit_per_tick` + `max_age_hours`."""
+        from etfpulse.pipeline.scheduler import _run_cycle_with_session
+
+        async def _stub_cycle(session, *, skip_if_no_new_data=False):
+            return {"signals_new": 0, "skipped": True}
+
+        captured: dict = {}
+
+        async def _stub_backfill(session, *, limit, max_age_hours=None):
+            captured["limit"] = limit
+            captured["max_age_hours"] = max_age_hours
+            return {"scanned": 2, "updated": 1, "failed": 1, "error_samples": []}
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.run_daily_cycle", _stub_cycle)
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.backfill_null_ai", _stub_backfill)
+        monkeypatch.setattr(settings, "ai_backfill_enabled", True)
+        monkeypatch.setattr(settings, "ai_backfill_limit_per_tick", 7)
+        monkeypatch.setattr(settings, "ai_backfill_max_age_hours", 12)
+
+        result = await _run_cycle_with_session(skip_if_no_new_data=True, retry_null_ai=True)
+
+        assert captured["limit"] == 7
+        assert captured["max_age_hours"] == 12
+        # Summary surfaces the backfill counters (minus error_samples) so
+        # log lines + admin UI can read both halves of the tick's work.
+        assert result is not None
+        assert result["ai_backfill"] == {"scanned": 2, "updated": 1, "failed": 1}
+
+    async def test_zero_max_age_passes_none(self, monkeypatch):
+        """`ai_backfill_max_age_hours=0` means "any age" — the wrapper
+        translates 0 → None so the helper short-circuits the WHERE clause."""
+        from etfpulse.pipeline.scheduler import _run_cycle_with_session
+
+        async def _stub_cycle(session, *, skip_if_no_new_data=False):
+            return {"signals_new": 0, "skipped": False}
+
+        captured: dict = {}
+
+        async def _stub_backfill(session, *, limit, max_age_hours=None):
+            captured["max_age_hours"] = max_age_hours
+            return {"scanned": 0, "updated": 0, "failed": 0, "error_samples": []}
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.run_daily_cycle", _stub_cycle)
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.backfill_null_ai", _stub_backfill)
+        monkeypatch.setattr(settings, "ai_backfill_enabled", True)
+        monkeypatch.setattr(settings, "ai_backfill_max_age_hours", 0)
+
+        await _run_cycle_with_session(retry_null_ai=True)
+        # The wrapper's `or None` translates 0 → None for the helper.
+        assert captured["max_age_hours"] is None
+
+    async def test_disabled_setting_blocks_backfill(self, monkeypatch):
+        """`AI_BACKFILL_ENABLED=false` disables the auto-path even when
+        `retry_null_ai=True`. Keeps the manual endpoint operational while
+        an operator pauses the auto-spend."""
+        from etfpulse.pipeline.scheduler import _run_cycle_with_session
+
+        backfill_called = {"n": 0}
+
+        async def _stub_cycle(session, *, skip_if_no_new_data=False):
+            return {"signals_new": 0, "skipped": False}
+
+        async def _stub_backfill(session, *, limit, max_age_hours=None):
+            backfill_called["n"] += 1
+            return {"scanned": 0, "updated": 0, "failed": 0, "error_samples": []}
+
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.run_daily_cycle", _stub_cycle)
+        monkeypatch.setattr("etfpulse.pipeline.scheduler.backfill_null_ai", _stub_backfill)
+        monkeypatch.setattr(settings, "ai_backfill_enabled", False)
+
+        await _run_cycle_with_session(retry_null_ai=True)
+        assert backfill_called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Reaper wrapper smoke tests — same pattern as TestOutcomeEvalWrapper.
 # Stub the underlying bulk-UPDATE so we don't need a DB; just verify the
 # commit/rollback contract.

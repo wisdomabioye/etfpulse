@@ -191,6 +191,31 @@ class Settings(BaseSettings):
             raise ValueError("intraday_cycle_interval_minutes must be 0 (disabled) or >= 15")
         return v
 
+    # Branch 6 — NULL-confidence auto-retry. When OpenRouter fails at
+    # signal-build time (transient quota / network / schema), the signal
+    # persists with `ai_analysis IS NULL` and is invisible to fan-out,
+    # outcome eval, and the reaper. Branch 6 wires the existing
+    # `backfill_null_ai` helper into the intra-day cycle so transient
+    # failures self-heal without operator action. The manual endpoint
+    # `POST /api/admin/signals/retry-ai` remains for one-off drains.
+    ai_backfill_enabled: bool = Field(default=True)
+    # Per-tick cap on auto-backfill attempts. Bounds OpenRouter spend on
+    # the auto path; the manual endpoint has its own larger cap (50) for
+    # operator drain. Default 5 + hourly intra-day = up to 120 retries/day,
+    # within `openrouter_daily_call_cap`'s 100 default (the daily cycle
+    # also competes; raise the cap or this knob if both run hot).
+    ai_backfill_limit_per_tick: int = Field(default=5, ge=1, le=50)
+    # Don't retry signals older than this — stale market data isn't worth
+    # re-analyzing. 0 disables the age filter (retry any age). Manual
+    # operator endpoint ignores this and drains the full backlog.
+    ai_backfill_max_age_hours: int = Field(default=24, ge=0, le=720)
+
+    # Admin alert threshold for `signals_null_confidence`. When the live
+    # count exceeds this, `AdminMetrics.signals_null_confidence_alert`
+    # flips True so ops dashboards can color the counter red. Default 50
+    # = "background failure rate no longer looks transient".
+    signals_null_confidence_alert_threshold: int = Field(default=50, ge=0)
+
     # Default user preferences applied on /start registration. Comma-separated
     # asset list parsed via `delivery_default_assets_list` property.
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)

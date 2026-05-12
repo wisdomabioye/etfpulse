@@ -577,6 +577,9 @@ async def get_admin_metrics(
         delivery_status_counts=delivery_status,
         signals_overdue_unreaped=signals_overdue_unreaped,
         signals_null_confidence=signals_null_confidence,
+        signals_null_confidence_alert=(
+            signals_null_confidence > settings.signals_null_confidence_alert_threshold
+        ),
         deliveries_stuck_pending=deliveries_stuck_pending,
         deliveries_reaper_failures=deliveries_reaper_failures,
         signals_alerted_with_zero_deliveries=signals_alerted_with_zero_deliveries,

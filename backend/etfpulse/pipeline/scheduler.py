@@ -60,6 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from etfpulse.config import settings
 from etfpulse.db import async_session
 from etfpulse.models import ETFFlow, Signal, SignalStatus
+from etfpulse.pipeline.ai_backfill import backfill_null_ai
 from etfpulse.pipeline.delivery import fan_out_signal, send_pending_deliveries
 from etfpulse.pipeline.reapers import expire_overdue_signals, fail_stuck_deliveries
 from etfpulse.pipeline.signal_builder import run_daily_cycle
@@ -102,7 +103,9 @@ async def _needs_catchup(session: AsyncSession) -> bool:
     return needed
 
 
-async def _run_cycle_with_session(*, skip_if_no_new_data: bool = False) -> dict[str, Any] | None:
+async def _run_cycle_with_session(
+    *, skip_if_no_new_data: bool = False, retry_null_ai: bool = False
+) -> dict[str, Any] | None:
     """Production cycle wrapper — opens a session, commits on success.
 
     Called by APScheduler (daily cron + catch-up + intra-day interval) AND
@@ -115,6 +118,13 @@ async def _run_cycle_with_session(*, skip_if_no_new_data: bool = False) -> dict[
     (always run detectors so the guarantees of "fires daily" + "operator
     can manually re-fire" are unconditional).
 
+    `retry_null_ai` (Branch 6) — when True AND `settings.ai_backfill_enabled`,
+    the wrapper calls `backfill_null_ai` AFTER `run_daily_cycle` returns
+    (even when the cycle was skipped — backfill needs to run on no-new-data
+    ticks to drain the AI-failed backlog). Only set by the intra-day
+    partial; daily cron + admin trigger + catch-up leave it False so
+    operators control the AI spend via the dedicated `/retry-ai` endpoint.
+
     Returns the summary dict on success, None on rollback. The scheduler
     discards the return value (logs only); the admin route surfaces it as
     JSON. Both share this function so the "demo works = scheduler works"
@@ -123,6 +133,22 @@ async def _run_cycle_with_session(*, skip_if_no_new_data: bool = False) -> dict[
     async with async_session() as session:
         try:
             summary = await run_daily_cycle(session, skip_if_no_new_data=skip_if_no_new_data)
+
+            # Branch 6 — auto-retry stranded AI signals. Bounded by
+            # `ai_backfill_limit_per_tick` + `ai_backfill_max_age_hours`.
+            # Runs in the SAME transaction as the cycle so either both
+            # commit or both roll back. Summary is appended under
+            # `ai_backfill` so log lines remain greppable separately.
+            if retry_null_ai and settings.ai_backfill_enabled:
+                backfill_summary = await backfill_null_ai(
+                    session,
+                    limit=settings.ai_backfill_limit_per_tick,
+                    max_age_hours=settings.ai_backfill_max_age_hours or None,
+                )
+                summary["ai_backfill"] = {
+                    k: v for k, v in backfill_summary.items() if k != "error_samples"
+                }
+
             await session.commit()
             # Quieter log line when the intra-day skip-guard fires — the
             # signal_builder already emitted `daily_cycle_skipped_no_new_data`
@@ -390,10 +416,12 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
     # preserves D15.
     if settings.intraday_cycle_interval_minutes > 0:
         scheduler.add_job(
-            # `partial` binds the kwarg cleanly — APScheduler introspects
-            # the resulting callable for the job, and the partial preserves
-            # `__name__` of the inner function for log lines.
-            partial(_run_cycle_with_session, skip_if_no_new_data=True),
+            # `partial` binds both kwargs cleanly — APScheduler introspects
+            # the resulting callable for the job. `skip_if_no_new_data=True`
+            # gates the cycle work; `retry_null_ai=True` enables Branch 6
+            # AI-backfill on every tick (gated further by
+            # `settings.ai_backfill_enabled` inside the wrapper).
+            partial(_run_cycle_with_session, skip_if_no_new_data=True, retry_null_ai=True),
             trigger=IntervalTrigger(minutes=settings.intraday_cycle_interval_minutes),
             id=_INTRADAY_JOB_ID,
             max_instances=1,
@@ -402,6 +430,7 @@ async def start_scheduler(app: FastAPI) -> AsyncIterator[None]:
         log.info(
             "scheduler_intraday_registered",
             interval_minutes=settings.intraday_cycle_interval_minutes,
+            ai_backfill_enabled=settings.ai_backfill_enabled,
         )
 
     # Outcome evaluator (Stage 08-P3) — scores aged signals into SignalOutcome

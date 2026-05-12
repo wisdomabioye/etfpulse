@@ -302,3 +302,69 @@ class TestBackfillNullAi:
         )
         enriched = [r for r in rows if r.ai_analysis is not None]
         assert len(enriched) == 1
+
+
+class TestBackfillMaxAgeHours:
+    """Branch 6 — the auto-retry path passes `max_age_hours` to skip stale
+    signals. The manual operator endpoint uses `None` to drain any age."""
+
+    async def test_none_means_no_age_filter(self, db_session, monkeypatch):
+        """When `max_age_hours is None` (default), even ancient signals
+        are eligible. Matches the manual `/retry-ai` endpoint behavior."""
+        ancient = await _seed_null_ai_signal(db_session, fingerprint_seed="ancient")
+        ancient.created_at = datetime(2024, 1, 1, tzinfo=UTC)  # ~1.5 years old
+        await db_session.flush()
+
+        async def _ai(**kwargs):
+            return _VALID_ANALYSIS, None
+
+        monkeypatch.setattr(
+            "etfpulse.pipeline.ai_backfill.openrouter_client.analyze_with_reason", _ai
+        )
+
+        summary = await backfill_null_ai(db_session, limit=10)  # max_age_hours not passed → None
+        assert summary["updated"] == 1
+
+    async def test_zero_means_no_age_filter(self, db_session, monkeypatch):
+        """`max_age_hours=0` is the 'unlimited' sentinel (matches the env
+        knob's 0=disabled convention). Same behavior as None."""
+        ancient = await _seed_null_ai_signal(db_session, fingerprint_seed="zero")
+        ancient.created_at = datetime(2024, 1, 1, tzinfo=UTC)
+        await db_session.flush()
+
+        async def _ai(**kwargs):
+            return _VALID_ANALYSIS, None
+
+        monkeypatch.setattr(
+            "etfpulse.pipeline.ai_backfill.openrouter_client.analyze_with_reason", _ai
+        )
+
+        summary = await backfill_null_ai(db_session, limit=10, max_age_hours=0)
+        assert summary["updated"] == 1
+
+    async def test_filters_out_older_than_cutoff(self, db_session, monkeypatch):
+        """A signal older than `max_age_hours` is NOT considered. Tests
+        the auto-retry contract: stale market data isn't worth AI spend."""
+        from datetime import timedelta
+
+        old = await _seed_null_ai_signal(db_session, fingerprint_seed="too-old")
+        old.created_at = datetime.now(UTC) - timedelta(hours=48)  # 48h old
+        fresh = await _seed_null_ai_signal(db_session, fingerprint_seed="fresh")
+        fresh.created_at = datetime.now(UTC) - timedelta(hours=1)  # 1h old
+        await db_session.flush()
+
+        async def _ai(**kwargs):
+            return _VALID_ANALYSIS, None
+
+        monkeypatch.setattr(
+            "etfpulse.pipeline.ai_backfill.openrouter_client.analyze_with_reason", _ai
+        )
+
+        summary = await backfill_null_ai(db_session, limit=10, max_age_hours=24)
+        # Only the fresh signal was scanned + updated.
+        assert summary["scanned"] == 1
+        assert summary["updated"] == 1
+        await db_session.refresh(old)
+        await db_session.refresh(fresh)
+        assert old.ai_analysis is None  # excluded by age filter
+        assert fresh.ai_analysis is not None

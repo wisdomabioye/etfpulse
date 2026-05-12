@@ -29,6 +29,7 @@ Contract:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import structlog
@@ -44,12 +45,20 @@ from etfpulse.pipeline.regime_monitor import RegimeClassification
 log = structlog.get_logger()
 
 
-async def backfill_null_ai(session: AsyncSession, *, limit: int = 10) -> dict[str, Any]:
+async def backfill_null_ai(
+    session: AsyncSession, *, limit: int = 10, max_age_hours: int | None = None
+) -> dict[str, Any]:
     """Re-run OpenRouter enrichment for up to `limit` NULL-AI signals.
 
     Selection: `Signal.ai_analysis IS NULL` ordered by `created_at ASC` so
     the oldest stranded rows clear first (consistent with FIFO operator
     intuition). `limit` caps OpenRouter spend per invocation.
+
+    `max_age_hours` (Branch 6) filters to signals younger than the cutoff.
+    Used by the auto-retry path (intra-day cycle) to avoid retrying stale
+    market data that's no longer actionable. `None` (the manual endpoint's
+    default) means "any age" — operators draining a backlog want the full
+    surface, not an age-gated slice.
 
     Per-row failure (AI returns None — quota, network, schema mismatch) is
     counted in `failed` but does NOT abort the loop — same catch-and-continue
@@ -57,12 +66,13 @@ async def backfill_null_ai(session: AsyncSession, *, limit: int = 10) -> dict[st
     into `error_samples` so the operator UI can surface the actual cause
     without scraping server logs.
     """
-    stmt = (
-        select(Signal)
-        .where(Signal.ai_analysis.is_(None))
-        .order_by(Signal.created_at.asc())
-        .limit(limit)
-    )
+    stmt = select(Signal).where(Signal.ai_analysis.is_(None))
+    if max_age_hours is not None and max_age_hours > 0:
+        # Apply the age filter as a WHERE clause so we don't load + reject
+        # rows in Python. Index path: ix_signals_created already exists.
+        cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+        stmt = stmt.where(Signal.created_at >= cutoff)
+    stmt = stmt.order_by(Signal.created_at.asc()).limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
 
     summary: dict[str, Any] = {

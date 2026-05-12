@@ -61,10 +61,16 @@ class AdminMetrics(BaseModel):
     signals_overdue_unreaped: int = Field(ge=0)
 
     # Signals with NULL confidence (AI failed at build time, per known
-    # behavior). These accumulate forever in PENDING because they have no
-    # expires_at to compare. Surfaced here so operators can spot runaway
-    # OpenRouter failures early.
+    # behavior). Branch 6 wires `backfill_null_ai` into the intra-day cycle
+    # so transient OpenRouter outages self-heal; the count here is what's
+    # left after auto-retries. Surfaced for spot-check + alerting.
     signals_null_confidence: int = Field(ge=0)
+    # Branch 6 — `signals_null_confidence > signals_null_confidence_alert_threshold`.
+    # When True, the failure rate has outgrown what auto-retry handles and
+    # operator intervention is warranted (check OpenRouter credits / quota /
+    # model availability via `POST /api/admin/signals/retry-ai` for a
+    # full-batch operator drain that ignores the auto-path's age cap).
+    signals_null_confidence_alert: bool
 
     # SignalDelivery rows in PENDING longer than
     # `delivery_pending_max_age_seconds`. The delivery reaper will flip
