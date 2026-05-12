@@ -11,14 +11,13 @@
 // Enums (Literal in Pydantic, union types here)
 // ---------------------------------------------------------------------------
 
-export type AssetSymbol = 'BTC' | 'ETH';
-
-export type SignalType =
-  | 'flow_anomaly'
-  | 'magnitude'
-  | 'acceleration'
-  | 'divergence'
-  | 'regime_shift';
+// Issue #75 — these unions are derived from the runtime constant arrays in
+// `lib/constants.ts`. Re-imported + re-exported here so the established
+// `import type { AssetSymbol, SignalType } from '../../api/types'` path
+// keeps working for every consumer, AND the in-file interfaces below can
+// still reference the local names.
+import type { AssetSymbol, SignalType } from '../lib/constants';
+export type { AssetSymbol, SignalType };
 
 /** Display status — derived backend-side; never the raw DB enum value.
  * - 'evaluated' = Stage 8 outcome row exists

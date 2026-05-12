@@ -1,4 +1,5 @@
 import type { AssetSymbol, SignalFilters, SignalType, SortOrder } from '../../api/types';
+import { ASSETS, SIGNAL_TYPES } from '../../lib/constants';
 import { formatSignalType } from '../../lib/format';
 import { FilterPill } from '../ui';
 
@@ -6,14 +7,6 @@ interface FilterBarProps {
   value: SignalFilters;
   onChange: (next: SignalFilters) => void;
 }
-
-const SIGNAL_TYPES: SignalType[] = [
-  'flow_anomaly',
-  'magnitude',
-  'acceleration',
-  'divergence',
-  'regime_shift',
-];
 
 const LABEL =
   'font-mono text-[10px] text-text-3 uppercase tracking-[0.1em] select-none';
@@ -78,12 +71,15 @@ export function FilterBar({ value, onChange }: FilterBarProps) {
           <FilterPill active={asset === 'ALL'} onClick={() => setAsset('ALL')}>
             All
           </FilterPill>
-          <FilterPill active={asset === 'BTC'} onClick={() => setAsset('BTC')}>
-            BTC
-          </FilterPill>
-          <FilterPill active={asset === 'ETH'} onClick={() => setAsset('ETH')}>
-            ETH
-          </FilterPill>
+          {ASSETS.map((sym) => (
+            <FilterPill
+              key={sym}
+              active={asset === sym}
+              onClick={() => setAsset(sym)}
+            >
+              {sym}
+            </FilterPill>
+          ))}
         </div>
       </div>
 
