@@ -31,11 +31,18 @@ def enable_bot(monkeypatch):
 @pytest.fixture
 def mock_application(monkeypatch):
     """Replace `Application.builder().token().build()` with a mock. All PTB
-    lifecycle methods become AsyncMocks we can assert against."""
+    lifecycle methods become AsyncMocks we can assert against.
+
+    `app_mock.bot.set_my_commands` is wired as an AsyncMock so the lifespan
+    can `await` it (issue: MagicMock auto-creates nested attrs as MagicMock,
+    which raises TypeError on await). The slash-menu push is part of the
+    enabled startup path; every enabled-path test implicitly exercises it.
+    """
     app_mock = MagicMock()
     app_mock.initialize = AsyncMock()
     app_mock.shutdown = AsyncMock()
     app_mock.add_handler = MagicMock()
+    app_mock.bot.set_my_commands = AsyncMock()
 
     builder = MagicMock()
     builder.token.return_value = builder
@@ -145,6 +152,47 @@ async def test_set_webhook_failure_does_not_block_startup(
         # attached to app.state — the bot is functional locally. Webhook
         # registration will retry on next container restart.
         mock_application.initialize.assert_awaited_once()
+        assert app.state.bot_application is mock_application
+
+
+async def test_set_my_commands_pushes_advertised_commands(
+    enable_bot, mock_application, mock_set_webhook
+):
+    """Slash-menu push uses the SAME source as /help and welcomes
+    (`bot/commands.py:COMMAND_SPECS`, advertised entries only). Aliases
+    (`track_record`) must NOT appear in the menu — they exist for power
+    users who guess the underscore form, not as discoverable commands.
+    """
+    from telegram import BotCommand
+
+    from etfpulse.bot.commands import COMMAND_SPECS
+
+    app = FastAPI()
+    async with start_bot(app):
+        mock_application.bot.set_my_commands.assert_awaited_once()
+        sent: list[BotCommand] = mock_application.bot.set_my_commands.await_args.args[0]
+
+    advertised_names = {spec.name for spec in COMMAND_SPECS if spec.advertised}
+    pushed_names = {cmd.command for cmd in sent}
+    assert pushed_names == advertised_names
+    # Belt-and-braces — alias MUST NOT leak into the slash-menu.
+    assert "track_record" not in pushed_names
+    # Every pushed command has a non-empty description (Telegram rejects empty).
+    assert all(cmd.description for cmd in sent)
+
+
+async def test_set_my_commands_failure_does_not_block_startup(
+    enable_bot, mock_application, mock_set_webhook
+):
+    """Slash-menu push is a nice-to-have. Telegram returning an error must
+    NOT prevent the bot from attaching to app.state — otherwise a transient
+    upstream issue could lock out the webhook surface entirely."""
+    mock_application.bot.set_my_commands.side_effect = NetworkError("telegram unreachable")
+
+    app = FastAPI()
+    async with start_bot(app):
+        # Webhook + Application attachment still happen despite the failure.
+        mock_set_webhook.assert_awaited_once()
         assert app.state.bot_application is mock_application
 
 

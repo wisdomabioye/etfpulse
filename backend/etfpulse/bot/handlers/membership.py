@@ -34,7 +34,7 @@ from telegram import Chat, ChatMember, Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from etfpulse.bot.i18n import resolve_lang, t
+from etfpulse.bot.i18n import render_command_list, resolve_lang, t
 from etfpulse.config import settings
 from etfpulse.db import async_session
 from etfpulse.models import TelegramGroup
@@ -139,8 +139,11 @@ async def _on_added(chat: Chat, update: Update) -> None:
     # `welcome.group` i18n key as the /start group handler so the bot
     # speaks consistently across both registration paths.
     if update.effective_message is not None:
+        lang = resolve_lang(update)
         try:
-            await update.effective_message.reply_html(t("welcome.group", lang=resolve_lang(update)))
+            await update.effective_message.reply_html(
+                t("welcome.group", lang=lang, command_list=render_command_list(lang))
+            )
         except TelegramError as exc:
             # Welcome failed (no send permission, rate limit, etc) — log
             # and move on. The group is already registered; signals will

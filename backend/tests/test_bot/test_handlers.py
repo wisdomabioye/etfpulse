@@ -136,6 +136,30 @@ class TestCmdStart:
         ).scalar_one()
         assert group.title == "Alpha"
 
+    async def test_dm_welcome_embeds_command_list(self, db_session, patch_session):
+        """Regression guard. `welcome.dm` interpolates `{command_list}` so
+        `/start` and `/help` derive from the same registry. If someone
+        deletes the placeholder by accident, `str.format(**kwargs)` would
+        silently drop the kwarg and `/start` would lose its bullets —
+        none of the existing welcome tests would notice. Pin every
+        advertised command to appear in the rendered welcome."""
+        update = _dm_update(chat_id=900)
+        await cmd_start(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        for cmd in ["/start", "/prefs", "/subscribe", "/unsubscribe", "/performance", "/help"]:
+            assert cmd in reply_text, f"DM welcome must embed {cmd} from the command list"
+
+    async def test_group_welcome_embeds_command_list(self, db_session, patch_session):
+        """Same guard for the group welcome path (both /start in a group
+        AND the my_chat_member auto-welcome reuse `welcome.group`)."""
+        update = _group_update(chat_id=-100900, title="Beta")
+        await cmd_start(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        for cmd in ["/start", "/prefs", "/subscribe", "/unsubscribe", "/performance", "/help"]:
+            assert cmd in reply_text, f"group welcome must embed {cmd}"
+
     async def test_dm_welcome_translated_when_language_code_set(self, db_session, patch_session):
         """Issue #37 — /start respects `effective_user.language_code`.
         A Spanish-locale client should see the es welcome string."""
@@ -397,7 +421,14 @@ class TestPrefsGroupAdminGate:
 
 
 class TestStaticHandlers:
-    async def test_help_lists_commands(self):
+    async def test_help_lists_advertised_commands(self):
+        """Renders every advertised command from `bot/commands.py:COMMAND_SPECS`.
+
+        Pin the advertised set explicitly so a removal from the registry that
+        nobody intended (e.g., an accidental delete during refactor) trips
+        this test. Aliases like `/track_record` MUST NOT appear — they're
+        unadvertised on purpose.
+        """
         update = _dm_update()
         await cmd_help(update, _ctx())
 
@@ -407,11 +438,27 @@ class TestStaticHandlers:
             "/prefs",
             "/subscribe",
             "/unsubscribe",
-            "/help",
-            "/track-record",
             "/performance",
+            "/help",
         ]:
-            assert cmd in reply_text
+            assert cmd in reply_text, f"/help must advertise {cmd}"
+        # Hyphen form is unreachable in Telegram bot commands — must NEVER
+        # appear in user-facing copy. Pin to catch the bug we just fixed.
+        assert "/track-record" not in reply_text
+        # `/track_record` is an unadvertised alias — keep it out of /help.
+        assert "/track_record" not in reply_text
+
+    async def test_help_renders_in_spanish(self):
+        update = _dm_update(language_code="es-MX")
+        await cmd_help(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        # Spanish header from the `help.header` i18n key.
+        assert "Comandos de ETFPulse" in reply_text
+        # Spanish command description from `cmd.performance.desc.es`.
+        assert "historial de rendimiento" in reply_text
+        # Confirms English is suppressed, not just appended.
+        assert "ETFPulse commands" not in reply_text
 
 
 # ---- /track-record + /performance ----------------------------------------
@@ -551,6 +598,126 @@ class TestCmdTrackRecord:
         rename doesn't silently desync them."""
         # Same function object — alias is `cmd_performance = cmd_track_record`.
         assert cmd_performance is cmd_track_record
+
+    async def test_footer_uses_frontend_url_not_telegram_public_url(
+        self, db_session, patch_session, monkeypatch
+    ):
+        """The 'Full record:' link must point to the FRONTEND SPA, not the
+        bot's webhook host. They are typically separate domains (Vercel +
+        Coolify); pre-fix the footer pointed at the backend, where the
+        /track-record route doesn't exist (404).
+
+        Seed one outcome so the render path passes the cold-boot guard and
+        actually reaches the footer.
+        """
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from etfpulse.config import settings
+        from etfpulse.models import Signal, SignalOutcome
+        from etfpulse.pipeline.detectors import compute_fingerprint
+
+        signal = Signal(
+            signal_type="flow_anomaly",
+            asset="BTC",
+            trigger_data={},
+            ai_analysis={"suggested_action": "consider long", "headline": "x"},
+            confidence=7,
+            status="alerted",
+            price_at_creation=Decimal("84200"),
+            price_source="binance",
+            ai_prompt_version="v3",
+            fingerprint=compute_fingerprint("footer-url-test"),
+            signal_date=date(2026, 4, 25),
+            target_price=Decimal("89500"),
+        )
+        db_session.add(signal)
+        await db_session.flush()
+        db_session.add(
+            SignalOutcome(
+                signal_id=signal.id,
+                asset="BTC",
+                signal_type="flow_anomaly",
+                direction="long",
+                confidence=7,
+                target_price=Decimal("89500"),
+                price_at_signal=Decimal("84200"),
+                price_after_72h=Decimal("89600"),
+                hit_target=True,
+                hit_stop=False,
+                evaluated_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        # Distinct domains so we can prove the bot picks the right one.
+        monkeypatch.setattr(settings, "frontend_url", "https://app.example.com")
+        monkeypatch.setattr(settings, "telegram_public_url", "https://api.example.com")
+
+        update = _dm_update()
+        await cmd_track_record(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        assert "Full record:" in reply_text
+        assert "https://app.example.com/track-record" in reply_text
+        # The backend host MUST NOT appear in the user-facing track-record
+        # link — that was the bug.
+        assert "api.example.com" not in reply_text
+
+    async def test_footer_skipped_when_frontend_url_empty(
+        self, db_session, patch_session, monkeypatch
+    ):
+        """Dev / mis-configured prod: empty `frontend_url` must skip the
+        footer cleanly rather than rendering `https:///track-record`."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from etfpulse.config import settings
+        from etfpulse.models import Signal, SignalOutcome
+        from etfpulse.pipeline.detectors import compute_fingerprint
+
+        signal = Signal(
+            signal_type="flow_anomaly",
+            asset="BTC",
+            trigger_data={},
+            ai_analysis={"suggested_action": "consider long", "headline": "x"},
+            confidence=7,
+            status="alerted",
+            price_at_creation=Decimal("84200"),
+            price_source="binance",
+            ai_prompt_version="v3",
+            fingerprint=compute_fingerprint("footer-empty-url-test"),
+            signal_date=date(2026, 4, 25),
+            target_price=Decimal("89500"),
+        )
+        db_session.add(signal)
+        await db_session.flush()
+        db_session.add(
+            SignalOutcome(
+                signal_id=signal.id,
+                asset="BTC",
+                signal_type="flow_anomaly",
+                direction="long",
+                confidence=7,
+                target_price=Decimal("89500"),
+                price_at_signal=Decimal("84200"),
+                price_after_72h=Decimal("89600"),
+                hit_target=True,
+                hit_stop=False,
+                evaluated_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        monkeypatch.setattr(settings, "frontend_url", "")
+
+        update = _dm_update()
+        await cmd_track_record(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        assert "Full record:" not in reply_text
+        # Defensive: no orphan-protocol artefacts from a previous bug.
+        assert "https:///" not in reply_text
 
     async def test_no_target_signals_render_with_pending_icon(self, db_session, patch_session):
         """Outcomes where AI didn't set a target render with ⏳ — distinct

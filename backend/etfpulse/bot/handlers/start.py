@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from etfpulse.bot.handlers._common import get_or_create_target
-from etfpulse.bot.i18n import resolve_lang, t
+from etfpulse.bot.i18n import render_command_list, resolve_lang, t
 from etfpulse.db import async_session
 
 log = structlog.get_logger()
@@ -38,9 +38,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Interpolate the target's ACTUAL prefs into the welcome — for a
     # returning user this is more accurate than the global defaults
     # (their /prefs may have customised things since first /start).
-    # The `welcome.group` key has no `{...}` placeholders today, so the
-    # kwargs are ignored there; passing them uniformly keeps the call
-    # site DRY across kind="user" and kind="group".
+    # `{command_list}` is required by BOTH welcome strings; `{assets}` and
+    # `{confidence}` only by welcome.dm. Extra kwargs to `.format()` are
+    # ignored, so passing all three uniformly keeps the call site DRY
+    # across kind="user" and kind="group".
     key = "welcome.dm" if target.kind == "user" else "welcome.group"
     assets_str = ", ".join(target.obj.pref_assets) if target.obj.pref_assets else "all"
     await _reply(
@@ -50,6 +51,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lang=lang,
             assets=assets_str,
             confidence=target.obj.pref_min_confidence,
+            command_list=render_command_list(lang),
         ),
     )
 

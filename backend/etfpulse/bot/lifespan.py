@@ -16,7 +16,12 @@ On startup:
        push config to Telegram via `telegram_client.set_webhook(...)`. If
        Telegram is unreachable, log a warning and proceed — better to boot
        the app and retry the registration later than block startup.
-    6. Stash the Application on `app.state.bot_application` so the webhook
+    6. Push the advertised slash-menu via `bot.set_my_commands(...)` so the
+       typing experience in Telegram clients matches `/help`. Sourced from
+       `bot/commands.py:COMMAND_SPECS` — same registry that drives /help
+       and the welcome strings. Failure is non-fatal (same rationale as
+       set_webhook): bot boots without a menu update; next deploy retries.
+    7. Stash the Application on `app.state.bot_application` so the webhook
        route can reach it.
 
 On shutdown:
@@ -36,12 +41,15 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
+from telegram import BotCommand
 from telegram.error import TelegramError as PTBTelegramError
 from telegram.ext import Application
 
 from etfpulse.adapters.telegram import telegram_client
+from etfpulse.bot.commands import COMMAND_SPECS
 from etfpulse.bot.constants import ALLOWED_UPDATES
 from etfpulse.bot.handlers import register_handlers
+from etfpulse.bot.i18n import DEFAULT_LANG, t
 from etfpulse.config import settings
 
 log = structlog.get_logger()
@@ -110,6 +118,29 @@ async def start_bot(app: FastAPI) -> AsyncIterator[None]:
         log.warning(
             "bot_set_webhook_failed",
             url=webhook_url,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+
+    # Push the slash-menu (issue #38 follow-up). Independent try/except from
+    # set_webhook above: a webhook outage shouldn't suppress a menu update
+    # on the next boot, and vice versa. Descriptions resolve through `t()`
+    # in DEFAULT_LANG — Telegram's `set_my_commands` supports per-language
+    # menus via `language_code=`, but we ship one language at the menu
+    # level today; per-update i18n in /help is sufficient. Aliases
+    # (advertised=False) are excluded so users don't see `/track_record`
+    # alongside `/performance` in the typing UI.
+    advertised_commands = [
+        BotCommand(spec.name, t(spec.description_key, lang=DEFAULT_LANG))
+        for spec in COMMAND_SPECS
+        if spec.advertised
+    ]
+    try:
+        await application.bot.set_my_commands(advertised_commands)
+        log.info("bot_commands_menu_set", count=len(advertised_commands))
+    except PTBTelegramError as exc:
+        log.warning(
+            "bot_set_commands_failed",
             error_type=type(exc).__name__,
             error=str(exc),
         )

@@ -1,11 +1,12 @@
-"""/track-record + /performance — public hit-rate readout in Telegram.
+"""/performance + /track_record alias — public hit-rate readout in Telegram.
 
 Stage 8-P9. Replaces the Stage 7-era stub that lived in `handlers/help.py`.
 
 Renders the same data as the web `/track-record` page (Stage 8-P6):
 summary aggregate + the last 5 evaluated outcomes with one-line verdicts.
-Both `/track-record` and `/performance` route here — `/performance` is the
-shorter alias from the Stage 8 design doc spec.
+`/performance` is the advertised primary; `/track_record` (underscore — bot
+command names cannot contain hyphens per Telegram's spec) is an unadvertised
+alias for users who guess the longer form. Both route to the same handler.
 
 Owns its own `async_session()` per anti-drift rule D17. Reuses
 `pipeline.track_record.get_stats_by_confidence_floor` (the cohort-stat
@@ -39,8 +40,8 @@ _RECENT_LIMIT = 5
 
 
 async def cmd_track_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/track-record` (and its `/performance` alias) — render the public
-    hit-rate snapshot to the Telegram chat that issued the command.
+    """`/performance` (and the unadvertised `/track_record` alias) — render
+    the public hit-rate snapshot to the Telegram chat that issued the command.
 
     Single read transaction. No mutations. Safe in DM and group contexts —
     the readout is identical for every caller (no per-user filtering).
@@ -120,15 +121,17 @@ def _format_track_record_message(
     for outcome in recent:
         parts.append(_format_outcome_line(outcome))
 
-    # "Full record:" footer link — only when a public URL is configured.
-    # Reuses `telegram_public_url` (the bot webhook host) since the frontend
-    # ships under the same domain in our Coolify deploy. When unset (dev /
-    # bot-disabled-mode), skip the line cleanly rather than rendering
-    # `https:///track-record`. URL is `html.escape`d defensively — operator
-    # config could legitimately contain `&` (UTM params, etc.) which would
-    # otherwise break Telegram's HTML parser.
-    if settings.telegram_public_url:
-        url = html.escape(f"{settings.telegram_public_url.rstrip('/')}/track-record")
+    # "Full record:" footer link — only when the SPA URL is configured.
+    # Uses `frontend_url` because the track-record page is a frontend route
+    # (`/track-record` on the SPA), NOT a backend webhook route. Frontend and
+    # backend are typically separate domains (Vercel + Coolify). When unset
+    # (dev / bot-disabled-mode), skip the line cleanly rather than rendering
+    # a broken link. URL is `html.escape`d defensively — operator config could
+    # legitimately contain `&` (UTM params, etc.) which would otherwise break
+    # Telegram's HTML parser. The path keeps the hyphen — that's a frontend
+    # route segment, not a Telegram bot command, so hyphens are fine here.
+    if settings.frontend_url:
+        url = html.escape(f"{settings.frontend_url.rstrip('/')}/track-record")
         parts.append("")
         parts.append(f"<i>Full record: {url}</i>")
 

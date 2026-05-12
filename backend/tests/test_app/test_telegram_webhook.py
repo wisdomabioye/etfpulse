@@ -52,6 +52,10 @@ def mock_application(monkeypatch):
     app_mock.shutdown = AsyncMock()
     app_mock.process_update = AsyncMock()
     app_mock.bot = MagicMock()
+    # `lifespan.start_bot` awaits `application.bot.set_my_commands(...)` to
+    # push the slash-menu. MagicMock's auto-created attrs are sync; awaiting
+    # one raises TypeError. Wire it as AsyncMock explicitly.
+    app_mock.bot.set_my_commands = AsyncMock()
 
     builder = MagicMock()
     builder.token.return_value = builder

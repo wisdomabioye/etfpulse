@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from etfpulse.bot.i18n import _TRANSLATIONS, DEFAULT_LANG, resolve_lang, t
+from etfpulse.bot.i18n import _TRANSLATIONS, DEFAULT_LANG, render_command_list, resolve_lang, t
 
 
 class TestTranslate:
@@ -83,6 +83,44 @@ class TestTranslate:
         surface."""
         with pytest.raises(KeyError):
             t("does.not.exist", lang="en")
+
+
+class TestRenderCommandList:
+    """The single function that drives /help, /start welcomes, and the
+    Telegram slash-menu. Properties here are load-bearing for every
+    user-facing command surface."""
+
+    def test_renders_advertised_commands(self):
+        out = render_command_list("en")
+        # Each advertised command appears as a `/name` HTML bullet.
+        for name in ["start", "prefs", "subscribe", "unsubscribe", "performance", "help"]:
+            assert f"<code>/{name}</code>" in out
+
+    def test_excludes_unadvertised_aliases(self):
+        """`track_record` is registered (so users who type the underscore
+        form still get a response) but explicitly NOT advertised. It must
+        never appear in the rendered list."""
+        out = render_command_list("en")
+        assert "/track_record" not in out
+
+    def test_never_contains_hyphen_form(self):
+        """Regression: the old /help block hardcoded `/track-record`.
+        Telegram cannot dispatch hyphenated commands; never advertise them."""
+        for lang in ("en", "es"):
+            assert "/track-record" not in render_command_list(lang)
+
+    def test_spanish_uses_translated_descriptions(self):
+        es = render_command_list("es")
+        # Spanish description from `cmd.performance.desc.es`.
+        assert "historial de rendimiento" in es
+        # English description must not leak through when a Spanish
+        # translation exists.
+        assert "track record" not in es.lower()
+
+    def test_unknown_lang_falls_back_to_english(self):
+        """`render_command_list("xx")` should not crash — i18n's English
+        fallback applies per-key inside the renderer."""
+        assert render_command_list("xx") == render_command_list("en")
 
 
 class TestResolveLang:

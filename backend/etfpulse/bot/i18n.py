@@ -35,6 +35,8 @@ from typing import Final
 
 from telegram import Update
 
+from etfpulse.bot.commands import COMMAND_SPECS
+
 # Canonical language — the fallback target for missing keys and missing
 # language tags. English is the source of truth; every other table is a
 # (potentially partial) overlay.
@@ -47,27 +49,33 @@ DEFAULT_LANG: Final[str] = "en"
 #   3. Anything you don't translate falls through to English automatically.
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
-        # /start — `{assets}` and `{confidence}` interpolated from the
-        # caller's current state (target.obj). For a returning user this
-        # reflects their actual settings, not the global defaults.
+        # Welcomes — `{assets}` + `{confidence}` (DM only) reflect the user's
+        # actual current state. `{command_list}` is filled by
+        # `render_command_list(lang)` so /start, /help, the group welcome,
+        # and Telegram's slash-menu all derive from one COMMAND_SPECS table.
         "welcome.dm": (
             "👋 <b>Welcome to ETFPulse</b>\n\n"
             "You'll receive crypto ETF flow signals here when our detectors fire. "
             "Your preferences: <code>{assets}</code>, confidence ≥ {confidence}.\n\n"
-            "Commands:\n"
-            "• <code>/prefs assets BTC,ETH</code> — set which assets to watch\n"
-            "• <code>/prefs confidence 7</code> — set minimum confidence (1-10)\n"
-            "• <code>/unsubscribe</code> / <code>/subscribe</code> — pause / resume\n"
-            "• <code>/help</code> — this list again"
+            "<b>Commands:</b>\n{command_list}"
         ),
         "welcome.group": (
             "👋 <b>ETFPulse is now monitoring this group</b>\n\n"
-            "Signals will be posted here when our detectors fire. Any member can "
-            "configure with:\n"
-            "• <code>/prefs assets BTC,ETH</code>\n"
-            "• <code>/prefs confidence 7</code>\n"
-            "• <code>/help</code> for the full command list"
+            "Signals will be posted here when our detectors fire. Any member "
+            "can configure preferences.\n\n"
+            "<b>Commands:</b>\n{command_list}"
         ),
+        "help.header": "<b>ETFPulse commands</b>",
+        # Command descriptions — rendered by `render_command_list`. Keep each
+        # under ~80 chars so the resulting "• /name — desc" line fits one
+        # row on a mobile screen AND under Telegram's set_my_commands cap
+        # (256 chars per description).
+        "cmd.start.desc": "register or re-activate notifications",
+        "cmd.prefs.desc": "view or change preferences (assets, confidence)",
+        "cmd.subscribe.desc": "resume signal delivery",
+        "cmd.unsubscribe.desc": "pause signal delivery (preferences preserved)",
+        "cmd.performance.desc": "show recent signal track record",
+        "cmd.help.desc": "show this command list",
         # Callback toasts (cap 200 chars per Telegram answerCallbackQuery)
         "callback.not_admin": "Only group admins can change preferences.",
         "callback.last_asset": ("Keep at least one asset selected. Use ⏸ to pause instead."),
@@ -79,20 +87,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Recibirás señales de flujos de ETF cripto aquí cuando nuestros "
             "detectores se activen. Tus preferencias: "
             "<code>{assets}</code>, confianza ≥ {confidence}.\n\n"
-            "Comandos:\n"
-            "• <code>/prefs assets BTC,ETH</code> — elegir activos a vigilar\n"
-            "• <code>/prefs confidence 7</code> — confianza mínima (1-10)\n"
-            "• <code>/unsubscribe</code> / <code>/subscribe</code> — pausar / reanudar\n"
-            "• <code>/help</code> — ver esta lista"
+            "<b>Comandos:</b>\n{command_list}"
         ),
         "welcome.group": (
             "👋 <b>ETFPulse ahora monitoriza este grupo</b>\n\n"
             "Se publicarán señales aquí cuando nuestros detectores se activen. "
-            "Cualquier miembro puede configurar con:\n"
-            "• <code>/prefs assets BTC,ETH</code>\n"
-            "• <code>/prefs confidence 7</code>\n"
-            "• <code>/help</code> para la lista completa"
+            "Cualquier miembro puede configurar las preferencias.\n\n"
+            "<b>Comandos:</b>\n{command_list}"
         ),
+        "help.header": "<b>Comandos de ETFPulse</b>",
+        "cmd.start.desc": "registrarte o re-activar notificaciones",
+        "cmd.prefs.desc": "ver o cambiar preferencias (activos, confianza)",
+        "cmd.subscribe.desc": "reanudar entrega de señales",
+        "cmd.unsubscribe.desc": "pausar entrega (preferencias preservadas)",
+        "cmd.performance.desc": "ver historial de rendimiento",
+        "cmd.help.desc": "mostrar esta lista de comandos",
         "callback.not_admin": (
             "Solo los administradores del grupo pueden cambiar las preferencias."
         ),
@@ -124,6 +133,22 @@ def t(key: str, *, lang: str = DEFAULT_LANG, **kwargs: object) -> str:
     return raw.format(**kwargs) if kwargs else raw
 
 
+def render_command_list(lang: str) -> str:
+    """HTML bullet list of advertised commands, translated to `lang`.
+
+    Drives /help, the /start welcomes (via the `{command_list}` placeholder),
+    and indirectly Telegram's slash-menu (`bot/lifespan.py:start_bot` calls
+    `set_my_commands` with the same translated descriptions). Adding a
+    command in `bot/commands.py:COMMAND_SPECS` automatically updates every
+    user-visible surface.
+    """
+    return "\n".join(
+        f"• <code>/{spec.name}</code> — {t(spec.description_key, lang=lang)}"
+        for spec in COMMAND_SPECS
+        if spec.advertised
+    )
+
+
 def resolve_lang(update: Update) -> str:
     """Return the IETF primary subtag for the user behind `update`.
 
@@ -139,4 +164,4 @@ def resolve_lang(update: Update) -> str:
     return user.language_code.split("-", 1)[0].lower()
 
 
-__all__ = ["DEFAULT_LANG", "resolve_lang", "t"]
+__all__ = ["DEFAULT_LANG", "render_command_list", "resolve_lang", "t"]

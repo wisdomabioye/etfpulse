@@ -1,7 +1,10 @@
-"""/help — static command list, no DB state.
+"""/help — render the advertised command list, i18n-aware.
 
-`/track-record` and `/performance` were stubs here in Stage 7; they moved
-to `bot/handlers/track_record.py` in Stage 8-P9 when they grew DB lookups.
+Body is composed from two i18n surfaces (`help.header` + `render_command_list`)
+so /help, /start welcomes, and the Telegram client slash-menu all derive
+from the same `bot/commands.py:COMMAND_SPECS` source. Adding a command =
+one entry in COMMAND_SPECS + its `cmd.<name>.desc` translation key. No
+edits here.
 """
 
 from __future__ import annotations
@@ -9,22 +12,15 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
-_HELP_TEXT = (
-    "<b>ETFPulse commands</b>\n\n"
-    "• <code>/start</code> — register / re-activate notifications\n"
-    "• <code>/prefs</code> — show current preferences\n"
-    "• <code>/prefs assets BTC,ETH</code> — set which assets to watch\n"
-    "• <code>/prefs confidence 7</code> — minimum confidence (1-10)\n"
-    "• <code>/subscribe</code> / <code>/unsubscribe</code> — resume / pause\n"
-    "• <code>/track-record</code> (or <code>/performance</code>) — public signal performance\n"
-    "• <code>/help</code> — this message"
-)
+from etfpulse.bot.i18n import render_command_list, resolve_lang, t
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
-    await update.effective_message.reply_html(_HELP_TEXT)
+    lang = resolve_lang(update)
+    text = f"{t('help.header', lang=lang)}\n\n{render_command_list(lang)}"
+    await update.effective_message.reply_html(text)
 
 
 __all__ = ["cmd_help"]
