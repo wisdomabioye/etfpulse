@@ -82,4 +82,4 @@ External APIs (SoSoValue, Binance) are exercised via the fixtures in `fixtures/`
 
 ## Deployment
 
-`Dockerfile` runs `alembic upgrade head` then `exec uvicorn`. Migrations + code are one atomic deploy unit. CLAUDE.md → **Deployment (Coolify on Hetzner)** has the full env-var list and Telegram webhook setup.
+`Dockerfile` runs `alembic upgrade head` then `exec uvicorn`. Migrations + code are one atomic deploy unit. CLAUDE.md → **Deployment** has the full env-var list and Telegram webhook setup.

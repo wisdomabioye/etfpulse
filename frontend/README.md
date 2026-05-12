@@ -42,4 +42,4 @@ CI runs `pnpm run lint` + `pnpm run build`.
 
 ## Deployment
 
-Build output is static — drop `dist/` into any static host (Vercel, Cloudflare Pages, etc). Configure `VITE_API_BASE_URL` to point at the deployed FastAPI backend (Coolify-assigned domain).
+Build output is static — drop `dist/` into any static host (Vercel, Cloudflare Pages, etc). Configure `VITE_API_BASE_URL` to point at the deployed FastAPI backend's public domain.

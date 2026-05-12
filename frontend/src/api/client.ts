@@ -4,7 +4,7 @@
  * Dev: VITE_API_BASE_URL is empty → fetch uses relative `/api/...` →
  *      Vite proxy forwards to backend on :8000. No CORS friction.
  * Prod: VITE_API_BASE_URL set on Vercel → fetch uses absolute URL →
- *       Coolify CORS_ORIGINS allows the Vercel origin.
+ *       backend's CORS_ORIGINS allows the Vercel origin.
  *
  * All non-2xx responses throw `ApiError`. Components can narrow with
  * `if (error instanceof ApiError) ...` to read .status / .detail.

@@ -7,9 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def normalize_database_url(url: str) -> str:
     """Coerce common Postgres URL shapes into `postgresql+asyncpg://`.
 
-    Coolify, Heroku, and other managed platforms inject `DATABASE_URL` with a
-    `postgres://` prefix (the historical Heroku alias) or a plain `postgresql://`
-    with no driver. SQLAlchemy 1.4+ rejects `postgres://` outright and can't
+    Many managed platforms (Heroku and its lineage) inject `DATABASE_URL`
+    with a `postgres://` prefix or a plain `postgresql://` with no driver.
+    SQLAlchemy 1.4+ rejects `postgres://` outright and can't
     use the async `asyncpg` driver without the explicit `+asyncpg` suffix.
     This normaliser is the single source of truth — config.py applies it to
     database URLs at load time, and Alembic's env.py reuses it for the `-x db=`
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     run_scheduler: bool = True
 
     # Database — defaults match a stock local Postgres install (user `postgres`,
-    # password `postgres`). Coolify/Hetzner override via env. Two DBs are expected
+    # password `postgres`). Prod platforms override via env. Two DBs are expected
     # on a dev machine: `etfpulse` for the app, `etfpulse_test` for pytest.
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/etfpulse"
     database_url_test: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/etfpulse_test"
@@ -245,8 +245,8 @@ class Settings(BaseSettings):
     # Bounded wait at scheduler shutdown (issue #28). 10s gives in-flight
     # jobs (a daily cycle, an outcome eval batch) a chance to finish their
     # current DB transaction before SIGTERM forces the event loop down.
-    # Coolify's deploy timeout is generous; 10s isn't visible to users and
-    # avoids partial-state writes from cancelled transactions. 0 disables
+    # The host platform's deploy timeout is generous; 10s isn't visible to
+    # users and avoids partial-state writes from cancelled transactions. 0 disables
     # the grace entirely (legacy wait=False behaviour).
     scheduler_shutdown_grace_seconds: int = Field(default=10, ge=0)
 
@@ -258,7 +258,7 @@ class Settings(BaseSettings):
     # keyboards). Empty string (the default) disables the button — the
     # alert still sends, just without the link. Distinct from
     # `telegram_public_url` (which is the bot webhook host, not the
-    # SPA host — different domains on Vercel/Coolify split deployments).
+    # SPA host — different domains on split SPA/API deployments).
     #
     # Default is intentionally empty (not the dev localhost) because a
     # mis-configured production would otherwise send users links to

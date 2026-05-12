@@ -65,7 +65,7 @@ pnpm run build
 
 ## Deployment
 
-Coolify on Hetzner. `backend/Dockerfile` runs `alembic upgrade head` then `uvicorn`. Migrations and code deploys are one atomic unit — if a migration fails, the container exits non-zero and Coolify rolls back. See CLAUDE.md → **Deployment** for the full env-var list and Telegram webhook setup.
+Container-based deploy behind a managed reverse proxy. `backend/Dockerfile` runs `alembic upgrade head` then `uvicorn`. Migrations and code deploys are one atomic unit — if a migration fails, the container exits non-zero and the platform rolls back. See CLAUDE.md → **Deployment** for the full env-var list and Telegram webhook setup.
 
 ## License
 
