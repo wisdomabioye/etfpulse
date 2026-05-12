@@ -124,6 +124,15 @@ class AdminMetrics(BaseModel):
     # convenient inspection in dashboards.
     signal_counts_by_prompt_version: dict[str, int]
 
+    # Issue #65 — count of CircuitBreaker rows with `resolved_at IS NULL`.
+    # Steady-state is 0. Non-zero = a breaker tripped (macro event, manual
+    # halt, future risk-controller stop) and was never cleared. Operator
+    # surfaces the active row list separately if they need to inspect
+    # `details` / `triggered_at`; this counter is the cheap "is anything
+    # stuck?" probe. Defaults to 0 for backward compat with payloads
+    # generated before this field landed.
+    active_circuit_breakers: int = Field(ge=0, default=0)
+
 
 class RetryAiErrorSample(BaseModel):
     """Per-row failure detail emitted by `POST /api/admin/signals/retry-ai`.

@@ -51,6 +51,7 @@ from etfpulse.models import (
     TelegramGroup,
     User,
 )
+from etfpulse.pipeline import circuit_breaker
 from etfpulse.pipeline.ai_backfill import backfill_null_ai
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
@@ -572,6 +573,9 @@ async def get_admin_metrics(
     ).all()
     signal_counts_by_prompt_version = {row[0]: row[1] for row in pv_rows}
 
+    # --- Active circuit breakers (issue #65) ------------------------------
+    active_circuit_breakers = await circuit_breaker.count_active(session)
+
     return AdminMetrics(
         signal_status_counts=signal_status,
         delivery_status_counts=delivery_status,
@@ -587,6 +591,7 @@ async def get_admin_metrics(
         accepted_webhook_secrets=accepted_webhook_secrets,
         current_ai_prompt_version=AI_PROMPT_VERSION,
         signal_counts_by_prompt_version=signal_counts_by_prompt_version,
+        active_circuit_breakers=active_circuit_breakers,
     )
 
 

@@ -23,6 +23,12 @@ dependencies = [
     "apscheduler>=3.10.0",
     "structlog>=24.4.0",
     "cachetools>=5.5.0",
+    # Stage 09 — EIP-712 signing + EVM utilities for SoDEX order submission.
+    # `eth-account` ships the signer; `web3` pulls in `eth-utils` + keccak +
+    # rlp which the SoDEX adapter uses for typed-data hashing. ~30 MB image
+    # footprint accepted (Stage 09 is the only consumer).
+    "eth-account>=0.13.0",
+    "web3>=7.0.0",
 ]
 
 [project.optional-dependencies]
