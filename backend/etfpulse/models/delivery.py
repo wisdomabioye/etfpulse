@@ -42,7 +42,16 @@ class SignalDelivery(Base):
     )
     status: Mapped[str] = mapped_column(String(20), default=DeliveryStatus.PENDING, nullable=False)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    attempt_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # `attempt_count` counts attempts made. 0 = never attempted; 1 after the
+    # send worker's first try; etc. The send worker reads this against
+    # `settings.delivery_max_attempts` to decide whether a transient failure
+    # is retryable (count < max) or terminal (count == max).
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # When the send worker last touched this row. NULL until the first
+    # attempt; updated every attempt regardless of outcome. The retry
+    # scheduler uses this + `attempt_count` to compute the next-eligible
+    # tick (exponential backoff: `delivery_retry_base_seconds * 2^(n-1)`).
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

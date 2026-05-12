@@ -600,7 +600,11 @@ class TestSendPendingDeliveries:
         await db_session.refresh(delivery)
         assert delivery.status == DeliveryStatus.DELIVERED.value
         assert delivery.delivered_at is not None
-        assert delivery.attempt_count == 2  # started at 1 (default), +1 on attempt
+        # Branch 2: default 0 + 1 = 1 (was 2 under the legacy off-by-one
+        # where default=1 doubled with the on-attempt increment).
+        assert delivery.attempt_count == 1
+        # last_attempt_at MUST be set (even on success — historical record).
+        assert delivery.last_attempt_at is not None
 
     async def test_blocked_deactivates_channel(self, db_session, stub_send):
         stub_send.side_effect = TelegramBlockedError("user blocked bot")
@@ -653,19 +657,83 @@ class TestSendPendingDeliveries:
         # Group MUST stay reachable; it didn't disappear, it just moved.
         assert group.is_active is True
 
-    async def test_generic_error_keeps_channel_active(self, db_session, stub_send):
-        """Rate limits / 5xx / network errors are transient — channel stays
-        active so fan-out continues targeting this user in future cycles."""
+    async def test_transient_error_stays_pending_for_retry(self, db_session, stub_send):
+        """Branch 2: transient errors (rate limit / 5xx / network) keep
+        the row PENDING until `delivery_max_attempts` is reached. Channel
+        stays active either way. `last_attempt_at` advances so the next
+        tick respects the backoff window."""
         stub_send.side_effect = TelegramError("rate limited")
         delivery, _, channel = await _seed_user_delivery(db_session, chat_id="300")
 
         summary = await send_pending_deliveries(db_session)
 
+        # Single attempt at count=1 — below default cap=5 → retry path.
+        assert summary["retrying"] == 1
+        assert summary["failed"] == 0
+        await db_session.refresh(delivery)
+        await db_session.refresh(channel)
+        assert delivery.status == DeliveryStatus.PENDING.value
+        assert delivery.attempt_count == 1
+        assert delivery.last_attempt_at is not None
+        # Error message records the most recent failure cause — readable
+        # even while the row is still PENDING.
+        assert "rate limited" in delivery.error_message
+        # IMPORTANT — channel still active so future signals try again.
+        assert channel.is_active is True
+
+    async def test_successful_retry_clears_stale_error_message(self, db_session, stub_send):
+        """Branch 2: when a row finally succeeds after one or more transient
+        retries, the DELIVERED row must NOT carry the error_message from
+        the prior failed attempt — admin metrics / dashboards would
+        otherwise read it as "delivered, but with this error" which is
+        nonsensical. Pre-seed the row in the post-transient-failure state
+        the worker would have left it in, then exercise a successful pickup."""
+        delivery, _, _ = await _seed_user_delivery(db_session, chat_id="302")
+        # Simulate state after a transient failure: attempted once, error
+        # recorded, status still PENDING (waiting for retry).
+        delivery.attempt_count = 1
+        delivery.last_attempt_at = None  # eligible via the NULL branch
+        delivery.error_message = "Too Many Requests: retry after 30"
+        await db_session.flush()
+
+        # Default stub_send returns SentMessage → success.
+        summary = await send_pending_deliveries(db_session)
+
+        assert summary["sent"] == 1
+        await db_session.refresh(delivery)
+        assert delivery.status == DeliveryStatus.DELIVERED.value
+        # The stale "Too Many Requests" message MUST be gone.
+        assert delivery.error_message is None
+
+    async def test_transient_error_terminal_at_cap(self, db_session, stub_send, monkeypatch):
+        """When `attempt_count` reaches `delivery_max_attempts`, a
+        transient failure flips the row to FAILED with a descriptive
+        error message. Channel still stays active — the failure is
+        delivery-instance specific, not target-wide."""
+        from etfpulse.config import settings
+
+        # Squeeze cap to 2 so we can exercise it without seeding 4
+        # mock retries by hand.
+        monkeypatch.setattr(settings, "delivery_max_attempts", 2)
+
+        stub_send.side_effect = TelegramError("rate limited again")
+        delivery, _, channel = await _seed_user_delivery(db_session, chat_id="301")
+        # Pre-seed the row at attempt_count = max - 1 so this single call
+        # bumps it to max, hitting the cap branch.
+        delivery.attempt_count = 1
+        delivery.last_attempt_at = None  # still eligible via the NULL clause
+        await db_session.flush()
+
+        summary = await send_pending_deliveries(db_session)
+
         assert summary["failed"] == 1
+        assert summary["retrying"] == 0
         await db_session.refresh(delivery)
         await db_session.refresh(channel)
         assert delivery.status == DeliveryStatus.FAILED.value
-        # IMPORTANT — channel still active.
+        assert "max_attempts=2 reached" in delivery.error_message
+        # Channel stays active — Telegram rate-limit is not a "this
+        # target is dead" signal.
         assert channel.is_active is True
 
     async def test_only_pending_deliveries_processed(self, db_session, stub_send):
@@ -689,6 +757,7 @@ class TestSendPendingDeliveries:
             "blocked": 0,
             "chat_not_found": 0,
             "migrated": 0,
+            "retrying": 0,
             "skipped_no_target": 0,
         }
         stub_send.assert_not_awaited()
@@ -713,10 +782,13 @@ class TestSendPendingDeliveries:
         assert summary == {
             "total": 3,
             "sent": 1,
-            "failed": 1,
+            "failed": 0,
             "blocked": 1,
             "chat_not_found": 0,
             "migrated": 0,
+            # Generic TelegramError at count=1 is below default cap=5 →
+            # retrying bucket, NOT failed.
+            "retrying": 1,
             "skipped_no_target": 0,
         }
 
@@ -742,6 +814,111 @@ class TestSendPendingDeliveries:
         summary = await send_pending_deliveries(db_session)
         assert summary["sent"] == 5
         assert summary["total"] == 5
+
+
+class TestRetryBackoffFilter:
+    """Branch 2 — the WHERE clause that defers re-picking a row until its
+    backoff window elapses. The math is `base * 2^(attempt_count - 1)`."""
+
+    async def test_pending_row_not_in_backoff_window_is_skipped(
+        self, db_session, stub_send, monkeypatch
+    ):
+        """A row that JUST failed transiently (last_attempt_at = now,
+        attempt_count = 1) must NOT be re-picked by the next tick — the
+        30s default backoff hasn't elapsed."""
+        from etfpulse.config import settings
+
+        monkeypatch.setattr(settings, "delivery_retry_base_seconds", 30)
+
+        delivery, _, _ = await _seed_user_delivery(db_session, chat_id="800")
+        # Simulate "tick 1 just ran transient-failed this row".
+        delivery.attempt_count = 1
+        delivery.last_attempt_at = datetime.now(UTC)
+        await db_session.flush()
+
+        summary = await send_pending_deliveries(db_session)
+
+        # Worker query filters this row out — it's still in backoff.
+        assert summary["total"] == 0
+        stub_send.assert_not_awaited()
+        # Row state untouched.
+        await db_session.refresh(delivery)
+        assert delivery.status == DeliveryStatus.PENDING.value
+        assert delivery.attempt_count == 1
+
+    async def test_pending_row_past_backoff_is_picked_up(self, db_session, stub_send, monkeypatch):
+        """When the elapsed time since last_attempt_at exceeds the backoff
+        window, the row IS re-picked. Simulate by setting last_attempt_at
+        far in the past + a tiny base so the math definitely elapses."""
+        from datetime import timedelta
+
+        from etfpulse.config import settings
+
+        monkeypatch.setattr(settings, "delivery_retry_base_seconds", 30)
+
+        delivery, _, _ = await _seed_user_delivery(db_session, chat_id="801")
+        # attempt_count=1 → backoff = 30 * 2^0 = 30s. Set last_attempt_at
+        # 5 min ago — well past the window.
+        delivery.attempt_count = 1
+        delivery.last_attempt_at = datetime.now(UTC) - timedelta(seconds=300)
+        await db_session.flush()
+
+        summary = await send_pending_deliveries(db_session)
+
+        # This time the row IS picked up.
+        assert summary["total"] == 1
+        assert summary["sent"] == 1
+        await db_session.refresh(delivery)
+        # attempt_count incremented to 2 on this attempt.
+        assert delivery.attempt_count == 2
+        assert delivery.status == DeliveryStatus.DELIVERED.value
+
+    async def test_backoff_doubles_per_attempt(self, db_session, stub_send, monkeypatch):
+        """`attempt_count=3` means we already attempted 3 times. Backoff
+        for the NEXT pickup = `base * 2^(3-1) = 4 * base`. A row with
+        last_attempt_at younger than 4 * base must NOT be re-picked."""
+        from datetime import timedelta
+
+        from etfpulse.config import settings
+
+        # base=10s → backoffs: 10, 20, 40, 80s for attempts 1,2,3,4.
+        monkeypatch.setattr(settings, "delivery_retry_base_seconds", 10)
+
+        delivery, _, _ = await _seed_user_delivery(db_session, chat_id="802")
+        delivery.attempt_count = 3
+        # 30s ago — past attempt-1's 10s but BEFORE attempt-3's 40s window.
+        delivery.last_attempt_at = datetime.now(UTC) - timedelta(seconds=30)
+        await db_session.flush()
+
+        summary = await send_pending_deliveries(db_session)
+
+        # Filtered out — backoff for attempt 3 is 40s, only 30s elapsed.
+        assert summary["total"] == 0
+
+        # Now push it further into the past so the 40s window IS exceeded.
+        delivery.last_attempt_at = datetime.now(UTC) - timedelta(seconds=50)
+        await db_session.flush()
+        # Fresh send fixture call expected — re-seed stub return.
+        stub_send.reset_mock()
+
+        summary = await send_pending_deliveries(db_session)
+        assert summary["total"] == 1
+        assert summary["sent"] == 1
+
+    async def test_null_last_attempt_at_always_picked_up(self, db_session, stub_send):
+        """Fresh row from fan-out has last_attempt_at IS NULL — backoff
+        math doesn't apply. Must be picked up on the first tick."""
+        delivery, _, _ = await _seed_user_delivery(db_session, chat_id="803")
+        assert delivery.last_attempt_at is None
+        assert delivery.attempt_count == 0  # new default
+
+        summary = await send_pending_deliveries(db_session)
+
+        assert summary["total"] == 1
+        assert summary["sent"] == 1
+        await db_session.refresh(delivery)
+        assert delivery.attempt_count == 1
+        assert delivery.last_attempt_at is not None
 
 
 # ---------------------------------------------------------------------------

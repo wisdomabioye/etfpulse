@@ -226,9 +226,13 @@ async def get_admin_metrics(
 
     # --- Stuck PENDING deliveries -----------------------------------------
     # Same WHERE as `fail_stuck_deliveries` — count of rows the reaper
-    # would touch on its next tick.
+    # would touch on its next tick. Branch 2 added `last_attempt_at IS
+    # NULL` to the reaper so retrying rows (currently within the
+    # exponential-backoff retry cycle managed by `send_pending_deliveries`)
+    # aren't counted as stuck — they're actively being processed.
     stuck_stmt = select(func.count()).where(
         SignalDelivery.status == DeliveryStatus.PENDING.value,
+        SignalDelivery.last_attempt_at.is_(None),
         SignalDelivery.created_at < stuck_cutoff,
     )
     deliveries_stuck_pending = int((await session.execute(stuck_stmt)).scalar_one())

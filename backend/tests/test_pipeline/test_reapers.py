@@ -279,6 +279,36 @@ class TestFailStuckDeliveries:
         assert d.status == DeliveryStatus.FAILED.value
         assert d.error_message == "real telegram error"
 
+    async def test_skips_retrying_row_with_recent_last_attempt(
+        self, db_session, short_delivery_max_age
+    ):
+        """Branch 2 contract: a PENDING row that HAS been attempted at
+        least once is in the worker's retry cycle. The reaper must NOT
+        race the worker by flipping it to FAILED — that would terminate
+        retries that haven't reached their attempt budget. Pin the
+        `last_attempt_at IS NULL` filter."""
+        s = await _make_signal(db_session, fp_seed="retrying-not-stuck")
+        d = await _make_delivery(
+            db_session,
+            s.id,
+            status=DeliveryStatus.PENDING.value,
+            # Older than the max-age threshold — would qualify under the
+            # old (created_at-only) reaper.
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+        # But the worker HAS attempted it (count=2, last_attempt_at recent).
+        d.attempt_count = 2
+        d.last_attempt_at = datetime.now(UTC) - timedelta(seconds=10)
+        await db_session.flush()
+
+        summary = await fail_stuck_deliveries(db_session)
+
+        # Reaper passes over it — retry cycle owns this row now.
+        assert summary == {"stuck_failed": 0}
+        await db_session.refresh(d)
+        assert d.status == DeliveryStatus.PENDING.value
+        assert d.attempt_count == 2
+
     async def test_bulk_handles_mix_of_states(self, db_session, short_delivery_max_age):
         s = await _make_signal(db_session, fp_seed="bulk-mix")
         old = datetime.now(UTC) - timedelta(minutes=10)

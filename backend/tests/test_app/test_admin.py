@@ -326,7 +326,7 @@ class TestAdminMetricsShape:
     async def test_stuck_pending_uses_threshold(self, db_session, metrics_client):
         sig = await _seed_signal(db_session, fp_seed="d-stuck")
         cutoff = settings.delivery_pending_max_age_seconds
-        # Older than threshold AND pending → counted
+        # Older than threshold AND pending AND never attempted → counted
         await _seed_delivery(
             db_session,
             sig.id,
@@ -350,6 +350,28 @@ class TestAdminMetricsShape:
 
         r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
         assert r.json()["deliveries_stuck_pending"] == 1
+
+    async def test_stuck_pending_excludes_retrying_rows(self, db_session, metrics_client):
+        """Branch 2: a PENDING row that has been ATTEMPTED at least once
+        (last_attempt_at IS NOT NULL) is in the worker's exponential-backoff
+        retry cycle. It must NOT count as stuck — the metric mirrors the
+        reaper's WHERE clause."""
+        sig = await _seed_signal(db_session, fp_seed="d-retrying")
+        cutoff = settings.delivery_pending_max_age_seconds
+
+        # Old, pending, AND has been attempted → actively retrying, NOT stuck.
+        d = await _seed_delivery(
+            db_session,
+            sig.id,
+            status=DeliveryStatus.PENDING.value,
+            created_at=datetime.now(UTC) - timedelta(seconds=cutoff + 60),
+        )
+        d.attempt_count = 2
+        d.last_attempt_at = datetime.now(UTC) - timedelta(seconds=15)
+        await db_session.flush()
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["deliveries_stuck_pending"] == 0
 
     async def test_reaper_failures_match_sentinel(self, db_session, metrics_client):
         sig = await _seed_signal(db_session, fp_seed="d-reaper")

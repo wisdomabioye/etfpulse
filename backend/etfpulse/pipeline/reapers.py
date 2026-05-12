@@ -73,21 +73,29 @@ async def expire_overdue_signals(session: AsyncSession) -> dict[str, int]:
 
 
 async def fail_stuck_deliveries(session: AsyncSession) -> dict[str, int]:
-    """Bulk-update SignalDelivery rows that have been PENDING too long.
+    """Bulk-update SignalDelivery rows that have been PENDING too long
+    WITHOUT ever being attempted.
 
-    Targets only rows where:
-        - status = 'pending'  (DELIVERED / FAILED / SKIPPED untouched)
+    Branch 2 narrowed the WHERE clause: `last_attempt_at IS NULL`. Rows
+    that have been attempted at least once are in an active retry cycle
+    managed by `send_pending_deliveries` (PENDING → retry-with-backoff
+    → either DELIVERED or FAILED at the cap). The reaper must not race
+    them — flipping a row mid-retry to FAILED would terminate retries
+    that haven't reached their attempt budget.
+
+    The reaper now only catches the "worker never picked it up" failure
+    mode: scheduler halted, bot disabled mid-flight, fan-out wrote rows
+    that no worker drained. Those rows have a NULL `last_attempt_at`,
+    age past `delivery_pending_max_age_seconds`, and need a terminal
+    state so dashboards see why they didn't deliver.
+
+    Targets:
+        - status = 'pending'
+        - last_attempt_at IS NULL (never picked up by the send worker)
         - created_at < now - delivery_pending_max_age_seconds
 
-    The send worker's "no retry" policy (D4) means a row should reach a
-    terminal state on its first send attempt. A row stuck PENDING means
-    the worker never picked it up (bot disabled mid-flight, scheduler
-    halted, etc). Flipping to FAILED with a sentinel `error_message` makes
-    the cause visible without losing the row.
-
-    Index `ix_delivery_pending` covers the status predicate; the
-    `created_at` filter is a small extra scan within that subset.
-    Returns `{stuck_failed: N}`.
+    Index `ix_delivery_pending` covers the status predicate; the rest is
+    a small extra scan within that subset. Returns `{stuck_failed: N}`.
     """
     now = datetime.now(UTC)
     cutoff = now - timedelta(seconds=settings.delivery_pending_max_age_seconds)
@@ -95,6 +103,7 @@ async def fail_stuck_deliveries(session: AsyncSession) -> dict[str, int]:
         update(SignalDelivery)
         .where(
             SignalDelivery.status == DeliveryStatus.PENDING.value,
+            SignalDelivery.last_attempt_at.is_(None),
             SignalDelivery.created_at < cutoff,
         )
         .values(

@@ -145,6 +145,26 @@ class Settings(BaseSettings):
     # FAILED with a sentinel error_message so dashboards / debugging see
     # why it didn't deliver. 60s floor protects against test misconfig.
     delivery_pending_max_age_seconds: int = Field(default=600, ge=60)
+    # Branch 2 — retry policy for TRANSIENT Telegram errors (rate-limit,
+    # 5xx, network). Terminal errors (Blocked, ChatNotFound, ChatMigrated)
+    # remain single-attempt with target-side remediation.
+    #
+    # Total attempts = `delivery_max_attempts` (5 = first try + 4 retries).
+    # When `attempt_count` reaches this value AND the send failed
+    # transiently, the row flips to FAILED. Below this, the row stays
+    # PENDING and the send worker's query waits for the backoff window
+    # before re-picking it up.
+    #
+    # Backoff schedule: `delivery_retry_base_seconds * 2^(attempt_count - 1)`.
+    # With defaults (5 attempts, base 30s):
+    #     attempt 1 → wait 30s  → attempt 2
+    #     attempt 2 → wait 60s  → attempt 3
+    #     attempt 3 → wait 120s → attempt 4
+    #     attempt 4 → wait 240s → attempt 5 (terminal if still failing)
+    # Total worst-case time from first attempt to terminal: 450s (7.5 min).
+    # Tune `delivery_retry_base_seconds` to widen / narrow the whole curve.
+    delivery_max_attempts: int = Field(default=5, ge=1, le=20)
+    delivery_retry_base_seconds: int = Field(default=30, ge=1, le=600)
     # Default user preferences applied on /start registration. Comma-separated
     # asset list parsed via `delivery_default_assets_list` property.
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)

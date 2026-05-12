@@ -5,11 +5,14 @@ Three functions:
         Matches a freshly-built Signal against active users+groups; inserts
         SignalDelivery rows. Idempotent via partial UNIQUE indexes.
     `send_pending_deliveries(session) -> dict[str, int]`
-        Drains status=PENDING deliveries: resolves target chat_id, formats
-        message, calls telegram_client.send_message, flips status+error.
-        Blocks/chat-not-found deactivate the target (channel/group);
-        migrated updates `TelegramGroup.chat_id` in place (group stays
-        active); generic errors just mark the delivery failed. No retry (D4).
+        Drains status=PENDING deliveries whose retry-backoff window has
+        elapsed. For each: resolves target chat_id, increments attempt
+        counter, calls telegram_client.send_message, flips status+error.
+        Blocks / chat-not-found / migrated are TERMINAL on the first
+        observation (the underlying condition won't change between
+        retries). Transient errors (rate limit, 5xx, network) stay
+        PENDING for retry — only flipping to FAILED once the row reaches
+        `settings.delivery_max_attempts` (Branch 2).
     `format_signal_message(signal) -> str`
         Single HTML rendering for a Signal. Handles NULL ai_analysis with
         a trigger-data fallback; HTML-escapes all dynamic content; truncates
@@ -643,19 +646,31 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
         - TelegramChatMigratedError   → status=FAILED, update group.chat_id
           to exc.new_chat_id; group stays active so future signals land on
           the migrated supergroup.
-        - TelegramError (other)       → status=FAILED, channel/group STAYS
-          active (transient — rate limit, 5xx, network — keep retryable)
+        - TelegramError (other)       → if attempt_count < max_attempts:
+          status STAYS PENDING and the row is re-picked next tick once the
+          backoff window elapses. At the cap, status=FAILED. Channel/group
+          stays active either way (transient errors don't justify
+          deactivation).
 
-    No retry (D4 — signals are time-sensitive). Does NOT commit — caller
-    owns the transaction boundary (D18).
+    Retry filter: a PENDING row is eligible only when `last_attempt_at IS
+    NULL` (never attempted) OR the elapsed time since `last_attempt_at`
+    exceeds `delivery_retry_base_seconds * 2^(attempt_count - 1)`. Both
+    fields are updated BEFORE the send call so a mid-attempt crash still
+    advances the retry clock (one wasted attempt budget is better than
+    an infinite retry loop on a poison row).
+
+    Does NOT commit — caller owns the transaction boundary (D18).
     """
     summary = {
         "total": 0,
         "sent": 0,
+        # Terminal-failure buckets.
         "failed": 0,
         "blocked": 0,
         "chat_not_found": 0,
         "migrated": 0,
+        # Transient failure that stayed PENDING for the next retry tick.
+        "retrying": 0,
         "skipped_no_target": 0,
     }
 
@@ -666,16 +681,36 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
     # ≤1 DB query for the cohort stats.
     track_stat = await _get_track_record_stat(session)
 
+    # Backoff predicate: row is retryable when never-attempted OR enough
+    # time has elapsed since the last attempt. `func.power(2, n-1)` matches
+    # the canonical exponential schedule. `extract(epoch, …)` returns the
+    # interval as seconds (double precision) so the inequality is straight
+    # numeric. Uses server-side `now()` for time consistency across the
+    # batch — Python clock skew between worker boot and query is irrelevant
+    # but using one clock keeps reasoning simple.
+    base_seconds = settings.delivery_retry_base_seconds
+    backoff_elapsed = func.extract(
+        "epoch", func.now() - SignalDelivery.last_attempt_at
+    ) >= base_seconds * func.power(2, SignalDelivery.attempt_count - 1)
+
     # Single query: delivery + signal + (channel OR group target). LEFT JOINs
     # on channel and group because each delivery has exactly one of them.
+    # Backoff filter pushes the retry-readiness decision into the database
+    # so a backlog of 500 not-yet-due retries doesn't load 500 rows per tick.
     stmt = (
         select(SignalDelivery, Signal, NotificationChannel, TelegramGroup)
         .join(Signal, Signal.id == SignalDelivery.signal_id)
         .outerjoin(NotificationChannel, NotificationChannel.id == SignalDelivery.channel_id)
         .outerjoin(TelegramGroup, TelegramGroup.id == SignalDelivery.group_id)
-        .where(SignalDelivery.status == DeliveryStatus.PENDING.value)
+        .where(
+            SignalDelivery.status == DeliveryStatus.PENDING.value,
+            or_(SignalDelivery.last_attempt_at.is_(None), backoff_elapsed),
+        )
     )
     result = await session.execute(stmt)
+
+    max_attempts = settings.delivery_max_attempts
+    now = datetime.now(UTC)
 
     for delivery, signal, channel, group in result.all():
         summary["total"] += 1
@@ -688,11 +723,20 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
 
         if chat_id is None:
             # FK target deleted or never linked — treat as skipped, not
-            # failed, so it doesn't pollute failure metrics.
+            # failed, so it doesn't pollute failure metrics. No attempt
+            # was made; don't advance the retry clock.
             delivery.status = DeliveryStatus.SKIPPED.value
             delivery.error_message = "delivery target missing (channel/group not linked)"
             summary["skipped_no_target"] += 1
             continue
+
+        # Advance the retry clock BEFORE the send. If we crash mid-send,
+        # next tick sees an updated `last_attempt_at` and waits out the
+        # backoff rather than hammering the same row immediately. Cost:
+        # one wasted attempt budget on a rollback (we'd want at-most-once
+        # delivery, which Telegram can't promise anyway).
+        delivery.attempt_count = (delivery.attempt_count or 0) + 1
+        delivery.last_attempt_at = now
 
         message = format_signal_message(signal, track_record_stat=track_stat)
         # Inline "View on web" keyboard (issue #38). Returns None when
@@ -705,10 +749,16 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
             )
             delivery.status = DeliveryStatus.DELIVERED.value
             delivery.delivered_at = sent.sent_at
+            # Clear the stale error from any prior transient attempt — a
+            # DELIVERED row with a non-NULL error_message would mislead
+            # readers (admin metrics, dashboards) into thinking the send
+            # failed even though it ultimately succeeded.
+            delivery.error_message = None
             summary["sent"] += 1
         except TelegramBlockedError as exc:
             # User blocked bot OR bot kicked from group. Stop retrying to
             # this target entirely by deactivating the channel/group.
+            # Terminal on first observation — repeated retries can't fix it.
             delivery.status = DeliveryStatus.FAILED.value
             delivery.error_message = f"blocked: {str(exc)[:480]}"
             if channel is not None:
@@ -717,7 +767,8 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
                 group.is_active = False
             summary["blocked"] += 1
         except TelegramChatNotFoundError as exc:
-            # Chat doesn't exist (deleted, never existed). Same remediation.
+            # Chat doesn't exist (deleted, never existed). Terminal — same
+            # remediation as Blocked.
             delivery.status = DeliveryStatus.FAILED.value
             delivery.error_message = f"chat not found: {str(exc)[:480]}"
             if channel is not None:
@@ -737,14 +788,22 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
             delivery.error_message = f"migrated: new chat_id={exc.new_chat_id}"
             summary["migrated"] += 1
         except TelegramError as exc:
-            # Transient (rate limit, 5xx, network). Keep the channel/group
-            # active — next worker tick may succeed. But this signal is
-            # stale by then; we accept the miss rather than retry inline.
-            delivery.status = DeliveryStatus.FAILED.value
-            delivery.error_message = str(exc)[:500]
-            summary["failed"] += 1
-
-        delivery.attempt_count = (delivery.attempt_count or 0) + 1
+            # Transient (rate limit, 5xx, network). Retry until the cap.
+            # At the cap, flip to FAILED so the row gets a terminal status
+            # (and the reaper / dashboards see the same string for all
+            # max-attempts failures). Channel/group stays active either
+            # way — a future signal to the same target may succeed.
+            if delivery.attempt_count >= max_attempts:
+                delivery.status = DeliveryStatus.FAILED.value
+                delivery.error_message = f"max_attempts={max_attempts} reached: {str(exc)[:460]}"
+                summary["failed"] += 1
+            else:
+                # status stays PENDING; last_attempt_at + attempt_count
+                # already set above. Record the most recent error so a
+                # row in PENDING with an error_message tells operators
+                # exactly why it's still pending.
+                delivery.error_message = str(exc)[:500]
+                summary["retrying"] += 1
 
     await session.flush()
 
