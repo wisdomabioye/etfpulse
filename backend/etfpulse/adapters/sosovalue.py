@@ -42,6 +42,19 @@ log = structlog.get_logger()
 # Constants
 # ---------------------------------------------------------------------------
 
+# Issue #72 — endpoint paths centralised so a renamed/added endpoint is one
+# edit, not a hunt across 6 methods. Keys are stable; methods reference by
+# key name and format in `{currency_id}` at call time. Mirrors the single-
+# constant pattern in `adapters/openrouter.py`.
+_PATHS = {
+    "etf_history": "/etfs/summary-history",
+    "news": "/news",
+    "macro_events": "/macro/events",
+    "market_snapshot": "/currencies/{currency_id}/market-snapshot",
+    "klines": "/currencies/{currency_id}/klines",
+    "sector_spotlight": "/currencies/sector-spotlight",
+}
+
 # How to onboard a new asset (e.g. SOL, BNB)
 # -------------------------------------------
 # Phase 1 hardcodes BTC + ETH because that's all SoSoValue's ETF-flows endpoint
@@ -334,6 +347,15 @@ class SoSoValueClient:
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         """Make one authenticated request. Retries once on per-minute 429."""
+        # Issue #73 — fail fast on missing API key. Without this, every call
+        # sends an empty `x-soso-api-key` header, the server replies 401, and
+        # the caller chases a "credentials rejected" error when the real
+        # cause is misconfig. Production deploys are caught by
+        # `api/config_check.py:check_config_health`; this guard covers
+        # dev/test where preflight is a no-op. Pattern parity with
+        # `adapters/openrouter.py` + `adapters/telegram.py`.
+        if not self.api_key:
+            raise SoSoValueError("missing SOSOVALUE_API_KEY")
         url = f"{self.base_url}{path}"
         headers = {"x-soso-api-key": self.api_key, "Content-Type": "application/json"}
 
@@ -457,7 +479,7 @@ class SoSoValueClient:
         else:
             raw = await self._request(
                 "GET",
-                "/etfs/summary-history",
+                _PATHS["etf_history"],
                 params={"symbol": asset, "country_code": "US", "limit": limit},
             )
 
@@ -503,7 +525,7 @@ class SoSoValueClient:
                 params["category"] = category
             if currency_id:
                 params["currency_id"] = currency_id
-            raw = await self._request("GET", "/news", params=params)
+            raw = await self._request("GET", _PATHS["news"], params=params)
 
         # News response nests under data.list (paginated envelope).
         data_block = raw.get("data") or {}
@@ -529,7 +551,7 @@ class SoSoValueClient:
         else:
             raw = await self._request(
                 "GET",
-                "/macro/events",
+                _PATHS["macro_events"],
                 params={"page": page, "page_size": page_size},
             )
 
@@ -566,7 +588,7 @@ class SoSoValueClient:
         else:
             raw = await self._request(
                 "GET",
-                f"/currencies/{self._currency_id(asset)}/market-snapshot",
+                _PATHS["market_snapshot"].format(currency_id=self._currency_id(asset)),
             )
 
         # Response shape (inferred — un-spikeable due to quota exhaustion):
@@ -612,7 +634,7 @@ class SoSoValueClient:
                 params["end_time"] = end_time_ms
             raw = await self._request(
                 "GET",
-                f"/currencies/{self._currency_id(asset)}/klines",
+                _PATHS["klines"].format(currency_id=self._currency_id(asset)),
                 params=params,
             )
 
@@ -643,7 +665,7 @@ class SoSoValueClient:
         if self.use_fixtures:
             raw = self._load_fixture("sosovalue_sector_spotlight")
         else:
-            raw = await self._request("GET", "/currencies/sector-spotlight")
+            raw = await self._request("GET", _PATHS["sector_spotlight"])
 
         data = raw.get("data") if isinstance(raw, dict) else None
         if not isinstance(data, dict):

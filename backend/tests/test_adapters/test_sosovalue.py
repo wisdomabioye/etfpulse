@@ -244,6 +244,20 @@ async def test_spot_price_raises_on_missing_data_envelope(monkeypatch):
         await client.get_spot_price("BTC")
 
 
+async def test_empty_api_key_raises_immediately(monkeypatch, httpx_mock):
+    """Issue #73 — empty SOSOVALUE_API_KEY must raise before any HTTP attempt.
+
+    `use_fixtures` is forced False so the request path is exercised; with the
+    guard in place no httpx call is made (`httpx_mock` has no registrations
+    and would fail the test if a request reached the wire).
+    """
+    monkeypatch.setattr(settings, "sosovalue_api_key", "")
+    monkeypatch.setattr(settings, "sosovalue_use_fixtures", False)
+    client = SoSoValueClient()
+    with pytest.raises(SoSoValueError, match="missing SOSOVALUE_API_KEY"):
+        await client.get_etf_flows("BTC")
+
+
 async def test_klines_parses_from_fixture():
     """klines fixture mirrors the inferred `{data: [{...}, ...]}` envelope."""
     from decimal import Decimal
