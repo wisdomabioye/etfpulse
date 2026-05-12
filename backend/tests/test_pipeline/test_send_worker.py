@@ -22,6 +22,7 @@ import pytest
 from etfpulse.adapters.telegram import (
     SentMessage,
     TelegramBlockedError,
+    TelegramChatMigratedError,
     TelegramChatNotFoundError,
     TelegramError,
 )
@@ -628,6 +629,30 @@ class TestSendPendingDeliveries:
         assert delivery.status == DeliveryStatus.FAILED.value
         assert group.is_active is False
 
+    async def test_chat_migrated_updates_group_chat_id(self, db_session, stub_send):
+        """Basic→supergroup migration: self-heal `TelegramGroup.chat_id` so
+        the NEXT signal lands on the migrated chat. THIS delivery is lost
+        (stale by retry time), but the group stays active."""
+        new_chat_id = -1003991800653
+        stub_send.side_effect = TelegramChatMigratedError(
+            f"Group migrated to supergroup. New chat id: {new_chat_id}",
+            new_chat_id=new_chat_id,
+        )
+        delivery, _, group = await _seed_group_delivery(db_session, chat_id=-100500)
+
+        summary = await send_pending_deliveries(db_session)
+
+        assert summary["migrated"] == 1
+        assert summary["failed"] == 0  # NOT the generic transient bucket
+        await db_session.refresh(delivery)
+        await db_session.refresh(group)
+        assert delivery.status == DeliveryStatus.FAILED.value
+        assert f"new chat_id={new_chat_id}" in delivery.error_message
+        # The actual heal — future fan-outs use the new id.
+        assert group.chat_id == new_chat_id
+        # Group MUST stay reachable; it didn't disappear, it just moved.
+        assert group.is_active is True
+
     async def test_generic_error_keeps_channel_active(self, db_session, stub_send):
         """Rate limits / 5xx / network errors are transient — channel stays
         active so fan-out continues targeting this user in future cycles."""
@@ -663,6 +688,7 @@ class TestSendPendingDeliveries:
             "failed": 0,
             "blocked": 0,
             "chat_not_found": 0,
+            "migrated": 0,
             "skipped_no_target": 0,
         }
         stub_send.assert_not_awaited()
@@ -690,6 +716,7 @@ class TestSendPendingDeliveries:
             "failed": 1,
             "blocked": 1,
             "chat_not_found": 0,
+            "migrated": 0,
             "skipped_no_target": 0,
         }
 

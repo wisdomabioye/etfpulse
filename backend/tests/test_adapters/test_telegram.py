@@ -11,10 +11,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from telegram.error import BadRequest, Forbidden, NetworkError
+from telegram.error import BadRequest, ChatMigrated, Forbidden, NetworkError
 
 from etfpulse.adapters.telegram import (
     TelegramBlockedError,
+    TelegramChatMigratedError,
     TelegramChatNotFoundError,
     TelegramClient,
     TelegramError,
@@ -104,6 +105,21 @@ async def test_send_message_network_error_raises_generic(mock_bot, with_token):
     client = TelegramClient()
     with pytest.raises(TelegramError):
         await client.send_message(chat_id=999, text="hello")
+
+
+async def test_send_message_chat_migrated_raises_specific(mock_bot, with_token):
+    """Basic group → supergroup conversion surfaces new chat_id via the
+    dedicated subclass so the send worker can self-heal the row."""
+    mock_bot.send_message.side_effect = ChatMigrated(new_chat_id=-1003991800653)
+
+    client = TelegramClient()
+    with pytest.raises(TelegramChatMigratedError) as exc_info:
+        await client.send_message(chat_id=-100123, text="hello")
+
+    assert exc_info.value.new_chat_id == -1003991800653
+    # Sibling subclasses MUST NOT match — caller dispatches on type.
+    assert not isinstance(exc_info.value, TelegramChatNotFoundError)
+    assert not isinstance(exc_info.value, TelegramBlockedError)
 
 
 # ---- send_message — no token ---------------------------------------------

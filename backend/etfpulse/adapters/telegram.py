@@ -1,9 +1,9 @@
 """Telegram adapter — thin wrapper over python-telegram-bot's `Bot`.
 
 Wraps PTB's exception hierarchy in our own (`TelegramError`,
-`TelegramBlockedError`, `TelegramChatNotFoundError`) so callers don't import
-from `telegram.error`. Same pattern as `SoSoValueError` vs httpx errors —
-keeps adapter swap-out cheap.
+`TelegramBlockedError`, `TelegramChatNotFoundError`, `TelegramChatMigratedError`)
+so callers don't import from `telegram.error`. Same pattern as `SoSoValueError`
+vs httpx errors — keeps adapter swap-out cheap.
 
 NOTE on the name collision: `telegram.error.TelegramError` (PTB) and
 `etfpulse.adapters.telegram.TelegramError` (ours) are different classes.
@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 
 import structlog
 from telegram import Bot, InlineKeyboardMarkup
-from telegram.error import BadRequest, Forbidden
+from telegram.error import BadRequest, ChatMigrated, Forbidden
 from telegram.error import TelegramError as PTBTelegramError
 
 from etfpulse.config import settings
@@ -71,6 +71,21 @@ class TelegramChatNotFoundError(TelegramError):
     Same handling as `TelegramBlockedError` from the send worker's POV —
     deactivate the channel/group.
     """
+
+
+class TelegramChatMigratedError(TelegramError):
+    """Basic group was converted to a supergroup; its chat_id changed.
+
+    Telegram surfaces this as `telegram.error.ChatMigrated` carrying the
+    `.new_chat_id`. Distinct from blocked/chat-not-found because the
+    remediation is different: the target IS still reachable, we just have
+    a stale id. Caller (send worker) updates `TelegramGroup.chat_id` so
+    future fan-outs land on the migrated chat; group stays active.
+    """
+
+    def __init__(self, message: str, new_chat_id: int) -> None:
+        super().__init__(message)
+        self.new_chat_id = new_chat_id
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +170,16 @@ class TelegramClient:
                 raise TelegramChatNotFoundError(str(exc)) from exc
             log.warning("telegram_send_bad_request", chat_id=chat_id, error=str(exc))
             raise TelegramError(str(exc)) from exc
+        except ChatMigrated as exc:
+            # Basic-group → supergroup conversion. Must come BEFORE the
+            # generic PTBTelegramError catch (ChatMigrated extends it).
+            log.warning(
+                "telegram_send_chat_migrated",
+                chat_id=chat_id,
+                new_chat_id=exc.new_chat_id,
+                error=str(exc),
+            )
+            raise TelegramChatMigratedError(str(exc), new_chat_id=exc.new_chat_id) from exc
         except PTBTelegramError as exc:
             log.warning("telegram_send_failed", chat_id=chat_id, error=str(exc))
             raise TelegramError(str(exc)) from exc

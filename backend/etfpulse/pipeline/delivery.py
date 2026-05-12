@@ -7,8 +7,9 @@ Three functions:
     `send_pending_deliveries(session) -> dict[str, int]`
         Drains status=PENDING deliveries: resolves target chat_id, formats
         message, calls telegram_client.send_message, flips status+error.
-        Blocks/chat-not-found deactivate the target (channel/group); generic
-        errors just mark the delivery failed. No retry (D4).
+        Blocks/chat-not-found deactivate the target (channel/group);
+        migrated updates `TelegramGroup.chat_id` in place (group stays
+        active); generic errors just mark the delivery failed. No retry (D4).
     `format_signal_message(signal) -> str`
         Single HTML rendering for a Signal. Handles NULL ai_analysis with
         a trigger-data fallback; HTML-escapes all dynamic content; truncates
@@ -58,6 +59,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from etfpulse.adapters.telegram import (
     TelegramBlockedError,
+    TelegramChatMigratedError,
     TelegramChatNotFoundError,
     TelegramError,
     telegram_client,
@@ -635,11 +637,14 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
 
     Single JOINed query loads delivery + signal + channel + group at once
     (avoiding N+1). Per delivery:
-        - success               → status=DELIVERED, delivered_at=now
-        - TelegramBlockedError  → status=FAILED, deactivate channel/group
-        - TelegramChatNotFoundError → status=FAILED, deactivate channel/group
-        - TelegramError (other) → status=FAILED, channel/group STAYS active
-          (transient — rate limit, 5xx, network — keep retryable)
+        - success                     → status=DELIVERED, delivered_at=now
+        - TelegramBlockedError        → status=FAILED, deactivate channel/group
+        - TelegramChatNotFoundError   → status=FAILED, deactivate channel/group
+        - TelegramChatMigratedError   → status=FAILED, update group.chat_id
+          to exc.new_chat_id; group stays active so future signals land on
+          the migrated supergroup.
+        - TelegramError (other)       → status=FAILED, channel/group STAYS
+          active (transient — rate limit, 5xx, network — keep retryable)
 
     No retry (D4 — signals are time-sensitive). Does NOT commit — caller
     owns the transaction boundary (D18).
@@ -650,6 +655,7 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
         "failed": 0,
         "blocked": 0,
         "chat_not_found": 0,
+        "migrated": 0,
         "skipped_no_target": 0,
     }
 
@@ -719,6 +725,17 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
             if group is not None:
                 group.is_active = False
             summary["chat_not_found"] += 1
+        except TelegramChatMigratedError as exc:
+            # Basic group was converted to a supergroup — chat_id changed.
+            # Self-heal: update the group row so the NEXT signal lands on the
+            # new chat. This delivery is lost (stale by the time we'd retry);
+            # group stays active. Channels (DMs) cannot migrate — defensive
+            # `if group` covers the impossible-but-cheap case.
+            if group is not None:
+                group.chat_id = exc.new_chat_id
+            delivery.status = DeliveryStatus.FAILED.value
+            delivery.error_message = f"migrated: new chat_id={exc.new_chat_id}"
+            summary["migrated"] += 1
         except TelegramError as exc:
             # Transient (rate limit, 5xx, network). Keep the channel/group
             # active — next worker tick may succeed. But this signal is

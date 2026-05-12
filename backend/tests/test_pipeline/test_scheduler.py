@@ -311,6 +311,7 @@ class TestSendWithSession:
             "failed": 0,
             "blocked": 0,
             "chat_not_found": 0,
+            "migrated": 0,
             "skipped_no_target": 0,
         }
 
