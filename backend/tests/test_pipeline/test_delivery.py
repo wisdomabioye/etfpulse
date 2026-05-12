@@ -290,6 +290,40 @@ class TestFanOutStatus:
         await db_session.refresh(signal)
         assert signal.status == SignalStatus.ALERTED.value
 
+    async def test_emits_no_recipients_event_when_zero(self, db_session, capsys):
+        """Branch 5 — distinct log event for the "fanned out to nobody"
+        case. Greppable separately from `fan_out_signal_done` so operators
+        can alert on it without scanning every fan_out_signal_done line
+        for `inserted=0`.
+
+        Uses `capsys` instead of `structlog.testing.capture_logs()` because
+        the project calls `structlog.configure(cache_logger_on_first_use=True)`
+        in `api.logging_config`. Once another test boots the FastAPI app,
+        bound loggers are cached and `capture_logs()` no longer intercepts
+        them. Reading stdout is robust against config-caching across the
+        full test suite.
+        """
+        signal = await _make_signal(db_session, asset="BTC", confidence=7)
+        # No users, no groups → zero recipients.
+
+        await fan_out_signal(db_session, signal.id)
+
+        captured = capsys.readouterr().out
+        assert "fan_out_signal_no_recipients" in captured
+
+    async def test_no_recipients_event_skipped_when_inserted(self, db_session, capsys):
+        """Symmetric guard — when fan-out DID insert rows, the
+        no-recipients event must NOT fire. Otherwise the metric/alert
+        becomes useless noise."""
+        signal = await _make_signal(db_session, asset="BTC", confidence=7)
+        await _make_user(db_session, chat_id=600, pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+        assert count == 1
+
+        captured = capsys.readouterr().out
+        assert "fan_out_signal_no_recipients" not in captured
+
 
 # ---------------------------------------------------------------------------
 # Idempotency

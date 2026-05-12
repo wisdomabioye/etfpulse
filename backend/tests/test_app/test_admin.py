@@ -551,6 +551,455 @@ class TestAdminMetricsShape:
         assert r.json()["accepted_webhook_secrets"] == 2
 
 
+class TestSignalsAlertedWithZeroDeliveries:
+    """Branch 5 — `signals_alerted_with_zero_deliveries` surfaces signals
+    that fanned out to nobody. The thread that introduced Branch 5 found
+    today's signals with confidence 3-4 producing zero recipient matches
+    because every user had pref_min_confidence=6. This metric makes that
+    invisible-failure case observable."""
+
+    async def test_empty_db_returns_zero(self, metrics_client):
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["signals_alerted_with_zero_deliveries"] == 0
+
+    async def test_alerted_without_deliveries_counts(self, db_session, metrics_client):
+        """An ALERTED signal with zero `signal_deliveries` rows is what
+        we want to surface."""
+        await _seed_signal(db_session, fp_seed="zero-1", status=SignalStatus.ALERTED.value)
+        await _seed_signal(db_session, fp_seed="zero-2", status=SignalStatus.ALERTED.value)
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["signals_alerted_with_zero_deliveries"] == 2
+
+    async def test_alerted_with_deliveries_excluded(self, db_session, metrics_client):
+        """ALERTED signals that DO have deliveries don't count — those
+        are the healthy case, not what we're surfacing."""
+        sig = await _seed_signal(db_session, fp_seed="ok", status=SignalStatus.ALERTED.value)
+        await _seed_delivery(db_session, sig.id, status=DeliveryStatus.DELIVERED.value)
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["signals_alerted_with_zero_deliveries"] == 0
+
+    async def test_pending_signals_excluded(self, db_session, metrics_client):
+        """PENDING signals aren't fanned-out-with-zero-deliveries — they
+        just haven't been fanned out yet. The metric is specifically about
+        ALERTED (post-fan-out) status."""
+        await _seed_signal(db_session, fp_seed="pending", status=SignalStatus.PENDING.value)
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["signals_alerted_with_zero_deliveries"] == 0
+
+    async def test_expired_signals_excluded(self, db_session, metrics_client):
+        """EXPIRED signals are terminal — counting them would conflate
+        "never delivered" with "delivered but expired"."""
+        await _seed_signal(db_session, fp_seed="exp", status=SignalStatus.EXPIRED.value)
+
+        r = await metrics_client.get("/api/admin/metrics", headers={"X-Admin-Key": "secret-key"})
+        assert r.json()["signals_alerted_with_zero_deliveries"] == 0
+
+
+class TestDeliveryTraceRoute:
+    """Branch 5 — `GET /api/admin/signals/{id}/delivery-trace` is the
+    "why didn't this signal reach me?" diagnostic. Mirrors fan-out's
+    `_match_users` / `_match_groups` rules so the trace is authoritative."""
+
+    async def test_404_when_signal_not_found(self, metrics_client):
+        r = await metrics_client.get(
+            "/api/admin/signals/999999/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 404
+
+    async def test_disabled_when_admin_key_empty(self, db_session, monkeypatch):
+        monkeypatch.setattr(settings, "admin_api_key", "")
+        sig = await _seed_signal(db_session, fp_seed="auth-trace")
+        app = create_app()
+
+        async def _override() -> AsyncIterator:
+            yield db_session
+
+        app.dependency_overrides[get_db_session] = _override
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get(f"/api/admin/signals/{sig.id}/delivery-trace")
+        app.dependency_overrides.clear()
+        assert r.status_code == 503
+
+    async def test_user_matched_when_all_filters_pass(self, db_session, metrics_client):
+        """Happy path — the user matches every filter; trace says so AND
+        no exclude_reason."""
+        sig = await _seed_signal(
+            db_session, fp_seed="match", status=SignalStatus.ALERTED.value, confidence=8
+        )
+        user = User(pref_assets=["BTC"], pref_min_confidence=5)
+        db_session.add(user)
+        await db_session.flush()
+        channel = NotificationChannel(
+            user_id=user.id,
+            channel_type=ChannelType.TELEGRAM.value,
+            channel_identifier="111",
+        )
+        db_session.add(channel)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        recipients = body["recipients"]
+        assert len(recipients) == 1
+        rec = recipients[0]
+        assert rec["kind"] == "user"
+        assert rec["matched"] is True
+        assert rec["exclude_reason"] is None
+        assert rec["asset_match"] is True
+        assert rec["confidence_match"] is True
+        assert body["matched_count"] == 1
+
+    async def test_user_excluded_by_confidence_floor(self, db_session, metrics_client):
+        """The exact bug we diagnosed via SQL in the thread: signal conf 4,
+        user floor 6. Trace must say so unambiguously."""
+        sig = await _seed_signal(db_session, fp_seed="low-conf", confidence=4)
+        user = User(pref_assets=["BTC"], pref_min_confidence=6)
+        db_session.add(user)
+        await db_session.flush()
+        channel = NotificationChannel(
+            user_id=user.id,
+            channel_type=ChannelType.TELEGRAM.value,
+            channel_identifier="222",
+        )
+        db_session.add(channel)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        rec = r.json()["recipients"][0]
+        assert rec["matched"] is False
+        assert rec["confidence_match"] is False
+        assert "confidence 4" in rec["exclude_reason"]
+        assert "pref_min_confidence (6)" in rec["exclude_reason"]
+        assert r.json()["matched_count"] == 0
+
+    async def test_user_excluded_by_inactive_channel(self, db_session, metrics_client):
+        """The other "silent failure" path: channel auto-deactivated after
+        a prior Blocked / ChatNotFound. Trace must call this out with a
+        hint about the cause."""
+        sig = await _seed_signal(db_session, fp_seed="inactive-ch", confidence=8)
+        user = User(pref_assets=["BTC"], pref_min_confidence=5)
+        db_session.add(user)
+        await db_session.flush()
+        channel = NotificationChannel(
+            user_id=user.id,
+            channel_type=ChannelType.TELEGRAM.value,
+            channel_identifier="333",
+            is_active=False,
+        )
+        db_session.add(channel)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        rec = r.json()["recipients"][0]
+        assert rec["matched"] is False
+        assert rec["channel_active"] is False
+        assert "channel inactive" in rec["exclude_reason"].lower()
+
+    async def test_user_excluded_by_asset_mismatch(self, db_session, metrics_client):
+        """Signal asset isn't in the user's pref_assets list."""
+        sig = await _seed_signal(db_session, fp_seed="asset")  # BTC signal
+        user = User(pref_assets=["ETH"], pref_min_confidence=5)
+        db_session.add(user)
+        await db_session.flush()
+        channel = NotificationChannel(
+            user_id=user.id,
+            channel_type=ChannelType.TELEGRAM.value,
+            channel_identifier="444",
+        )
+        db_session.add(channel)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        rec = r.json()["recipients"][0]
+        assert rec["matched"] is False
+        assert rec["asset_match"] is False
+        assert "'BTC'" in rec["exclude_reason"]
+        assert "'ETH'" in rec["exclude_reason"]
+
+    async def test_null_confidence_excludes_everyone(self, db_session, metrics_client):
+        """AI-failed signals (confidence IS NULL) never deliver — the
+        confidence-floor comparison fails for everyone. Trace must say
+        "signal has no confidence" so operators don't think it's a per-
+        user config issue."""
+        sig = await _seed_signal(db_session, fp_seed="no-conf", confidence=None)
+        user = User(pref_assets=["BTC"], pref_min_confidence=5)
+        db_session.add(user)
+        await db_session.flush()
+        channel = NotificationChannel(
+            user_id=user.id,
+            channel_type=ChannelType.TELEGRAM.value,
+            channel_identifier="555",
+        )
+        db_session.add(channel)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        rec = r.json()["recipients"][0]
+        assert rec["matched"] is False
+        assert "no confidence" in rec["exclude_reason"]
+
+    async def test_existing_delivery_row_state_inlined(self, db_session, metrics_client):
+        """When a SignalDelivery row exists for the (signal, user) pair,
+        its status / attempts / error_message land in the trace inline.
+        Operators reading the trace can see "delivery exists, but it
+        failed because Y" without joining another query."""
+        sig = await _seed_signal(
+            db_session, fp_seed="with-delivery", status=SignalStatus.ALERTED.value, confidence=8
+        )
+        user = User(pref_assets=["BTC"], pref_min_confidence=5)
+        db_session.add(user)
+        await db_session.flush()
+        channel = NotificationChannel(
+            user_id=user.id,
+            channel_type=ChannelType.TELEGRAM.value,
+            channel_identifier="666",
+        )
+        db_session.add(channel)
+        await db_session.flush()
+        delivery = SignalDelivery(
+            signal_id=sig.id,
+            user_id=user.id,
+            channel_id=channel.id,
+            status=DeliveryStatus.FAILED.value,
+            attempt_count=3,
+            error_message="rate limited",
+        )
+        db_session.add(delivery)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        body = r.json()
+        rec = body["recipients"][0]
+        assert rec["delivery_status"] == "failed"
+        assert rec["delivery_attempts"] == 3
+        assert rec["delivery_error"] == "rate limited"
+        assert body["delivery_count"] == 1
+        assert body["failed_count"] == 1
+
+    async def test_group_filters_evaluated_separately(self, db_session, metrics_client):
+        """A TelegramGroup has the same filter rules minus the channel
+        join. Trace shows kind='group' and channel_active=None (n/a)."""
+        from etfpulse.models import TelegramGroup
+
+        sig = await _seed_signal(db_session, fp_seed="grp", confidence=8)
+        group = TelegramGroup(
+            chat_id=-100777,
+            title="Alpha Squad",
+            pref_assets=["BTC"],
+            pref_min_confidence=5,
+        )
+        db_session.add(group)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        body = r.json()
+        groups = [rec for rec in body["recipients"] if rec["kind"] == "group"]
+        assert len(groups) == 1
+        g = groups[0]
+        assert g["matched"] is True
+        assert g["channel_active"] is None  # n/a for groups
+        assert g["target_label"] == "Alpha Squad"
+        assert g["chat_id"] == -100777
+
+    async def test_counts_aggregate_across_recipients(self, db_session, metrics_client):
+        """Multiple users + multiple deliveries — count fields must sum
+        correctly across the recipient set."""
+        sig = await _seed_signal(
+            db_session, fp_seed="multi", status=SignalStatus.ALERTED.value, confidence=8
+        )
+        for i in range(3):
+            user = User(pref_assets=["BTC"], pref_min_confidence=5)
+            db_session.add(user)
+            await db_session.flush()
+            ch = NotificationChannel(
+                user_id=user.id,
+                channel_type=ChannelType.TELEGRAM.value,
+                channel_identifier=f"800{i}",
+            )
+            db_session.add(ch)
+            await db_session.flush()
+            # 2 delivered, 1 failed.
+            status_val = DeliveryStatus.DELIVERED.value if i < 2 else DeliveryStatus.FAILED.value
+            db_session.add(
+                SignalDelivery(
+                    signal_id=sig.id, user_id=user.id, channel_id=ch.id, status=status_val
+                )
+            )
+            await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        body = r.json()
+        assert body["matched_count"] == 3
+        assert body["delivery_count"] == 3
+        assert body["delivered_count"] == 2
+        assert body["failed_count"] == 1
+        assert body["pending_count"] == 0
+
+
+class TestDeliveryTraceConsistency:
+    """Pins the trace endpoint's `matched` verdict against `fan_out_signal`'s
+    actual SQL-side filter behaviour. This is the safety net against the
+    drift hazard called out in `pipeline.delivery._match_users` /
+    `_match_groups`: if a future maintainer adds a filter rule to the SQL
+    side but forgets to mirror it in `_trace_user` / `_trace_group`, the
+    trace would silently report `matched=True` for a recipient that
+    fan-out actually skips. This test seeds a mix of users that exercise
+    every filter, runs fan-out, runs the trace, and asserts the two
+    populations agree on every recipient."""
+
+    async def test_trace_matched_set_equals_fan_out_inserted_set(self, db_session, metrics_client):
+        from etfpulse.pipeline.delivery import fan_out_signal
+
+        sig = await _seed_signal(
+            db_session,
+            fp_seed="consistency",
+            status=SignalStatus.PENDING.value,  # fan_out_signal requires PENDING
+            confidence=7,
+        )
+
+        # Seed one of each "interesting" filter outcome. Labels keep the
+        # assertion messages self-documenting; the key invariant is
+        # trace.matched ↔ fan-out insert.
+        cases = [
+            # label, kwargs for User, kwargs for NotificationChannel
+            ("active_match", {}, {}),
+            ("inactive_user", {"is_active": False}, {}),
+            ("paused_user", {"pref_paused": True}, {}),
+            ("inactive_channel", {}, {"is_active": False}),
+            ("asset_mismatch", {"pref_assets": ["ETH"]}, {}),
+            ("confidence_too_high", {"pref_min_confidence": 9}, {}),
+        ]
+        for idx, (_label, u_kwargs, c_kwargs) in enumerate(cases):
+            user = User(
+                pref_assets=u_kwargs.get("pref_assets", ["BTC"]),
+                pref_min_confidence=u_kwargs.get("pref_min_confidence", 5),
+                is_active=u_kwargs.get("is_active", True),
+                pref_paused=u_kwargs.get("pref_paused", False),
+            )
+            db_session.add(user)
+            await db_session.flush()
+            db_session.add(
+                NotificationChannel(
+                    user_id=user.id,
+                    channel_type=ChannelType.TELEGRAM.value,
+                    channel_identifier=f"consist-{idx}",
+                    is_active=c_kwargs.get("is_active", True),
+                )
+            )
+        await db_session.flush()
+
+        # Run REAL fan-out. Returns the count of new SignalDelivery rows.
+        inserted = await fan_out_signal(db_session, sig.id)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        body = r.json()
+
+        # Invariant 1: the trace's matched_count equals the count of rows
+        # fan-out actually inserted. The most-direct anti-drift assertion.
+        assert body["matched_count"] == inserted, (
+            f"trace.matched_count={body['matched_count']} but fan-out "
+            f"inserted={inserted}; one side filters differently"
+        )
+
+        # Invariant 2: every matched recipient has a SignalDelivery row
+        # (delivery_status not None), and every non-matched recipient does
+        # not. Pin the pairing per-row, not just the aggregate count.
+        for rec in body["recipients"]:
+            if rec["matched"]:
+                assert rec["delivery_status"] is not None, (
+                    f"matched recipient {rec['target_id']} ({rec['kind']}) "
+                    f"has no SignalDelivery row — fan-out didn't insert it"
+                )
+            else:
+                assert rec["delivery_status"] is None, (
+                    f"NON-matched recipient {rec['target_id']} ({rec['kind']}) "
+                    f"has a SignalDelivery row — fan-out inserted it anyway. "
+                    f"Trace's matched=False is wrong, OR fan-out filter is "
+                    f"weaker than the trace claims."
+                )
+
+    async def test_trace_matched_groups_equal_fan_out_inserted_groups(
+        self, db_session, metrics_client
+    ):
+        """Mirror of the user-side test for groups. Same invariants applied
+        to `_match_groups` (SQL) vs `_trace_group` (Python)."""
+        from etfpulse.models import TelegramGroup
+        from etfpulse.pipeline.delivery import fan_out_signal
+
+        sig = await _seed_signal(
+            db_session,
+            fp_seed="consistency-grp",
+            status=SignalStatus.PENDING.value,
+            confidence=7,
+        )
+
+        group_cases = [
+            ("active_match", {}),
+            ("inactive_group", {"is_active": False}),
+            ("paused_group", {"pref_paused": True}),
+            ("asset_mismatch", {"pref_assets": ["ETH"]}),
+            ("confidence_too_high", {"pref_min_confidence": 9}),
+        ]
+        for idx, (_label, kwargs) in enumerate(group_cases):
+            db_session.add(
+                TelegramGroup(
+                    chat_id=-100_000 - idx,
+                    title=f"group-{idx}",
+                    pref_assets=kwargs.get("pref_assets", ["BTC"]),
+                    pref_min_confidence=kwargs.get("pref_min_confidence", 5),
+                    is_active=kwargs.get("is_active", True),
+                    pref_paused=kwargs.get("pref_paused", False),
+                )
+            )
+        await db_session.flush()
+
+        inserted = await fan_out_signal(db_session, sig.id)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        body = r.json()
+        group_recipients = [rec for rec in body["recipients"] if rec["kind"] == "group"]
+        matched_groups = sum(1 for rec in group_recipients if rec["matched"])
+        assert matched_groups == inserted
+
+
 class TestRetryAiRoute:
     """`POST /api/admin/signals/retry-ai` — auth gate + helper-orchestration
     contract. The helper itself is unit-tested in

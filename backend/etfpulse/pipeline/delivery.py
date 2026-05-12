@@ -165,6 +165,24 @@ async def fan_out_signal(session: AsyncSession, signal_id: int) -> int:
     signal.status = SignalStatus.ALERTED.value
     await session.flush()
 
+    # Branch 5 — distinct observability event for the "fanned out to nobody"
+    # case. A signal flips to ALERTED whether or not any recipients matched
+    # (edge case 14), and `fan_out_signal_done` is emitted for both cases.
+    # Greping logs for "fan_out_signal_no_recipients" gives operators a
+    # single signal-path string to alert on (e.g., admin Run Cycle producing
+    # ALERTED signals that nobody actually receives). Same payload shape so
+    # downstream log pipelines parse both events uniformly.
+    if inserted_count == 0:
+        log.info(
+            "fan_out_signal_no_recipients",
+            signal_id=signal_id,
+            asset=signal.asset,
+            signal_type=signal.signal_type,
+            confidence=signal.confidence,
+            candidates_user=len(user_rows),
+            candidates_group=len(group_ids),
+        )
+
     log.info(
         "fan_out_signal_done",
         signal_id=signal_id,
@@ -182,6 +200,16 @@ async def _match_users(session: AsyncSession, signal: Signal) -> list[tuple[int,
     """Users with an active Telegram channel whose prefs accept this signal.
 
     Returns (user_id, channel_id) pairs — both needed for SignalDelivery.
+
+    **Drift hazard.** The same filter rules are mirrored in Python in
+    `etfpulse.api.routes.admin._trace_user` (Branch 5 observability —
+    the `/api/admin/signals/{id}/delivery-trace` endpoint reports which
+    rule excluded a recipient). The SQL here is the source of truth;
+    the trace helper exists to explain it. Adding/changing a filter
+    here MUST be reflected there or operators get misleading exclude
+    reasons. A consistency-contract test in
+    `tests/test_app/test_admin.py::TestDeliveryTraceConsistency` pins
+    the two implementations together.
     """
     assert signal.confidence is not None  # caller guarantees
 
@@ -207,7 +235,11 @@ async def _match_users(session: AsyncSession, signal: Signal) -> list[tuple[int,
 
 
 async def _match_groups(session: AsyncSession, signal: Signal) -> list[int]:
-    """TelegramGroups whose prefs accept this signal."""
+    """TelegramGroups whose prefs accept this signal.
+
+    Drift hazard: same as `_match_users` above — mirrored in
+    `etfpulse.api.routes.admin._trace_group`. Keep them in sync.
+    """
     assert signal.confidence is not None
 
     stmt = select(TelegramGroup.id).where(

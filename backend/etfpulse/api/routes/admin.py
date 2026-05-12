@@ -27,6 +27,8 @@ from etfpulse.api.deps import get_db_session, require_admin_key
 from etfpulse.api.schemas.admin import (
     AdminMetrics,
     DeliveryStatusCounts,
+    DeliveryTrace,
+    DeliveryTraceRecipient,
     EvalOutcomesResponse,
     RetryAiErrorSample,
     RetryAiResponse,
@@ -39,7 +41,16 @@ from etfpulse.api.schemas.telegram_admin import (
 )
 from etfpulse.bot.constants import ALLOWED_UPDATES
 from etfpulse.config import settings
-from etfpulse.models import DeliveryStatus, Signal, SignalDelivery, SignalStatus
+from etfpulse.models import (
+    ChannelType,
+    DeliveryStatus,
+    NotificationChannel,
+    Signal,
+    SignalDelivery,
+    SignalStatus,
+    TelegramGroup,
+    User,
+)
 from etfpulse.pipeline.ai_backfill import backfill_null_ai
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
@@ -78,6 +89,270 @@ async def trigger_signal_cycle() -> dict[str, Any]:
         )
     log.info("admin_trigger_cycle_done", **summary)
     return summary
+
+
+@router.get(
+    "/signals/{signal_id}/delivery-trace",
+    response_model=DeliveryTrace,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def get_signal_delivery_trace(
+    signal_id: int,
+    session: AsyncSession = Depends(get_db_session),
+) -> DeliveryTrace:
+    """Per-signal delivery diagnostic: who matched, who didn't, why.
+
+    Answers the operational question "did this signal reach anyone, and
+    if not, why?" without dropping to SQL. The thread that introduced
+    Branch 5 spent ~4 SQL queries to figure out "the signal had confidence
+    4 and both users had pref_min_confidence=6, so nobody matched." This
+    endpoint condenses that diagnosis into one HTTP call.
+
+    Iterates every (User, telegram NotificationChannel) pair and every
+    TelegramGroup; for each, evaluates the same filters as
+    `pipeline.delivery._match_users` / `_match_groups`. Joins any existing
+    SignalDelivery row for the (signal, recipient) pair so the operator
+    sees the delivery's status, attempt count, and error_message inline.
+
+    Performance: queries are O(users + groups + deliveries), no JOIN
+    explosion. At Phase 1 scale (a few hundred users + handful of groups)
+    this is well under any latency concern. Index path is straightforward
+    — sequential scans on small tables.
+
+    404 if the signal doesn't exist (operator typo'd an id). No 503
+    masking because the operator surface is private.
+    """
+    signal = await session.get(Signal, signal_id)
+    if signal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"signal {signal_id} not found",
+        )
+
+    # Index every existing delivery for this signal by recipient PK so we
+    # can join inline without a second query per recipient.
+    delivery_rows = (
+        (await session.execute(select(SignalDelivery).where(SignalDelivery.signal_id == signal_id)))
+        .scalars()
+        .all()
+    )
+    deliveries_by_user_id: dict[int, SignalDelivery] = {
+        d.user_id: d for d in delivery_rows if d.user_id is not None
+    }
+    deliveries_by_group_id: dict[int, SignalDelivery] = {
+        d.group_id: d for d in delivery_rows if d.group_id is not None
+    }
+
+    # Aggregate counts up-front — operator's first glance needs to see
+    # "delivered to N people" before drilling into the per-recipient list.
+    delivery_count = len(delivery_rows)
+    by_status: dict[str, int] = {}
+    for d in delivery_rows:
+        by_status[d.status] = by_status.get(d.status, 0) + 1
+
+    # User × Telegram-channel pairs. A user with both a Telegram channel
+    # AND e.g. an email channel would only appear here for the Telegram
+    # row — non-Telegram channels can't receive signal alerts under the
+    # current adapter surface.
+    user_channel_rows = (
+        await session.execute(
+            select(User, NotificationChannel)
+            .join(NotificationChannel, NotificationChannel.user_id == User.id)
+            .where(NotificationChannel.channel_type == ChannelType.TELEGRAM.value)
+        )
+    ).all()
+
+    group_rows = (await session.execute(select(TelegramGroup))).scalars().all()
+
+    recipients: list[DeliveryTraceRecipient] = []
+    matched_count = 0
+
+    for user, channel in user_channel_rows:
+        trace = _trace_user(user, channel, signal, deliveries_by_user_id.get(user.id))
+        if trace.matched:
+            matched_count += 1
+        recipients.append(trace)
+
+    for group in group_rows:
+        trace = _trace_group(group, signal, deliveries_by_group_id.get(group.id))
+        if trace.matched:
+            matched_count += 1
+        recipients.append(trace)
+
+    return DeliveryTrace(
+        signal_id=signal.id,
+        signal_asset=signal.asset,
+        signal_type=signal.signal_type,
+        signal_confidence=signal.confidence,
+        signal_status=signal.status,
+        delivery_count=delivery_count,
+        delivered_count=by_status.get(DeliveryStatus.DELIVERED.value, 0),
+        pending_count=by_status.get(DeliveryStatus.PENDING.value, 0),
+        failed_count=by_status.get(DeliveryStatus.FAILED.value, 0),
+        skipped_count=by_status.get(DeliveryStatus.SKIPPED.value, 0),
+        matched_count=matched_count,
+        recipients=recipients,
+    )
+
+
+def _trace_user(
+    user: User,
+    channel: NotificationChannel,
+    signal: Signal,
+    delivery: SignalDelivery | None,
+) -> DeliveryTraceRecipient:
+    """Build a recipient trace for one (user, telegram-channel) pair.
+
+    Filter evaluation order MUST match `pipeline.delivery._match_users`
+    so the exclude_reason reflects the actual rule that excluded this
+    target during the most recent fan-out. Asset and confidence checks
+    use the helper to keep the rules in one place.
+    """
+    asset_match = _asset_matches(user.pref_assets, signal.asset)
+    confidence_match = _confidence_matches(user.pref_min_confidence, signal.confidence)
+    matched = (
+        user.is_active
+        and not user.pref_paused
+        and channel.is_active
+        and asset_match
+        and confidence_match
+    )
+    reason = (
+        None
+        if matched
+        else _first_failing_reason(
+            user_active=user.is_active,
+            user_paused=user.pref_paused,
+            channel_active=channel.is_active,
+            asset_match=asset_match,
+            confidence_match=confidence_match,
+            signal_confidence=signal.confidence,
+            signal_asset=signal.asset,
+            floor=user.pref_min_confidence,
+            pref_assets=user.pref_assets,
+        )
+    )
+
+    return DeliveryTraceRecipient(
+        kind="user",
+        target_id=user.id,
+        target_label=channel.username or f"user#{user.id}",
+        chat_id=channel.channel_identifier,
+        target_active=user.is_active,
+        target_paused=user.pref_paused,
+        channel_active=channel.is_active,
+        asset_match=asset_match,
+        confidence_match=confidence_match,
+        matched=matched,
+        exclude_reason=reason,
+        delivery_status=delivery.status if delivery else None,
+        delivery_attempts=delivery.attempt_count if delivery else None,
+        delivery_error=delivery.error_message if delivery else None,
+    )
+
+
+def _trace_group(
+    group: TelegramGroup, signal: Signal, delivery: SignalDelivery | None
+) -> DeliveryTraceRecipient:
+    """Group analogue of `_trace_user` — same filter rules minus the
+    channel join. Groups address Telegram directly via `chat_id`."""
+    asset_match = _asset_matches(group.pref_assets, signal.asset)
+    confidence_match = _confidence_matches(group.pref_min_confidence, signal.confidence)
+    matched = group.is_active and not group.pref_paused and asset_match and confidence_match
+    reason = (
+        None
+        if matched
+        else _first_failing_reason(
+            user_active=group.is_active,
+            user_paused=group.pref_paused,
+            channel_active=True,  # n/a for groups; always "pass" so it's
+            # never the reason we report
+            asset_match=asset_match,
+            confidence_match=confidence_match,
+            signal_confidence=signal.confidence,
+            signal_asset=signal.asset,
+            floor=group.pref_min_confidence,
+            pref_assets=group.pref_assets,
+            kind="group",
+        )
+    )
+
+    return DeliveryTraceRecipient(
+        kind="group",
+        target_id=group.id,
+        target_label=group.title or f"group#{group.id}",
+        chat_id=group.chat_id,
+        target_active=group.is_active,
+        target_paused=group.pref_paused,
+        channel_active=None,
+        asset_match=asset_match,
+        confidence_match=confidence_match,
+        matched=matched,
+        exclude_reason=reason,
+        delivery_status=delivery.status if delivery else None,
+        delivery_attempts=delivery.attempt_count if delivery else None,
+        delivery_error=delivery.error_message if delivery else None,
+    )
+
+
+def _asset_matches(pref_assets: list[str], signal_asset: str) -> bool:
+    """Pinned to `_match_users`'s `or_(cardinality == 0, contains([asset]))`
+    rule — empty pref_assets means "all assets"."""
+    return len(pref_assets) == 0 or signal_asset in pref_assets
+
+
+def _confidence_matches(floor: int, signal_confidence: int | None) -> bool:
+    """Pinned to `pref_min_confidence <= signal.confidence` — when the
+    signal's confidence is NULL (AI failed), the comparison fails for
+    everyone (fan-out's `_match_users` short-circuits on NULL confidence,
+    so this is internally consistent)."""
+    if signal_confidence is None:
+        return False
+    return floor <= signal_confidence
+
+
+def _first_failing_reason(
+    *,
+    user_active: bool,
+    user_paused: bool,
+    channel_active: bool,
+    asset_match: bool,
+    confidence_match: bool,
+    signal_confidence: int | None,
+    signal_asset: str,
+    floor: int,
+    pref_assets: list[str],
+    kind: str = "user",
+) -> str:
+    """First filter that the recipient failed, in the same evaluation
+    order as `_match_users`. The single returned string is the most
+    specific cause — operators want to see "asset mismatch" rather
+    than a list of all violations."""
+    target_word = "group" if kind == "group" else "user"
+    if not user_active:
+        return f"{target_word} inactive"
+    if user_paused:
+        return f"{target_word} paused"
+    if kind == "user" and not channel_active:
+        # Most-common silent-failure path: channel deactivated after a
+        # prior Blocked / ChatNotFound. Make the cause explicit so an
+        # operator doesn't go hunting for it.
+        return (
+            "Telegram channel inactive "
+            "(likely auto-deactivated after a prior Blocked / ChatNotFound)"
+        )
+    if not asset_match:
+        return f"signal asset {signal_asset!r} not in {target_word}'s pref_assets {pref_assets!r}"
+    if not confidence_match:
+        if signal_confidence is None:
+            return "signal has no confidence (AI failed at build time)"
+        return (
+            f"signal confidence {signal_confidence} below {target_word}'s "
+            f"pref_min_confidence ({floor})"
+        )
+    # All checks passed — caller shouldn't be asking for a reason.
+    return "all filters passed (no exclude reason)"
 
 
 @router.post(
@@ -243,6 +518,19 @@ async def get_admin_metrics(
     )
     deliveries_reaper_failures = int((await session.execute(reaper_fail_stmt)).scalar_one())
 
+    # --- Branch 5 — Signals ALERTED but with no SignalDelivery rows -------
+    # Surfaces the "fanned out to nobody" case. Anti-JOIN (NOT EXISTS) is
+    # the most index-friendly shape on Postgres — leverages
+    # `ix_delivery_signal` on the right-hand subquery. Steady-state
+    # depends on operator confidence-floor configs.
+    zero_delivery_stmt = select(func.count()).where(
+        Signal.status == SignalStatus.ALERTED.value,
+        ~select(SignalDelivery.id).where(SignalDelivery.signal_id == Signal.id).exists(),
+    )
+    signals_alerted_with_zero_deliveries = int(
+        (await session.execute(zero_delivery_stmt)).scalar_one()
+    )
+
     # --- Scheduler job introspection --------------------------------------
     # `app.state.scheduler` is set by `start_scheduler` when `run_scheduler`
     # is on; absent when scheduler is disabled. None signals "scheduler off"
@@ -291,6 +579,7 @@ async def get_admin_metrics(
         signals_null_confidence=signals_null_confidence,
         deliveries_stuck_pending=deliveries_stuck_pending,
         deliveries_reaper_failures=deliveries_reaper_failures,
+        signals_alerted_with_zero_deliveries=signals_alerted_with_zero_deliveries,
         scheduler_jobs=scheduler_jobs,
         accepted_webhook_secrets=accepted_webhook_secrets,
         current_ai_prompt_version=AI_PROMPT_VERSION,

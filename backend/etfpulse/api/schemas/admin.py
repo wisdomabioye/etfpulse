@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -76,6 +77,19 @@ class AdminMetrics(BaseModel):
     # missing deadlines (bot disabled mid-flight, scheduler halted, etc).
     deliveries_reaper_failures: int = Field(ge=0)
 
+    # Branch 5 — Signals with status=ALERTED that have zero rows in
+    # `signal_deliveries`. ALERTED is the post-fan-out terminal state for
+    # the SIGNAL even when no recipients matched (edge case 14), so the
+    # admin dashboard previously couldn't distinguish "delivered to 5
+    # people" from "delivered to nobody because everyone's confidence
+    # floor was higher than the signal's confidence". This counter
+    # surfaces that mismatch. Steady-state value depends on operator
+    # `pref_min_confidence` configs vs the actual confidence distribution
+    # of recent signals — a persistent non-zero number isn't necessarily
+    # a bug, but it's the signal to dig into with the delivery-trace
+    # endpoint below.
+    signals_alerted_with_zero_deliveries: int = Field(ge=0)
+
     # APScheduler job introspection — None when `run_scheduler=false` (no
     # scheduler attached to app.state). Empty list is theoretically possible
     # but in practice the scheduler always has the daily-cycle + reaper
@@ -139,6 +153,84 @@ class EvalOutcomesResponse(BaseModel):
     skipped_no_bars_in_window: int = Field(ge=0)
     errored: int = Field(ge=0)
     remaining: int = Field(ge=0)
+
+
+class DeliveryTraceRecipient(BaseModel):
+    """One potential delivery target, with the verdict of each matching
+    filter. Mirrors the rules in `pipeline.delivery._match_users` /
+    `_match_groups` so an operator can read "user 7 didn't get this
+    signal because their confidence floor is 6 but the signal was 4"
+    directly off the response.
+
+    `kind` distinguishes user vs group targets. For users, `chat_id` is
+    the Telegram personal chat id from `notification_channels`; for
+    groups, it's the `telegram_groups.chat_id`. `target_id` is the
+    primary key of the user OR group row, namespace-distinct per `kind`.
+
+    `exclude_reason` is populated only when `matched=False`. The first
+    failing filter wins (most-specific cause); the renderer walks them
+    in the same order `_match_users` evaluates.
+
+    `delivery_status` is the status of the SignalDelivery row for this
+    target, or None when no such row exists (matched=False AND no row,
+    or matched=True but fan-out hasn't run yet).
+    """
+
+    kind: Literal["user", "group"]
+    target_id: int
+    target_label: str  # username for users, title for groups (best-effort)
+    chat_id: str | int | None  # what we'd send to via Telegram
+
+    # Per-filter verdicts (mirrors `_match_users` rule order)
+    target_active: bool
+    target_paused: bool
+    channel_active: bool | None  # None for groups (no channel concept)
+    asset_match: bool
+    confidence_match: bool
+
+    matched: bool
+    exclude_reason: str | None = None
+
+    # Delivery row state (when one exists)
+    delivery_status: str | None = None
+    delivery_attempts: int | None = None
+    delivery_error: str | None = None
+
+
+class DeliveryTrace(BaseModel):
+    """Full diagnostic for one signal's delivery: who matched, who didn't,
+    why, and what state each delivery row is in.
+
+    The endpoint that returns this (`GET /api/admin/signals/{id}/delivery-trace`)
+    solves the "did this signal reach anyone, and if not, why?" question
+    without dropping to SQL. Use cases:
+        - Admin Run Cycle produced a signal but you didn't get an alert
+          on Telegram → check this endpoint, see exclude_reason for your
+          user (likely "confidence below user's min" or "channel inactive").
+        - A signal is stuck in PENDING for days → see the delivery row
+          attempts + error.
+
+    `delivery_count` is the total number of `signal_deliveries` rows
+    pointing to this signal. `delivered_count` etc. break it down by
+    status. `matched_count` is how many recipients SHOULD have received
+    the signal per the filter rules — equal to delivery_count when
+    fan-out has run on this signal.
+    """
+
+    signal_id: int
+    signal_asset: str
+    signal_type: str
+    signal_confidence: int | None
+    signal_status: str
+
+    delivery_count: int = Field(ge=0)
+    delivered_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+
+    matched_count: int = Field(ge=0)
+    recipients: list[DeliveryTraceRecipient]
 
 
 class RetryAiResponse(BaseModel):
