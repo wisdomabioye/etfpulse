@@ -354,6 +354,68 @@ class TestBuildSignal:
         for key in hit.trigger_data:
             assert signal.trigger_data[key] == hit.trigger_data[key]
 
+    async def test_regime_at_creation_persists_reasoning_and_btc_dominance(
+        self, db_session, stub_ai
+    ):
+        """Issue #59 — `reasoning` (dict) and `btc_dominance` (Decimal → str)
+        must round-trip through the JSONB blob so `ai_backfill` reconstructs
+        the same prompt context the fresh build saw. Verifies BOTH the
+        presence of the keys AND that `btc_dominance` is stringified —
+        a raw Decimal would either (a) crash asyncpg JSONB serialization,
+        or (b) be coerced by the JSON encoder in ways that confuse the
+        reader's `isinstance(str)` check downstream."""
+        regime = RegimeClassification(
+            regime=MarketRegime.MARKUP,
+            signal_posture=SignalPosture.NORMAL,
+            confidence=8,
+            reasoning={
+                "flow": {"score": 6, "note": "BTC streak broken"},
+                "dominance": {"available": True, "btc_dominance": "54.32"},
+            },
+            macro_events_nearby=["FOMC"],
+            btc_dominance=Decimal("54.3200"),
+        )
+
+        signal = await build_signal(db_session, _make_hit(), regime=regime)
+
+        assert signal is not None
+        persisted = signal.trigger_data["regime_at_creation"]
+        # The pre-existing 4 keys still land correctly (regression guard).
+        assert persisted["regime"] == "markup"
+        assert persisted["signal_posture"] == "normal"
+        assert persisted["confidence"] == 8
+        assert persisted["macro_events_nearby"] == ["FOMC"]
+        # New keys land with the right shapes.
+        assert persisted["reasoning"] == {
+            "flow": {"score": 6, "note": "BTC streak broken"},
+            "dominance": {"available": True, "btc_dominance": "54.32"},
+        }
+        # Pin the writer contract: btc_dominance MUST be a str, not a Decimal.
+        # If a future refactor strips the `str(...)` wrap, this test fires
+        # before the reader silently degrades to None (it requires str input).
+        assert isinstance(persisted["btc_dominance"], str)
+        assert persisted["btc_dominance"] == "54.3200"
+
+    async def test_regime_at_creation_persists_null_btc_dominance(self, db_session, stub_ai):
+        """When the regime classifier returned `btc_dominance=None`
+        (SoSoValue spotlight API down), the persisted value is JSON null —
+        NOT the literal string "None". `_reconstruct_regime`'s
+        `isinstance(str)` guard correctly treats None as 'no btc_dominance'."""
+        regime = RegimeClassification(
+            regime=MarketRegime.UNCERTAIN,
+            signal_posture=SignalPosture.CAUTIOUS,
+            confidence=4,
+            reasoning={"dominance": {"available": False, "fetch_error": "timeout"}},
+            macro_events_nearby=[],
+            btc_dominance=None,
+        )
+
+        signal = await build_signal(db_session, _make_hit(), regime=regime)
+
+        assert signal is not None
+        persisted = signal.trigger_data["regime_at_creation"]
+        assert persisted["btc_dominance"] is None  # JSON null, not "None"
+
     async def test_regime_and_news_context_forwarded_to_ai(self, db_session, monkeypatch):
         """`build_signal` must forward `regime` + `news_context` to
         `openrouter_client.analyze` so the AI prompt sees them. Verified by

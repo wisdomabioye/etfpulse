@@ -113,6 +113,18 @@ async def build_signal(
             "signal_posture": regime.signal_posture.value,
             "confidence": regime.confidence,
             "macro_events_nearby": list(regime.macro_events_nearby),
+            # Issue #59 — persist reasoning + btc_dominance so backfilled
+            # signals see the same prompt context as fresh builds. Without
+            # these, `ai_backfill._reconstruct_regime` had to default them
+            # to `{}` / `None`, producing a strictly thinner AI prompt than
+            # the original would have. `reasoning` is already JSONB-safe
+            # (same shape lands on `regime_snapshots.reasoning` daily);
+            # `btc_dominance` is Decimal → stringified per the regime_monitor
+            # precedent at line 326 (Decimals aren't JSON-native).
+            "reasoning": regime.reasoning,
+            "btc_dominance": (
+                str(regime.btc_dominance) if regime.btc_dominance is not None else None
+            ),
         }
     if news_context:
         persisted_trigger_data["news_context"] = news_context

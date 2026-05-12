@@ -30,6 +30,7 @@ Contract:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
 import structlog
@@ -184,18 +185,37 @@ def _record_error(summary: dict[str, Any], signal_id: int, kind: str, detail: st
 def _reconstruct_regime(trigger_data: dict[str, Any]) -> RegimeClassification | None:
     """Rebuild a `RegimeClassification` from the JSONB blob persisted at
     signal-build time. Returns None when the key is absent (legacy signal
-    pre-Stage-7-P6) OR when the stored shape is malformed — better to
-    re-analyse without regime context than to crash the backfill."""
+    pre-Stage-7-P6) OR when required fields are malformed — better to
+    re-analyse without regime context than to crash the backfill.
+
+    Issue #59 — `reasoning` and `btc_dominance` are read from the blob since
+    Branch 7. Legacy rows persisted before that change have neither key; the
+    defensive isinstance/None checks below preserve identical pre-#59 behaviour
+    on those rows (empty reasoning, None btc_dominance).
+
+    Partial-corruption tolerance: a malformed `btc_dominance` (e.g. JSONB
+    accidentally storing `"unknown"` instead of a decimal string) degrades
+    only that one field to None — the other 5 fields still flow through.
+    Catching `InvalidOperation` at the outer level would discard the entire
+    regime context for one bad column, which is strictly worse.
+    """
     raw = trigger_data.get("regime_at_creation")
     if not isinstance(raw, dict):
         return None
     try:
+        btc_dom_raw = raw.get("btc_dominance")
+        try:
+            btc_dom = Decimal(btc_dom_raw) if isinstance(btc_dom_raw, str) else None
+        except InvalidOperation:
+            btc_dom = None
+        reasoning_raw = raw.get("reasoning")
+        reasoning = reasoning_raw if isinstance(reasoning_raw, dict) else {}
         return RegimeClassification(
             regime=MarketRegime(raw["regime"]),
             signal_posture=SignalPosture(raw["signal_posture"]),
             confidence=int(raw["confidence"]),
-            reasoning={},  # not persisted in trigger_data; AI doesn't read it
-            btc_dominance=None,  # not persisted in trigger_data
+            reasoning=reasoning,
+            btc_dominance=btc_dom,
             macro_events_nearby=list(raw.get("macro_events_nearby") or []),
         )
     except (KeyError, ValueError, TypeError):

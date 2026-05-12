@@ -12,8 +12,8 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from etfpulse.models import Signal, SignalStatus
-from etfpulse.pipeline.ai_backfill import backfill_null_ai
+from etfpulse.models import MarketRegime, Signal, SignalPosture, SignalStatus
+from etfpulse.pipeline.ai_backfill import _reconstruct_regime, backfill_null_ai
 from etfpulse.pipeline.analysis import AISignalAnalysis
 from etfpulse.pipeline.detectors import compute_fingerprint
 
@@ -368,3 +368,120 @@ class TestBackfillMaxAgeHours:
         await db_session.refresh(fresh)
         assert old.ai_analysis is None  # excluded by age filter
         assert fresh.ai_analysis is not None
+
+
+class TestReconstructRegime:
+    """Issue #59 — `_reconstruct_regime` reads the JSONB blob persisted by
+    `signal_builder.build_signal`. Pre-PR-A blobs lacked `reasoning` and
+    `btc_dominance`; the reader must remain backwards-compatible with those
+    legacy shapes while also surfacing the new fields when they're present.
+    Partial corruption (one malformed key) must NOT kill the entire reconstruction
+    — only that field should degrade."""
+
+    def test_reads_reasoning_and_btc_dominance_when_present(self):
+        """Round-trip the post-#59 6-key shape — both new fields appear on
+        the rebuilt RegimeClassification with the correct types."""
+
+        regime = _reconstruct_regime(
+            {
+                "regime_at_creation": {
+                    "regime": "markup",
+                    "signal_posture": "normal",
+                    "confidence": 8,
+                    "macro_events_nearby": ["FOMC"],
+                    "reasoning": {
+                        "flow": {"score": 6, "note": "BTC streak broken"},
+                        "dominance": {"available": True, "btc_dominance": "54.32"},
+                    },
+                    "btc_dominance": "54.3200",
+                }
+            }
+        )
+
+        assert regime is not None
+        assert regime.reasoning == {
+            "flow": {"score": 6, "note": "BTC streak broken"},
+            "dominance": {"available": True, "btc_dominance": "54.32"},
+        }
+        # str → Decimal round-trip is lossless.
+        assert regime.btc_dominance == Decimal("54.3200")
+
+    def test_legacy_shape_defaults_reasoning_and_btc_dominance(self):
+        """Pre-PR-A signals persist only 4 keys. Reader must default
+        `reasoning` to `{}` and `btc_dominance` to None — same behavior as
+        the pre-#59 code path, so existing rows backfill identically."""
+
+        regime = _reconstruct_regime(
+            {
+                "regime_at_creation": {
+                    "regime": "uncertain",
+                    "signal_posture": "cautious",
+                    "confidence": 2,
+                    "macro_events_nearby": ["CPI (MoM)"],
+                }
+            }
+        )
+
+        assert regime is not None
+        assert regime.reasoning == {}
+        assert regime.btc_dominance is None
+
+    def test_malformed_btc_dominance_degrades_only_that_field(self):
+        """Partial corruption (e.g. JSONB stored `"unknown"` instead of a
+        numeric string) must NOT void the rest of the regime context.
+        Inner InvalidOperation catch (#59 review pass 3) keeps the other 5
+        fields intact while degrading only btc_dominance to None."""
+        from etfpulse.pipeline.ai_backfill import _reconstruct_regime
+
+        regime = _reconstruct_regime(
+            {
+                "regime_at_creation": {
+                    "regime": "markup",
+                    "signal_posture": "normal",
+                    "confidence": 8,
+                    "macro_events_nearby": ["FOMC"],
+                    "reasoning": {"flow": {"score": 6}},
+                    "btc_dominance": "not-a-number",  # malformed
+                }
+            }
+        )
+
+        assert regime is not None  # full reconstruction did NOT bail
+        assert regime.regime == MarketRegime.MARKUP
+        assert regime.signal_posture == SignalPosture.NORMAL
+        assert regime.confidence == 8
+        assert regime.macro_events_nearby == ["FOMC"]
+        assert regime.reasoning == {"flow": {"score": 6}}
+        assert regime.btc_dominance is None  # only this field degraded
+
+    def test_missing_required_field_returns_none(self):
+        """Outer catch still kills the reconstruction when a load-bearing
+        key (regime, signal_posture, confidence) is missing or unparseable.
+        Different policy from btc_dominance: without these, the rebuilt
+        RegimeClassification would be structurally invalid."""
+
+        # Missing required `regime` key → KeyError → outer catch → None.
+        assert (
+            _reconstruct_regime(
+                {
+                    "regime_at_creation": {
+                        "signal_posture": "normal",
+                        "confidence": 8,
+                    }
+                }
+            )
+            is None
+        )
+        # Unknown enum value → ValueError → outer catch → None.
+        assert (
+            _reconstruct_regime(
+                {
+                    "regime_at_creation": {
+                        "regime": "not_a_regime",
+                        "signal_posture": "normal",
+                        "confidence": 8,
+                    }
+                }
+            )
+            is None
+        )

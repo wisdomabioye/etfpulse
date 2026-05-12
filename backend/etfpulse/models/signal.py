@@ -141,6 +141,18 @@ class SignalOutcome(Base):
     hit_stop: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     max_favorable: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     max_adverse: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    # Issue #60 scaffolding — populated by the v2 outcome evaluator (PR B).
+    # NULL on rows written before PR B = "scored against the legacy 72h
+    # window." `scoring_version` follows the same `^v[0-9]+$` shape as
+    # `Signal.ai_prompt_version` for symmetry between version-tagged columns;
+    # `window_hours` is the per-signal scoring window derived from the AI's
+    # `time_horizon` (scalp 6h / swing 72h / position 168h);
+    # `price_at_validity_end` is the close at t0 + window_hours, the
+    # horizon-aware analogue of `price_after_72h`. All three are NULL until
+    # PR B's writer lands; PR A only declares the columns.
+    window_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scoring_version: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    price_at_validity_end: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
