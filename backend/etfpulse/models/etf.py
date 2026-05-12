@@ -23,10 +23,14 @@ class ETFFlow(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     captured_at: Mapped[date] = mapped_column(Date, nullable=False)
     asset: Mapped[str] = mapped_column(String(10), nullable=False)
-    total_net_flow_usd: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
-    total_value_traded: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    total_net_assets: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    cum_net_inflow: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    # USD-denominated ETF flow aggregates. Numeric(22, 2): SoSoValue reports
+    # whole-dollar values with 2-decimal precision; 22 digits leaves headroom
+    # for trillions (cum_net_inflow grows monotonically and crosses $1T+
+    # across BTC+ETH today).
+    total_net_flow_usd: Mapped[Decimal] = mapped_column(Numeric(22, 2), nullable=False)
+    total_value_traded: Mapped[Decimal | None] = mapped_column(Numeric(22, 2), nullable=True)
+    total_net_assets: Mapped[Decimal | None] = mapped_column(Numeric(22, 2), nullable=True)
+    cum_net_inflow: Mapped[Decimal | None] = mapped_column(Numeric(22, 2), nullable=True)
     per_etf_flows: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     raw_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

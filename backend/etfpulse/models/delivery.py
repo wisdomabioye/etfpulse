@@ -28,17 +28,25 @@ class SignalDelivery(Base):
     __tablename__ = "signal_deliveries"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    signal_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("signals.id"), nullable=False)
+    signal_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("signals.id", ondelete="CASCADE"), nullable=False
+    )
     # Exactly one of (user_id + channel_id) or (group_id alone) is populated.
     # DM delivery → user_id NOT NULL, channel_id NOT NULL, group_id NULL.
     # Group delivery → group_id NOT NULL, user_id NULL, channel_id NULL
     # (groups are addressed by the TelegramGroup's chat_id directly, not via a channel row).
-    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    # CASCADE on all three recipient FKs: deletes are rare (soft-delete via
+    # is_active is the normal path). Hard-deleting a user / group / channel
+    # cleans up its delivery audit trail with it. SET NULL would violate
+    # `ck_delivery_target` which requires (user_id AND channel_id) or group_id.
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
     group_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("telegram_groups.id"), nullable=True
+        BigInteger, ForeignKey("telegram_groups.id", ondelete="CASCADE"), nullable=True
     )
     channel_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("notification_channels.id"), nullable=True
+        BigInteger, ForeignKey("notification_channels.id", ondelete="CASCADE"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(20), default=DeliveryStatus.PENDING, nullable=False)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -65,6 +73,10 @@ class SignalDelivery(Base):
             "(user_id IS NOT NULL AND group_id IS NULL AND channel_id IS NOT NULL) OR "
             "(user_id IS NULL AND group_id IS NOT NULL AND channel_id IS NULL)",
             name="ck_delivery_target",
+        ),
+        CheckConstraint(
+            "status IN ('pending','delivered','failed','skipped')",
+            name="ck_signal_deliveries_status_enum",
         ),
         # Idempotency: one row per (signal, recipient). Retries update the existing row
         # (status, attempt_count, error_message) rather than inserting a duplicate.

@@ -2,7 +2,17 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from etfpulse.models.base import Base
@@ -27,30 +37,46 @@ class Position(Base):
     __tablename__ = "positions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
-    signal_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("signals.id"), nullable=True
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    order_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("orders.id"), nullable=True)
+    signal_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True
+    )
+    order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
+    )
     venue: Mapped[str] = mapped_column(String(20), nullable=False)
     asset: Mapped[str] = mapped_column(String(10), nullable=False)
     side: Mapped[str] = mapped_column(String(10), nullable=False)
-    size: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
-    entry_price: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
-    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    take_profit: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    # See Order.requested_size for the Numeric(28, 18) vs Numeric(18, 8) rationale.
+    size: Mapped[Decimal] = mapped_column(Numeric(28, 18), nullable=False)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=PositionStatus.OPEN, nullable=False)
+    # Paper-trade flag (#64) — see Order.paper_trade for the contract. A position
+    # inherits the flag from the order that opened it; the executor copies it
+    # explicitly rather than dereferencing through Order to keep this row
+    # readable when Order.user_id is SET NULL'd at user deletion.
+    paper_trade: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    close_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    close_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('open','closed','cancelled')",
+            name="ck_positions_status_enum",
+        ),
         Index("ix_positions_user", "user_id"),
         Index("ix_positions_status", "status"),
         Index("ix_positions_signal", "signal_id"),

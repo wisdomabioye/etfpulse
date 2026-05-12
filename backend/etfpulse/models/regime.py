@@ -63,8 +63,12 @@ class RegimeSnapshot(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    btc_dominance: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    flow_trend_7d: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    # btc_dominance is a percentage (~40-65 today); flow_trend_7d is a signed
+    # ratio change. Numeric(8, 4) gives 9999.9999 max which is far beyond what
+    # either field ever reaches but matches the FRACTION precision used in
+    # signal_outcomes.max_favorable / max_adverse for consistency.
+    btc_dominance: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    flow_trend_7d: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     macro_events: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     news_velocity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -122,6 +126,13 @@ class CircuitBreaker(Base):
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "trigger_type IN ('macro_event','manual')",
+            name="ck_circuit_breakers_trigger_type_enum",
+        ),
+    )
 
     def __repr__(self) -> str:
         status = "active" if self.resolved_at is None else "resolved"

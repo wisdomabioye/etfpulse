@@ -61,7 +61,7 @@ class Signal(Base):
     ai_analysis: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=SignalStatus.PENDING, nullable=False)
-    price_at_creation: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    price_at_creation: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     # Provenance tag for price_at_creation. NULL only when the price itself is NULL
     # (both providers failed). Stage 8 uses this to decide whether 24h/72h klines
     # come from the same source as entry — mixing providers risks micro-skew.
@@ -74,9 +74,9 @@ class Signal(Base):
     # `confidence` above — JSONB is the audit trail, columns are the
     # canonical projection. Outcome evaluator (`pipeline.track_record`)
     # reads from these columns, never from JSONB.
-    entry_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    stop_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    target_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     # Hardcoded "v1" prior to Stage 07; bumped only on prompt-structure changes
     # that affect AI calibration (not wording edits). Used by the track-record
     # query to compare apples-to-apples across prompt revisions (issue #32).
@@ -98,6 +98,10 @@ class Signal(Base):
         CheckConstraint(
             "ai_prompt_version ~ '^v[0-9]+$'",
             name="ck_signals_ai_prompt_version_format",
+        ),
+        CheckConstraint(
+            "status IN ('pending','alerted','expired')",
+            name="ck_signals_status_enum",
         ),
         Index("ix_signals_fingerprint_date", "fingerprint", "signal_date", unique=True),
         Index("ix_signals_created", "created_at"),
@@ -125,22 +129,25 @@ class SignalOutcome(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     signal_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("signals.id"), nullable=False, unique=True
+        BigInteger,
+        ForeignKey("signals.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
     )
     asset: Mapped[str] = mapped_column(String(10), nullable=False)
     signal_type: Mapped[str] = mapped_column(String(30), nullable=False)
     direction: Mapped[str] = mapped_column(String(10), nullable=False)
     confidence: Mapped[int] = mapped_column(Integer, nullable=False)
-    entry_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    stop_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    target_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    price_at_signal: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
-    price_after_24h: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    price_after_72h: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    price_at_signal: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    price_after_24h: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    price_after_72h: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     hit_target: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     hit_stop: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    max_favorable: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    max_adverse: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    max_favorable: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    max_adverse: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     # Issue #60 scaffolding — populated by the v2 outcome evaluator (PR B).
     # NULL on rows written before PR B = "scored against the legacy 72h
     # window." `scoring_version` follows the same `^v[0-9]+$` shape as
@@ -152,7 +159,7 @@ class SignalOutcome(Base):
     # PR B's writer lands; PR A only declares the columns.
     window_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scoring_version: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    price_at_validity_end: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    price_at_validity_end: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

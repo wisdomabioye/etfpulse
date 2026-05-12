@@ -79,7 +79,9 @@ class NotificationChannel(Base):
     __tablename__ = "notification_channels"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     channel_type: Mapped[str] = mapped_column(String(20), nullable=False)
     channel_identifier: Mapped[str] = mapped_column(String(100), nullable=False)
     username: Mapped[str | None] = mapped_column(String(100), nullable=True)
