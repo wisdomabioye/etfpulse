@@ -135,7 +135,7 @@ export function Home() {
         ) : (
           <EmptyState
             title="No signals yet."
-            hint="Check back after the next daily cycle (04:30 UTC)."
+            hint="Check back shortly — new signals are picked up throughout the day."
           />
         )}
       </section>

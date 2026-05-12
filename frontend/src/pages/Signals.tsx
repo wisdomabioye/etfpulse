@@ -115,7 +115,7 @@ export function Signals() {
               hint={
                 hasActiveFilters
                   ? 'Try loosening the confidence floor or clearing the asset/type filter.'
-                  : 'Check back after the next daily cycle (04:30 UTC).'
+                  : 'Check back shortly — new signals are picked up throughout the day.'
               }
               action={
                 hasActiveFilters ? (

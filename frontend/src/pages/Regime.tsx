@@ -49,7 +49,7 @@ export function Regime() {
           query.error instanceof ApiError && query.error.status === 503 ? (
             <EmptyState
               title="Regime not yet classified."
-              hint="The classifier runs once per daily cycle (04:30 UTC). Check back after the next run."
+              hint="The classifier runs as part of each cycle. Check back shortly."
             />
           ) : (
             <EmptyState
