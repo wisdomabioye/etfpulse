@@ -157,6 +157,15 @@ class EvalOutcomesResponse(BaseModel):
     skipped_unknown_asset: int = Field(ge=0)
     skipped_no_klines: int = Field(ge=0)
     skipped_no_bars_in_window: int = Field(ge=0)
+    # PR B (#60) — `skipped_invalid_window`: signals whose `expires_at <=
+    # created_at` (clock skew / future bug); zero in normal operation,
+    # non-zero is a diagnostic signal. `skipped_scalp_intraday_unsupported`:
+    # signals with window_hours < 24 — bucketed as scalp but evaluator
+    # skips them pending #62 (intraday kline plumbing). Steady-state
+    # non-zero on every tick until #62 lands (see also #63 for the
+    # SQL-level scalp exclusion follow-up).
+    skipped_invalid_window: int = Field(ge=0, default=0)
+    skipped_scalp_intraday_unsupported: int = Field(ge=0, default=0)
     errored: int = Field(ge=0)
     remaining: int = Field(ge=0)
 

@@ -182,13 +182,23 @@ def _percent_return_text(o: SignalOutcome) -> str | None:
     `entry_for_metrics` AND the frontend OutcomeCard / TrackRecord row —
     `entry_price` if AI set one, else `price_at_signal`. Diverging would
     show one number on the alert and a different number in the bot,
-    contradicting the verdict's hit_target math when entry ≠ price_at_signal."""
-    if o.price_after_72h is None:
+    contradicting the verdict's hit_target math when entry ≠ price_at_signal.
+
+    PR B (#60) — read `price_at_validity_end` first (the horizon-aware
+    'outcome close'), fall back to `price_after_72h` for legacy rows
+    (NULL `price_at_validity_end`). This matters for position signals
+    (168h validity): pre-PR-B the bot would show the 72h close even
+    though the trade's stated outcome point is at 168h. Now it shows the
+    actual validity-end close for v2 rows."""
+    close_at_end = (
+        o.price_at_validity_end if o.price_at_validity_end is not None else o.price_after_72h
+    )
+    if close_at_end is None:
         return None
     baseline = o.entry_price if o.entry_price is not None else o.price_at_signal
     if baseline <= 0:
         return None
-    pct = (float(o.price_after_72h - baseline) / float(baseline)) * 100
+    pct = (float(close_at_end - baseline) / float(baseline)) * 100
     sign = "+" if pct >= 0 else ""
     return f"{sign}{pct:.1f}%"
 

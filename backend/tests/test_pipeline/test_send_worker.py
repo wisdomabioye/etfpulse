@@ -37,7 +37,22 @@ from etfpulse.models import (
 )
 from etfpulse.pipeline.delivery import format_signal_message, send_pending_deliveries
 from etfpulse.pipeline.detectors import compute_fingerprint
-from etfpulse.pipeline.track_record import TrackRecordStat
+from etfpulse.pipeline.track_record import TrackRecordStatByHorizon
+
+
+def _stat_for_swing(by_floor: dict[int, tuple[int, int]]) -> TrackRecordStatByHorizon:
+    """PR B (#60) — helper builds a TrackRecordStatByHorizon where the
+    swing bucket carries `by_floor` and every other bucket is empty.
+    `_signal_with_ai` fixtures use `time_horizon="swing"`, so the per-signal
+    alert reads the swing bucket; mirroring that here keeps tests focused
+    on the cohort math rather than the bucketing logic (covered separately
+    in test_track_record)."""
+    by_floor_and_horizon: dict = {}
+    for floor in range(1, 11):
+        for label in ("scalp", "swing", "position", "legacy"):
+            by_floor_and_horizon[(floor, label)] = by_floor[floor] if label == "swing" else (0, 0)
+    return TrackRecordStatByHorizon(by_floor_and_horizon=by_floor_and_horizon)
+
 
 # ---------------------------------------------------------------------------
 # format_signal_message — pure function
@@ -415,15 +430,18 @@ class TestFormatSignalMessage:
         assert "Spot:</i> $82,352.65" in msg
 
     def test_track_record_stat_renders_when_stat_supplied_and_cohort_has_data(self):
-        signal = _signal_with_ai()  # confidence=7
-        stat = TrackRecordStat(
-            by_floor={
+        signal = _signal_with_ai()  # confidence=7, time_horizon=swing
+        stat = _stat_for_swing(
+            {
                 7: (15, 9),  # 9/15 → 60%
                 **{floor: (0, 0) for floor in [1, 2, 3, 4, 5, 6, 8, 9, 10]},
             }
         )
         msg = format_signal_message(signal, track_record_stat=stat)
-        assert "Our signals at confidence ≥7 hit target 60% of the time" in msg
+        # PR B (#60) — line is now prefixed by the signal's horizon
+        # ("Our swing signals at confidence ≥7..."). Verifies the bucket
+        # lookup ran against the right horizon.
+        assert "Our swing signals at confidence ≥7 hit target 60% of the time" in msg
         assert "(over 15 evaluated)" in msg
 
     def test_track_record_stat_omitted_when_stat_not_supplied(self):
@@ -437,17 +455,17 @@ class TestFormatSignalMessage:
         """No confidence → can't pick a cohort floor → skip the line cleanly
         rather than rendering 'confidence ≥None hit target X%'."""
         signal = _signal_with_ai(ai_analysis=None, confidence=None)
-        stat = TrackRecordStat(by_floor={floor: (10, 6) for floor in range(1, 11)})
+        stat = _stat_for_swing({floor: (10, 6) for floor in range(1, 11)})
         msg = format_signal_message(signal, track_record_stat=stat)
-        assert "Our signals at confidence" not in msg
+        assert "Our swing signals at confidence" not in msg
 
     def test_track_record_stat_omitted_when_cohort_is_empty(self):
         """Fresh deploy: no signals scored at this floor yet → null hit_rate
         → line skipped (better than rendering '0% over 0 evaluated')."""
-        signal = _signal_with_ai()  # confidence=7
-        stat = TrackRecordStat(by_floor={floor: (0, 0) for floor in range(1, 11)})
+        signal = _signal_with_ai()  # confidence=7, time_horizon=swing
+        stat = _stat_for_swing({floor: (0, 0) for floor in range(1, 11)})
         msg = format_signal_message(signal, track_record_stat=stat)
-        assert "Our signals at confidence" not in msg
+        assert "Our swing signals at confidence" not in msg
 
     def test_no_ai_still_renders_regime_and_news_blocks(self):
         """Regime + news context are captured at build-time independent of
@@ -979,20 +997,23 @@ class TestTrackRecordStatPrefetch:
     async def test_send_worker_calls_get_stats_exactly_once_per_tick(
         self, db_session, stub_send, monkeypatch
     ):
-        """A 3-message tick should issue ONE get_stats_by_confidence_floor
-        call, not three. Pins the cache + per-tick prefetch contract."""
+        """A 3-message tick should issue ONE
+        get_stats_by_confidence_floor_and_horizon call, not three. Pins
+        the cache + per-tick prefetch contract."""
         # Seed 3 deliveries.
         for i in range(3):
             await _seed_user_delivery(db_session, chat_id=f"500{i}", confidence=7)
 
         call_count = {"n": 0}
-        original = TrackRecordStat(by_floor={floor: (10, 7) for floor in range(1, 11)})
+        original = _stat_for_swing({floor: (10, 7) for floor in range(1, 11)})
 
         async def _stub(session):
             call_count["n"] += 1
             return original
 
-        monkeypatch.setattr("etfpulse.pipeline.delivery.get_stats_by_confidence_floor", _stub)
+        monkeypatch.setattr(
+            "etfpulse.pipeline.delivery.get_stats_by_confidence_floor_and_horizon", _stub
+        )
 
         await send_pending_deliveries(db_session)
         assert call_count["n"] == 1, "stat fetcher must be called once per tick, not per signal"
@@ -1007,9 +1028,11 @@ class TestTrackRecordStatPrefetch:
 
         async def _stub(session):
             call_count["n"] += 1
-            return TrackRecordStat(by_floor={floor: (5, 3) for floor in range(1, 11)})
+            return _stat_for_swing({floor: (5, 3) for floor in range(1, 11)})
 
-        monkeypatch.setattr("etfpulse.pipeline.delivery.get_stats_by_confidence_floor", _stub)
+        monkeypatch.setattr(
+            "etfpulse.pipeline.delivery.get_stats_by_confidence_floor_and_horizon", _stub
+        )
 
         await send_pending_deliveries(db_session)
         # Seed a second delivery so the second tick has work to do.

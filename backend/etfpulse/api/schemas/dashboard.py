@@ -39,21 +39,30 @@ class DashboardStats(BaseModel):
     current_regime: str | None = None
     signal_posture: str | None = None
 
-    # Stage 8-P5 (closes issue #44) — global 72h hit rate over ALL evaluated
-    # outcomes (no filters). Drives the home-page HeroHitRatePanel headline
-    # tile so users see "68% on 138 evaluated signals" without needing to
-    # roundtrip /api/track-record just for the number.
+    # PR B (#60) — `hit_rate_global` is the global hit rate over ALL
+    # evaluated outcomes (no filters). Renamed from `hit_rate_72h` because
+    # under the v2 rubric outcomes are scored against their OWN window
+    # (scalp 6h / swing 72h / position 168h), not a fixed 72h. The number
+    # is the same headline ("X% of targeted signals hit their target")
+    # but the "72h" label was a misleading lie for the swing-and-non-swing
+    # mixed cohort the value actually represents.
     #
     # Unit is PERCENT (0..100) — same as `/api/track-record.summary.hit_rate_pct`
-    # so the FE never has to convert between fraction and percent. Null when
-    # `evaluated_count == 0` OR when no signal that had a target was scored
-    # — better than rendering "0%" for an empty cohort.
+    # so the FE never has to convert between fraction and percent. Null
+    # when `evaluated_count == 0` OR when no signal that had a target was
+    # scored — better than rendering "0%" for an empty cohort.
     #
     # Denominator is `targeted_count` (signals where the AI set a target),
     # NOT `total_evaluated` — same rationale as the track-record endpoint:
     # signals where AI declined a target shouldn't dilute the rate.
+    hit_rate_global: float | None = Field(default=None, ge=0.0, le=100.0)
+    # DEPRECATED — same value as `hit_rate_global`, kept for one release
+    # cycle so a pinned-old frontend deploy doesn't 422 on the response
+    # shape. Drop after the v2 frontend is the only consumer in production.
+    # (CLAUDE.md rollback invariant — field REMOVE merges only after the
+    # last code that reads it has been rolled out for at least one cycle.)
     hit_rate_72h: float | None = Field(default=None, ge=0.0, le=100.0)
-    # Total SignalOutcome rows scored. Captioned next to hit_rate_72h
+    # Total SignalOutcome rows scored. Captioned next to hit_rate_global
     # ("on N evaluated signals"). 0 when the eval job hasn't produced any
     # outcome rows yet (cold-boot before signals age past 72h).
     evaluated_count: int = Field(default=0, ge=0)

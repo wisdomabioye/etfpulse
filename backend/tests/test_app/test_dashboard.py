@@ -79,8 +79,10 @@ class TestDashboardStats:
             # Stage 7-P7: regime fields null until the first cycle runs.
             "current_regime": None,
             "signal_posture": None,
-            # Stage 8-P5 (closes #44): hit-rate null + 0 evaluated until
-            # signals age past 72h AND have a target hit/missed.
+            # PR B (#60) — `hit_rate_global` is the v2 name; `hit_rate_72h`
+            # stays for one deprecation cycle and carries the same value.
+            # Both null + 0 evaluated until signals age past their window.
+            "hit_rate_global": None,
             "hit_rate_72h": None,
             "evaluated_count": 0,
         }
@@ -175,6 +177,9 @@ class TestDashboardStats:
             "last_signal_at",
             "current_regime",
             "signal_posture",
+            # PR B (#60) — `hit_rate_global` is v2; `hit_rate_72h` is the
+            # deprecated parallel kept for one release cycle.
+            "hit_rate_global",
             "hit_rate_72h",
             "evaluated_count",
         }

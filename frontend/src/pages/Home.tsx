@@ -86,7 +86,15 @@ export function Home() {
           <HeroHitRatePanel
             signalsToday={stats.data?.signals_today ?? (stats.isError ? null : 0)}
             totalSignals={stats.data?.total_signals ?? (stats.isError ? null : 0)}
-            hitRate72h={stats.data?.hit_rate_72h ?? null}
+            // PR B (#60) — read `hit_rate_global` (the v2 name) and fall
+            // back to `hit_rate_72h` for the one-cycle window where the
+            // backend is on the new code but a stale CDN served an older
+            // frontend (the fallback path means a half-rolled deploy
+            // doesn't show "—" while both fields carry the same value
+            // anyway). Drop the `??` fallback after the next release.
+            hitRateGlobal={
+              stats.data?.hit_rate_global ?? stats.data?.hit_rate_72h ?? null
+            }
             evaluatedCount={stats.data?.evaluated_count ?? null}
           />
         </div>

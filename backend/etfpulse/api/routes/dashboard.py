@@ -93,7 +93,7 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
     # between fraction and percent. None when no signal had a target —
     # better than rendering "0%" for an empty cohort.
     targeted = outcome_row.targeted_count
-    hit_rate_72h = compute_hit_rate_pct(outcome_row.targets_hit, targeted)
+    hit_rate_global = compute_hit_rate_pct(outcome_row.targets_hit, targeted)
 
     return DashboardStats(
         total_signals=row.total_signals,
@@ -102,6 +102,12 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
         last_signal_at=row.last_signal_at,
         current_regime=current_regime,
         signal_posture=signal_posture,
-        hit_rate_72h=hit_rate_72h,
+        # PR B (#60) — `hit_rate_global` is the v2 name; `hit_rate_72h` is
+        # the deprecated parallel kept for one release cycle. Both carry
+        # the same value to avoid two-truth drift while the frontend rolls
+        # over. Drop `hit_rate_72h` once the v2 frontend is the only
+        # consumer in production.
+        hit_rate_global=hit_rate_global,
+        hit_rate_72h=hit_rate_global,
         evaluated_count=outcome_row.evaluated_count,
     )

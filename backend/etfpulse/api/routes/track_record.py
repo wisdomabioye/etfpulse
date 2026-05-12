@@ -23,7 +23,7 @@ consumers, two different endpoints — clean separation.
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -44,7 +44,26 @@ from etfpulse.api.schemas.track_record import (
     TrackRecordSummary,
 )
 from etfpulse.models import Signal, SignalOutcome
-from etfpulse.pipeline.track_record import compute_hit_rate_pct
+from etfpulse.pipeline.track_record import (
+    HORIZON_LABELS,
+    compute_hit_rate_pct,
+    get_stats_by_confidence_floor_and_horizon,
+)
+
+# PR B (#60) — `horizon` query param surface. Mirrors
+# `pipeline.track_record.HorizonLabel`. `legacy` lets operators inspect the
+# pre-v2 grandfathered rows in isolation — necessary while the wipe-and-
+# reevaluate cleanup (#61) is pending.
+HorizonFilterLiteral = Literal["scalp", "swing", "position", "legacy"]
+# Inclusive boundaries — mirror `horizon_label_for` so the filter query
+# can't drift from the bucketing helper. Each label maps to a
+# `(min_hours, max_hours_exclusive)` range; NULL → "legacy" via a separate
+# `IS NULL` filter rather than a range. Keeps the SQL trivially auditable.
+_HORIZON_RANGE_HOURS: dict[HorizonFilterLiteral, tuple[int, int | None]] = {
+    "scalp": (0, 24),
+    "swing": (24, 96),
+    "position": (96, 24 * 365 * 10),  # 10y cap — sentinel "no upper bound" for SQL
+}
 
 # Generic so `_apply_filters` returns the same Select shape it accepts —
 # keeps the row query and the aggregate query sharing one WHERE-builder.
@@ -68,6 +87,20 @@ async def get_track_record(
         default=None,
         pattern=r"^v[0-9]+$",
         description="Restrict to outcomes whose source signal was built with this prompt version.",
+    ),
+    # PR B (#60) — restrict to one horizon bucket. None = include all
+    # buckets (including grandfathered `legacy` rows). The bucketed
+    # `summary.hit_rate_by_horizon` is ALWAYS computed across all buckets
+    # — that filter doesn't apply to the summary because the per-bucket
+    # numbers are the whole point of the UI's "see all four side-by-side"
+    # widget. Only the paginated `items` + the flat aggregate counts
+    # (`total_evaluated`, `targets_hit`, etc) respect the filter.
+    horizon: HorizonFilterLiteral | None = Query(
+        default=None,
+        description=(
+            "Restrict to one horizon bucket: scalp (<24h), swing (24-96h), "
+            "position (≥96h), legacy (NULL window_hours — pre-v2 rubric rows)."
+        ),
     ),
     cursor: str | None = Query(default=None),
     page: int | None = Query(default=None, ge=1),
@@ -108,6 +141,19 @@ async def get_track_record(
             q = q.join(Signal, Signal.id == SignalOutcome.signal_id).where(
                 Signal.ai_prompt_version == ai_prompt_version
             )
+        # PR B (#60) — horizon bucket filter on `window_hours`. `legacy`
+        # is the NULL-window grandfathered bucket; the others use
+        # half-open ranges that mirror `horizon_label_for` exactly.
+        if horizon is not None:
+            if horizon == "legacy":
+                q = q.where(SignalOutcome.window_hours.is_(None))
+            else:
+                lo, hi = _HORIZON_RANGE_HOURS[horizon]
+                q = q.where(
+                    SignalOutcome.window_hours.is_not(None),
+                    SignalOutcome.window_hours >= lo,
+                    SignalOutcome.window_hours < hi,
+                )
         return q
 
     # ------------------------------------------------------------------
@@ -138,12 +184,33 @@ async def get_track_record(
     targeted = summary_row.targeted_count
     hit_rate = compute_hit_rate_pct(summary_row.targets_hit, targeted)
 
+    # PR B (#60) — bucketed hit rate. Computed via the same
+    # `get_stats_by_confidence_floor_and_horizon` helper used by the bot
+    # cohort-stat call (PR B.3), so the UI's bucketed widget and the
+    # bot's per-signal cohort line agree by construction. floor=1
+    # cumulates across all confidence levels — same convention as the
+    # global tile on /api/dashboard/stats.
+    #
+    # The bucketed view is intentionally NOT filtered by `horizon` (or by
+    # the other filters): the widget's whole point is to compare buckets
+    # side-by-side. The filtered `hit_rate_pct` above and the paginated
+    # `items` below still respect the filter for the "list view" UX.
+    by_horizon_stat = await get_stats_by_confidence_floor_and_horizon(session)
+    hit_rate_by_horizon: dict[str, float | None] = {
+        label: compute_hit_rate_pct(
+            by_horizon_stat.by_floor_and_horizon[(1, label)][1],  # cumulative hits
+            by_horizon_stat.by_floor_and_horizon[(1, label)][0],  # cumulative targeted
+        )
+        for label in HORIZON_LABELS
+    }
+
     summary = TrackRecordSummary(
         total_evaluated=summary_row.total_evaluated,
         targets_hit=summary_row.targets_hit,
         stops_hit=summary_row.stops_hit,
         targeted_count=targeted,
         hit_rate_pct=hit_rate,
+        hit_rate_by_horizon=hit_rate_by_horizon,
         avg_confidence_hits=float(avg_hits) if avg_hits is not None else None,
         avg_confidence_misses=float(avg_misses) if avg_misses is not None else None,
     )

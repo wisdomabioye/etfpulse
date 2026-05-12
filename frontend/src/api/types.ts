@@ -76,6 +76,13 @@ export interface AIAnalysis {
   target_price: number | null;
 }
 
+/** PR B (#60) — horizon bucket label. Mirrors backend
+ *  `pipeline.track_record.HorizonLabel`. `legacy` is the bucket for rows
+ *  written before PR B's v2 rubric (NULL `scoring_version`); v2 rows
+ *  bucket by their AI-stated time horizon. The bucket key — not the
+ *  raw `window_hours` — is what the UI cares about. */
+export type HorizonLabel = 'scalp' | 'swing' | 'position' | 'legacy';
+
 export interface SignalOutcome {
   entry_price: number | null;
   stop_price: number | null;
@@ -83,6 +90,25 @@ export interface SignalOutcome {
   price_at_signal: number;
   price_after_24h: number | null;
   price_after_72h: number | null;
+  /** PR B (#60) — close at t0 + window_hours (the AI-stated validity end).
+   *  Canonical "outcome price" for v2 rows; falls back to `price_after_72h`
+   *  for legacy rows (NULL `scoring_version`). For swing signals (72h
+   *  window) this equals `price_after_72h` by construction; for position
+   *  (168h) it's the close at 7 days, beyond the legacy 72h checkpoint;
+   *  for scalp (#62 pending intraday klines) it stays null. */
+  price_at_validity_end: number | null;
+  /** PR B (#60) — the scoring window used for this outcome, in hours.
+   *  Derived at evaluation time from `(Signal.expires_at - Signal.created_at)`.
+   *  NULL on legacy rows (pre-PR-B; scored against fixed 72h). FE uses
+   *  this to pick the right "+Xh" label on the outcome card (scalp 6h /
+   *  swing 24h+72h / position 24h+72h+168h). */
+  window_hours: number | null;
+  /** PR B (#60) — rubric version that produced this row. `'v2'` for
+   *  outcomes written by the per-horizon evaluator; NULL on legacy rows
+   *  (treated as `'v1'` by the reader). FE renders a "legacy 72h
+   *  scoring" badge when NULL — flagged for the wipe-and-reevaluate
+   *  cleanup tracked as #61. */
+  scoring_version: string | null;
   hit_target: boolean | null;
   hit_stop: boolean | null;
   max_favorable: number | null;
@@ -167,16 +193,21 @@ export interface DashboardStats {
    * the stack. */
   current_regime: string | null;
   signal_posture: string | null;
-  /** Stage 8-P5 (closes issue #44) — global 72h hit rate as PERCENT (0..100).
-   * Same unit as `/api/track-record.summary.hit_rate_pct` so consumers
-   * never convert. Null when no signal with a target was scored —
-   * HeroHitRatePanel renders "—" + "Evaluation pending" caption.
-   * Denominator is signals where AI set a target, NOT all evaluated
-   * signals (mirrors track-record endpoint semantics). */
+  /** PR B (#60) — global hit rate as PERCENT (0..100). Renamed from
+   *  `hit_rate_72h` because under the v2 rubric outcomes are scored
+   *  against their OWN window, not a fixed 72h. Same unit as
+   *  `/api/track-record.summary.hit_rate_pct`. Null when no signal with
+   *  a target was scored — HeroHitRatePanel renders "—" + caption.
+   *  Denominator is signals where AI set a target, NOT all evaluated
+   *  signals. */
+  hit_rate_global: number | null;
+  /** DEPRECATED — backend writes the same value as `hit_rate_global` for
+   *  one release cycle so a pinned-old frontend doesn't 422 on the
+   *  response shape. Drop after the v2 frontend is the only consumer. */
   hit_rate_72h: number | null;
-  /** Total SignalOutcome rows scored — captioned next to hit_rate_72h
-   *  ("on N evaluated signals"). 0 before any signal ages past the 72h
-   *  eval delay. */
+  /** Total SignalOutcome rows scored — captioned next to hit_rate_global
+   *  ("on N evaluated signals"). 0 before any signal ages past its
+   *  validity window. */
   evaluated_count: number;
 }
 
@@ -217,6 +248,14 @@ export interface TrackRecordSummary {
   targeted_count: number;
   /** 0..100. Null when `targeted_count === 0`. */
   hit_rate_pct: number | null;
+  /** PR B (#60) — bucketed hit rate. Keys are `'scalp' | 'swing' |
+   *  'position' | 'legacy'` (all four always present). Each value is
+   *  null when that bucket has no targeted signals — same null-vs-zero
+   *  convention as `hit_rate_pct`. Drives the side-by-side bucket tiles
+   *  on the TrackRecord page; intentionally computed across ALL rows
+   *  regardless of the `horizon` filter so the comparison stays
+   *  apples-to-apples. */
+  hit_rate_by_horizon: Record<HorizonLabel, number | null>;
   avg_confidence_hits: number | null;
   avg_confidence_misses: number | null;
 }
@@ -238,6 +277,11 @@ export interface TrackRecordItem {
   price_at_signal: number;
   price_after_24h: number | null;
   price_after_72h: number | null;
+  /** PR B (#60) — see `SignalOutcome` for field semantics; same three
+   *  fields, same NULL-means-legacy convention. */
+  price_at_validity_end: number | null;
+  window_hours: number | null;
+  scoring_version: string | null;
 
   /** Tri-state — `true` hit, `false` did not hit, `null` no level set. */
   hit_target: boolean | null;
@@ -266,6 +310,12 @@ export interface TrackRecordFilters {
   asset?: AssetSymbol;
   signal_type?: SignalType;
   confidence_min?: number;
+  /** PR B (#60) — restrict to one horizon bucket. Omit for all rows
+   *  (including grandfathered `legacy`). Mirrors the backend
+   *  `?horizon=` query param. The bucketed `summary.hit_rate_by_horizon`
+   *  is ALWAYS all four buckets regardless — only the paginated `items`
+   *  and flat aggregate counts respect the filter. */
+  horizon?: HorizonLabel;
   limit?: number;
   /** 1-based page number for offset pagination. Omit to use cursor mode. */
   page?: number;

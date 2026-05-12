@@ -46,6 +46,36 @@ export function OutcomeCard({ outcome, expiresAt }: OutcomeCardProps) {
   const ret24 = pctReturn(outcome.price_after_24h, entryBaseline);
   const ret72 = pctReturn(outcome.price_after_72h, entryBaseline);
 
+  // PR B (#60) — horizon-aware checkpoint rows. The legacy +24h/+72h rows
+  // render whenever the window includes them (or for grandfathered rows
+  // where `window_hours` is NULL). The new validity-end row appears for
+  // horizons whose end falls outside the legacy 72h checkpoint
+  // (position 168h today, scalp 6h once #62 lands).
+  const windowHours = outcome.window_hours;
+  const isLegacyScoring = outcome.scoring_version === null;
+  const isScalp = windowHours !== null && windowHours < 24;
+  // Show the legacy two-row block when the window is wide enough to
+  // include both checkpoints (24h+72h), or when grandfathered (window
+  // unknown — render as before so the long tail of pre-PR-B rows looks
+  // unchanged).
+  const showLegacyRows = windowHours === null || windowHours >= 72;
+  // Show a third "+Nh" row when validity end is outside the 72h checkpoint
+  // AND we have a value. Skips swing (window=72, same as +72h checkpoint).
+  const showValidityEndRow =
+    !isScalp &&
+    windowHours !== null &&
+    windowHours !== 72 &&
+    outcome.price_at_validity_end !== null;
+  const retValidityEnd = showValidityEndRow
+    ? pctReturn(outcome.price_at_validity_end, entryBaseline)
+    : null;
+  // Scalp under PR B is bucketed but unscored (#62 pending intraday
+  // klines). Render the "+6h" row so users see the shape; the price +
+  // return will be "—" until #62 lands.
+  const retScalp = isScalp
+    ? pctReturn(outcome.price_at_validity_end, entryBaseline)
+    : null;
+
   return (
     <div
       className="rounded-lg bg-bg-2"
@@ -58,7 +88,22 @@ export function OutcomeCard({ outcome, expiresAt }: OutcomeCardProps) {
       <div
         className="flex items-center justify-between px-5 py-3 border-b border-border-2 font-mono text-[10px] uppercase tracking-[0.1em] text-text-3"
       >
-        <span>Outcome</span>
+        <span className="inline-flex items-center gap-2">
+          Outcome
+          {/* PR B (#60) — surface grandfathered rows so users know this
+              outcome was scored against the fixed 72h window, not the
+              v2 per-horizon rubric. Pre-cleanup (#61) the badge tells
+              the operator + user the methodology disclosure honestly. */}
+          {isLegacyScoring && (
+            <span
+              className="font-mono text-[9px] tracking-normal normal-case text-text-3 px-1.5 py-0.5 rounded"
+              style={{ border: '1px solid var(--color-border-3)' }}
+              title="Scored against the legacy 72h window — pre-v2 rubric"
+            >
+              legacy 72h
+            </span>
+          )}
+        </span>
         <span style={{ color: verdict.color }}>{verdict.label}</span>
       </div>
 
@@ -77,16 +122,34 @@ export function OutcomeCard({ outcome, expiresAt }: OutcomeCardProps) {
             value={formatUsdPrice(outcome.price_at_signal)}
             secondary={null}
           />
-          <Row
-            label="+24h"
-            value={fmtPriceOrDash(outcome.price_after_24h)}
-            secondary={ret24}
-          />
-          <Row
-            label="+72h"
-            value={fmtPriceOrDash(outcome.price_after_72h)}
-            secondary={ret72}
-          />
+          {showLegacyRows && (
+            <>
+              <Row
+                label="+24h"
+                value={fmtPriceOrDash(outcome.price_after_24h)}
+                secondary={ret24}
+              />
+              <Row
+                label="+72h"
+                value={fmtPriceOrDash(outcome.price_after_72h)}
+                secondary={ret72}
+              />
+            </>
+          )}
+          {showValidityEndRow && (
+            <Row
+              label={`+${windowHours}h`}
+              value={fmtPriceOrDash(outcome.price_at_validity_end)}
+              secondary={retValidityEnd}
+            />
+          )}
+          {isScalp && (
+            <Row
+              label={`+${windowHours}h`}
+              value={fmtPriceOrDash(outcome.price_at_validity_end)}
+              secondary={retScalp}
+            />
+          )}
         </Section>
       </div>
 

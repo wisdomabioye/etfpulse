@@ -5,7 +5,7 @@ import { StatusDot } from '../ui';
  *
  * Layout (per mock HomeV3):
  *   ┌─────────────────────────────────────────┐
- *   │ 72H HIT RATE              ● tracking    │  <- bg-3 header strip, mono 10px
+ *   │ HIT RATE                  ● tracking    │  <- bg-3 header strip, mono 10px
  *   ├─────────────────────────────────────────┤
  *   │                                         │
  *   │  68%                                    │  <- 96px, tabular, `%` is text-3 + 48px
@@ -18,15 +18,17 @@ import { StatusDot } from '../ui';
  *   │  └─────────────┴─────────────┘          │
  *   └─────────────────────────────────────────┘
  *
- * Stage 8-P5 — `hit_rate_72h` + `evaluated_count` now come live from
- * `/api/dashboard/stats` (closes open_issues #44). Empty-DB state still
- * shows "—" + "Evaluation pending" until the first signal ages past the
- * 72h eval delay AND has a target hit/missed.
+ * PR B (#60) — relabeled from "72H HIT RATE" to "HIT RATE" because the
+ * v2 rubric scores each signal against its OWN validity window (scalp 6h /
+ * swing 72h / position 168h), not a fixed 72h. The headline number is the
+ * mixed-window global hit rate; the bucketed comparison lives on the
+ * TrackRecord page.
  *
- * `hitRate72h` prop is in PERCENT (0..100) — same unit as the API field
- * (`DashboardStats.hit_rate_72h`) and `/api/track-record.summary.hit_rate_pct`.
- * One canonical unit across the stack means the panel doesn't multiply or
- * divide; the API number renders verbatim.
+ * `hitRateGlobal` prop is in PERCENT (0..100) — same unit as the API
+ * field (`DashboardStats.hit_rate_global`) and
+ * `/api/track-record.summary.hit_rate_pct`. One canonical unit across the
+ * stack means the panel doesn't multiply or divide; the API number renders
+ * verbatim.
  */
 
 interface HeroHitRatePanelProps {
@@ -35,28 +37,28 @@ interface HeroHitRatePanelProps {
   totalSignals: number | null;
   /** Hit rate as PERCENT (0..100). Null when no signal with a target has
    *  been scored yet — caption swaps to the pending state. */
-  hitRate72h?: number | null;
-  /** Total evaluated outcome rows. 0 before any signal ages past the 72h
-   *  eval delay. */
+  hitRateGlobal?: number | null;
+  /** Total evaluated outcome rows. 0 before any signal ages past its
+   *  validity window. */
   evaluatedCount?: number | null;
 }
 
 export function HeroHitRatePanel({
   signalsToday,
   totalSignals,
-  hitRate72h = null,
+  hitRateGlobal = null,
   evaluatedCount = null,
 }: HeroHitRatePanelProps) {
-  const hasHitRate = hitRate72h !== null && hitRate72h !== undefined;
-  // hitRate72h is already in percent — render as integer for the headline,
-  // no `* 100` conversion (the API serialises percent, not fraction).
-  const pctString = hasHitRate ? Math.round(hitRate72h!).toString() : '—';
+  const hasHitRate = hitRateGlobal !== null && hitRateGlobal !== undefined;
+  // Already in percent — render as integer for the headline, no `* 100`
+  // conversion (the API serialises percent, not fraction).
+  const pctString = hasHitRate ? Math.round(hitRateGlobal!).toString() : '—';
 
   return (
     <div className="border border-border-2 rounded-[10px] bg-bg-2 overflow-hidden">
       {/* Header strip */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-bg-3 border-b border-border-2 font-mono text-[10px] uppercase tracking-[0.1em] text-text-3">
-        <span>72H HIT RATE</span>
+        <span>HIT RATE</span>
         <span className={`inline-flex items-center gap-1.5 ${hasHitRate ? 'text-pos' : 'text-text-4'}`}>
           <StatusDot color={hasHitRate ? 'pos' : 'muted'} hollow={!hasHitRate} />
           {hasHitRate ? 'tracking' : 'pending'}
@@ -79,7 +81,7 @@ export function HeroHitRatePanel({
         <div className="text-text-2 text-[13px] mt-2 mb-6">
           {hasHitRate
             ? `on ${evaluatedCount ?? 0} evaluated signals`
-            : 'Evaluation pending — first outcomes land 72h after a signal fires'}
+            : 'Evaluation pending — first outcomes land once signals complete their validity window'}
         </div>
 
         {/* 2-col split: signals today + total */}

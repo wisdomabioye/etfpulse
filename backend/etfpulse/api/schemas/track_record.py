@@ -46,8 +46,19 @@ class TrackRecordSummary(BaseModel):
     # `targets_hit / targeted_count` is the canonical hit_rate denominator.
     targeted_count: int = Field(ge=0)
     # 0..100. None when `targeted_count == 0` — better than rendering "0%"
-    # for an empty cohort.
+    # for an empty cohort. Mixed-horizon (legacy semantics) — for the
+    # honest per-horizon view, read `hit_rate_by_horizon` below.
     hit_rate_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    # PR B (#60) — bucketed hit rate. Keys are "scalp" / "swing" /
+    # "position" / "legacy". Each value is null when that bucket has no
+    # targeted signals (same null-vs-zero convention as `hit_rate_pct`).
+    # The bucketing question is "what window was each signal scored
+    # against?" — `legacy` is rows pre-PR-B (NULL `scoring_version`,
+    # always scored against a fixed 72h). New cohorts are bucketed by
+    # their AI-stated `time_horizon`; until intraday kline support lands
+    # (#62), scalp signals are skipped at evaluation so the "scalp" key
+    # will be `null` for the foreseeable future.
+    hit_rate_by_horizon: dict[str, float | None] = Field(default_factory=dict)
     # Average `confidence` (1..10) of the signals that hit / didn't hit
     # their target. Useful for showing "high-confidence signals win more
     # often". None when the respective bucket is empty.
@@ -78,6 +89,11 @@ class TrackRecordItemOut(BaseModel):
     price_at_signal: float
     price_after_24h: float | None = None
     price_after_72h: float | None = None
+    # PR B (#60) — see `SignalOutcomeOut` for the field semantics; same
+    # three fields, same NULL-means-legacy convention.
+    price_at_validity_end: float | None = None
+    window_hours: int | None = None
+    scoring_version: str | None = None
 
     # Tri-state — `True` hit, `False` did not hit, `None` no level set.
     # See `pipeline/track_record._compute_metrics` for the semantics.

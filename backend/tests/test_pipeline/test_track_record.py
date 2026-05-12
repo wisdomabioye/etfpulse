@@ -128,6 +128,7 @@ class TestComputeMetricsLong:
             stop=Decimal("83000"),
             target=Decimal("85000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -149,6 +150,7 @@ class TestComputeMetricsLong:
             stop=Decimal("83200"),
             target=Decimal("85000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -170,6 +172,7 @@ class TestComputeMetricsLong:
             stop=Decimal("83000"),
             target=Decimal("86000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -196,6 +199,7 @@ class TestComputeMetricsLong:
             stop=None,
             target=None,
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -222,6 +226,7 @@ class TestComputeMetricsLong:
             stop=None,
             target=None,
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -248,6 +253,7 @@ class TestComputeMetricsShort:
             stop=Decimal("85500"),
             target=Decimal("83000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -269,6 +275,7 @@ class TestComputeMetricsShort:
             stop=Decimal("85500"),
             target=Decimal("83000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -289,6 +296,7 @@ class TestComputeMetricsLevels:
             stop=Decimal("83000"),
             target=None,
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -305,6 +313,7 @@ class TestComputeMetricsLevels:
             stop=None,
             target=Decimal("85000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -330,6 +339,7 @@ class TestComputeMetricsPriceClose:
             stop=None,
             target=None,
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is not None
@@ -353,6 +363,7 @@ class TestComputeMetricsEmpty:
             stop=Decimal("83000"),
             target=Decimal("85000"),
             t0_ms=_T0_MS,
+            window_hours=72,
             bars=bars,
         )
         assert m is None
@@ -366,6 +377,8 @@ class TestComputeMetricsEmpty:
 def _make_signal(
     *,
     created_at: datetime,
+    expires_at: datetime | None = None,
+    horizon_hours: int = 72,
     suggested_action: str = "consider long",
     confidence: int | None = 7,
     price_at_creation: Decimal | None = Decimal("84200"),
@@ -375,7 +388,19 @@ def _make_signal(
     target_price: Decimal | None = Decimal("85000"),
     fingerprint_extra: str = "x",
 ) -> Signal:
-    return Signal(
+    """Build an in-memory Signal for evaluator tests.
+
+    PR B (#60) — the evaluator candidate filter is now
+    `expires_at <= now AND expires_at IS NOT NULL`. The helper sets
+    `expires_at = created_at + horizon_hours` by default (72h swing) so
+    existing tests that pre-date the v2 rubric keep working without
+    per-test edits. Horizon-specific tests pass `horizon_hours=168` for
+    position or override `expires_at` directly.
+
+    `created_at` is set on the Signal object too — Signal's column has
+    `server_default=func.now()`, but assigning explicitly sends our value
+    on INSERT instead of letting the server clock fire."""
+    signal = Signal(
         signal_type="flow_anomaly",
         asset="BTC",
         trigger_data={"streak_days": 4},
@@ -393,6 +418,11 @@ def _make_signal(
         stop_price=stop_price,
         target_price=target_price,
     )
+    signal.created_at = created_at
+    signal.expires_at = (
+        expires_at if expires_at is not None else created_at + timedelta(hours=horizon_hours)
+    )
+    return signal
 
 
 @pytest.fixture
@@ -925,3 +955,160 @@ class TestEvaluatePendingOutcomesLimit:
         outcomes = (await db_session.execute(select(SignalOutcome))).scalars().all()
         assert len(outcomes) == 1
         assert outcomes[0].signal_id == old.id
+
+
+# ---------------------------------------------------------------------------
+# PR B (issue #60) — per-horizon scoring
+# ---------------------------------------------------------------------------
+
+
+class TestComputeMetricsHorizonAware:
+    """PR B replaced the fixed 72h window with `window_hours` per-signal.
+    These tests pin the new contract: legacy 24h/72h checkpoints are NULL
+    when outside the window, and `price_at_validity_end` is the canonical
+    'outcome close' for every horizon."""
+
+    def test_swing_72h_populates_legacy_and_validity_end_same(self):
+        """Swing's validity end (72h) == legacy 72h checkpoint. Both columns
+        populate identically so existing dashboard/Telegram consumers reading
+        `price_after_72h` keep working unchanged for swing signals."""
+        bars = _four_day_bars(
+            [
+                ("84000", "84200", "83800", "84100"),
+                ("84100", "84500", "84000", "84300"),
+                ("84300", "84600", "84200", "84400"),
+                ("84400", "84800", "84300", "84600"),
+            ]
+        )
+        m = _compute_metrics(
+            direction=SignalDirection.LONG,
+            entry=Decimal("84000"),
+            stop=Decimal("83000"),
+            target=Decimal("90000"),
+            t0_ms=_T0_MS,
+            window_hours=72,
+            bars=bars,
+        )
+        assert m is not None
+        # validity_end is the close of the bar containing t0+72h, same as
+        # the legacy 72h checkpoint by construction. Asserting equality
+        # protects against drift in `_pick_close_at`'s targeting.
+        assert m.price_at_validity_end == m.price_after_72h
+        assert m.price_after_24h is not None  # 24h is inside the 72h window
+
+    def test_position_168h_populates_all_three_checkpoints(self):
+        """A 168h-window signal records 24h, 72h, AND validity_end (168h).
+        The legacy fields aren't NULL — they're meaningful interim checkpoints
+        for a multi-day trade, just not the final outcome price."""
+        # Eight daily bars covering Day 22..29 (168h = 7 days after t0).
+        # _T0_MS is the open of Day 22 + 4h.
+        bars = [
+            PriceBar(
+                timestamp_ms=_T0_MS + (i - 1) * 24 * 3600 * 1000,
+                open=Decimal("84000") + Decimal(i * 50),
+                high=Decimal("84500") + Decimal(i * 50),
+                low=Decimal("83800") + Decimal(i * 50),
+                close=Decimal("84200") + Decimal(i * 50),
+            )
+            for i in range(8)  # 0..7 days
+        ]
+        m = _compute_metrics(
+            direction=SignalDirection.LONG,
+            entry=Decimal("84200"),
+            stop=Decimal("83000"),
+            target=Decimal("90000"),
+            t0_ms=_T0_MS,
+            window_hours=168,
+            bars=bars,
+        )
+        assert m is not None
+        # All three are populated for position (168h covers both interim
+        # checkpoints + the end).
+        assert m.price_after_24h is not None
+        assert m.price_after_72h is not None
+        assert m.price_at_validity_end is not None
+        # validity_end (close at t0+168h) is the last bar's close — higher
+        # than the 72h checkpoint (price drift up over the window).
+        assert m.price_at_validity_end > m.price_after_72h
+
+
+class TestEvaluatePendingOutcomesV2:
+    """The v2 evaluator skips scalp signals (#62), rejects invalid windows,
+    and stamps `scoring_version='v2'` + `window_hours` + `price_at_validity_end`
+    on every new outcome row."""
+
+    async def test_skips_scalp_signal_with_dedicated_counter(self, db_session, stub_klines):
+        """A scalp signal (6h validity) is bucketed in `skipped_scalp_intraday_unsupported`,
+        NOT in `skipped_no_bars_in_window`. The distinct counter is what makes
+        '#62 is the blocker' visible to operators rather than 'kline data is missing'."""
+        t0 = datetime.now(UTC) - timedelta(hours=10)
+        scalp = _make_signal(
+            created_at=t0,
+            horizon_hours=6,  # scalp
+            fingerprint_extra="scalp",
+        )
+        db_session.add(scalp)
+        await db_session.flush()
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 1
+        assert summary["skipped_scalp_intraday_unsupported"] == 1
+        assert summary["evaluated"] == 0
+        assert summary["skipped_no_bars_in_window"] == 0  # not the generic path
+        # No outcome row inserted.
+        assert (await db_session.execute(select(SignalOutcome))).scalars().first() is None
+
+    async def test_rejects_invalid_window_when_expires_at_equals_created_at(
+        self, db_session, stub_klines
+    ):
+        """Defensive: a signal with non-positive (`expires_at <= created_at`)
+        window — produced by clock skew or a buggy future `compute_expires_at`
+        — is skipped with the dedicated counter, NOT silently scored."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        bad = _make_signal(
+            created_at=t0,
+            expires_at=t0,  # zero-length window
+            fingerprint_extra="zero-window",
+        )
+        # Note: candidate gate is `expires_at <= now` — t0 (80h ago) ≤ now.
+        # The invalid-window guard fires INSIDE _evaluate_one.
+        db_session.add(bad)
+        await db_session.flush()
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 1
+        assert summary["skipped_invalid_window"] == 1
+        assert summary["evaluated"] == 0
+
+    async def test_v2_stamps_window_hours_and_scoring_version_on_outcome(
+        self, db_session, stub_klines
+    ):
+        """Every new outcome row carries `scoring_version='v2'` and the
+        derived `window_hours`. Legacy NULL semantics are preserved for old
+        rows but new writes are always tagged."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        signal = _make_signal(created_at=t0, fingerprint_extra="v2-stamp")
+        db_session.add(signal)
+        await db_session.flush()
+
+        t0_ms = int(t0.timestamp() * 1000)
+        stub_klines["bars"] = [
+            PriceBar(
+                timestamp_ms=t0_ms + i * 24 * 3600 * 1000,
+                open=Decimal("84200"),
+                high=Decimal("84300"),
+                low=Decimal("84100"),
+                close=Decimal("84250"),
+            )
+            for i in range(3)
+        ]
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["evaluated"] == 1
+
+        outcome = (await db_session.execute(select(SignalOutcome))).scalar_one()
+        assert outcome.scoring_version == "v2"
+        assert outcome.window_hours == 72  # swing default in _make_signal
+        # price_at_validity_end is populated (= price_after_72h for swing).
+        assert outcome.price_at_validity_end is not None
+        assert outcome.price_at_validity_end == outcome.price_after_72h

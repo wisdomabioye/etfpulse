@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useTrackRecord } from '../api/queries';
 import type {
   AssetSymbol,
+  HorizonLabel,
   SignalType,
   TrackRecordFilters,
   TrackRecordItem,
@@ -69,7 +70,10 @@ export function TrackRecord() {
   const summary = query.data?.summary ?? null;
 
   const hasActiveFilters = Boolean(
-    filters.asset || filters.signal_type || (filters.confidence_min ?? 1) > 1,
+    filters.asset ||
+      filters.signal_type ||
+      filters.horizon ||
+      (filters.confidence_min ?? 1) > 1,
   );
 
   const clearFilters = () => {
@@ -82,7 +86,7 @@ export function TrackRecord() {
       <PageHeader
         eyebrow={
           <Kicker dot dotColor="pos">
-            Public track record · 72h hit rate
+            Public track record · hit rate by horizon
           </Kicker>
         }
         title="Track record"
@@ -114,6 +118,7 @@ export function TrackRecord() {
       ) : summary ? (
         <>
           <SummaryGrid summary={summary} className="mt-6" />
+          <HorizonBucketGrid summary={summary} className="mt-3" />
 
           <FilterRow
             value={filters}
@@ -131,8 +136,8 @@ export function TrackRecord() {
                 }
                 hint={
                   hasActiveFilters
-                    ? 'Try loosening the confidence floor or clearing the asset/type filter.'
-                    : 'First outcomes land 72h after a signal fires — the evaluator runs hourly after that.'
+                    ? 'Try loosening the confidence floor or clearing the asset/type/horizon filter.'
+                    : 'First outcomes land once signals complete their validity window — the evaluator runs hourly after that.'
                 }
                 action={
                   hasActiveFilters ? (
@@ -191,12 +196,61 @@ function SummaryGrid({
       className={`grid grid-cols-2 md:grid-cols-4 gap-2.5 ${className ?? ''}`.trim()}
     >
       <StatTile label="Total evaluated" value={summary.total_evaluated} />
-      <StatTile label="Hit rate (72h)" value={hitRate} />
+      {/* PR B (#60) — renamed from "Hit rate (72h)" because the v2 rubric
+          scores each signal against its OWN window. Per-horizon breakdown
+          lives in <HorizonBucketGrid> right below this tile. */}
+      <StatTile label="Hit rate" value={hitRate} />
       <StatTile
         label="Hits / Stops"
         value={`${summary.targets_hit} / ${summary.stops_hit}`}
       />
       <StatTile label="Avg conf · hits/misses" value={confDeltaText} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Horizon bucket grid — PR B (#60) per-bucket hit rate, side-by-side
+// ---------------------------------------------------------------------------
+
+const HORIZON_DESCRIPTIONS: Record<HorizonLabel, string> = {
+  scalp: 'scalp · ~6h',
+  swing: 'swing · ~72h',
+  position: 'position · ~7d',
+  legacy: 'legacy · 72h fixed',
+};
+
+function HorizonBucketGrid({
+  summary,
+  className,
+}: {
+  summary: TrackRecordSummary;
+  className?: string;
+}) {
+  // Bucketed hit-rate from `/api/track-record.summary.hit_rate_by_horizon`.
+  // The backend ALWAYS emits all four keys; FE renders them in fixed order
+  // (scalp → swing → position → legacy) so the row reads chronologically
+  // by horizon length, then the legacy tail.
+  const order: HorizonLabel[] = ['scalp', 'swing', 'position', 'legacy'];
+  return (
+    <div
+      className={`grid grid-cols-2 md:grid-cols-4 gap-2.5 ${className ?? ''}`.trim()}
+    >
+      {order.map((label) => {
+        const pct = summary.hit_rate_by_horizon[label];
+        // Null = empty bucket (no scored signals). Render "—" + the
+        // horizon descriptor so the empty tile still tells the story
+        // ("scalp · pending intraday data" et al). Distinguishes from
+        // "0% hit rate" which means "we scored 5 of them and none hit."
+        const value = pct === null ? '—' : `${Math.round(pct)}%`;
+        return (
+          <StatTile
+            key={label}
+            label={HORIZON_DESCRIPTIONS[label]}
+            value={value}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -216,6 +270,7 @@ function FilterRow({
 }) {
   const asset = value.asset ?? 'ALL';
   const type = value.signal_type ?? 'ALL';
+  const horizon = value.horizon ?? 'ALL';
   const confMin = value.confidence_min ?? 1;
 
   // Match /signals's normalization — `undefined` is the "off" sentinel
@@ -225,6 +280,9 @@ function FilterRow({
 
   const setType = (next: SignalType | 'ALL') =>
     onChange({ ...value, signal_type: next === 'ALL' ? undefined : next });
+
+  const setHorizon = (next: HorizonLabel | 'ALL') =>
+    onChange({ ...value, horizon: next === 'ALL' ? undefined : next });
 
   const setConfMin = (next: number) =>
     onChange({ ...value, confidence_min: next <= 1 ? undefined : next });
@@ -261,6 +319,22 @@ function FilterRow({
               {formatSignalType(t)}
             </option>
           ))}
+        </select>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className={LABEL}>Horizon</span>
+        <select
+          className={SELECT_CLASS}
+          value={horizon}
+          onChange={(e) => setHorizon(e.target.value as HorizonLabel | 'ALL')}
+          aria-label="Filter by horizon"
+        >
+          <option value="ALL">All</option>
+          <option value="scalp">Scalp</option>
+          <option value="swing">Swing</option>
+          <option value="position">Position</option>
+          <option value="legacy">Legacy</option>
         </select>
       </div>
 
@@ -314,18 +388,24 @@ function OutcomeRow({ item }: { item: TrackRecordItem }) {
           ? <span className="text-text-4">— no target</span>
           : <span className="text-text-3">— neither</span>;
 
-  // Returns over the window — 72h close vs the canonical entry baseline.
-  // Use `entry_price` (AI-suggested) when set, else `price_at_signal` —
-  // SAME fallback as the backend evaluator's `entry_for_metrics` (see
-  // `pipeline/track_record.py:_evaluate_one`) AND as `OutcomeCard`'s
+  // Returns over the signal's NATIVE window — `price_at_validity_end`
+  // (PR B v2 fact) with `price_after_72h` fallback for legacy rows.
+  // Same baseline rules as the backend evaluator's `entry_for_metrics`
+  // (see `pipeline/track_record.py:_evaluate_one`) AND as `OutcomeCard`'s
   // `entryBaseline`. Diverging would mean this list cell shows a
-  // different number than the detail page's `+72h` row for the same
+  // different number than the detail page's outcome row for the same
   // outcome AND would contradict the verdict's hit_target math when
   // entry_price ≠ price_at_signal.
+  //
+  // For position signals (168h window), `price_at_validity_end` is the
+  // 7-day close — the correct outcome price; pre-PR-B the row would
+  // show the 72h close instead (a misleading mid-trade reading).
   const baseline = item.entry_price ?? item.price_at_signal;
+  const closeAtEnd =
+    item.price_at_validity_end ?? item.price_after_72h;
   const pctReturn =
-    item.price_after_72h !== null && baseline > 0
-      ? ((item.price_after_72h - baseline) / baseline) * 100
+    closeAtEnd !== null && baseline > 0
+      ? ((closeAtEnd - baseline) / baseline) * 100
       : null;
   const pctText =
     pctReturn !== null ? `${pctReturn >= 0 ? '+' : ''}${pctReturn.toFixed(2)}%` : '—';
@@ -406,9 +486,20 @@ function OutcomeRow({ item }: { item: TrackRecordItem }) {
 function TrackRecordLoading() {
   return (
     <div className="mt-6 flex flex-col gap-4">
+      {/* Top row: matches `<SummaryGrid>` — 4 stat tiles (total evaluated,
+          flat hit rate, hits/stops, avg confidence). */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
         {[0, 1, 2, 3].map((i) => (
           <Skeleton key={i} className="h-20 w-full" />
+        ))}
+      </div>
+      {/* PR B (#60) — second row matches `<HorizonBucketGrid>`: 4 bucket
+          tiles (scalp / swing / position / legacy). Mirrors the real
+          layout's 8-tile total so the data-load transition doesn't pop
+          extra tiles into view. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={`b${i}`} className="h-20 w-full" />
         ))}
       </div>
       <div className="flex flex-col gap-2 mt-4">

@@ -79,6 +79,16 @@ class SignalOutcomeOut(BaseModel):
     price_at_signal: float
     price_after_24h: float | None = None
     price_after_72h: float | None = None
+    # PR B (#60) — v2 horizon-aware fields. NULL on rows scored under the
+    # legacy 72h-fixed rubric (pre-PR-B). Frontend renders the canonical
+    # "outcome close" from `price_at_validity_end` when set, falling back
+    # to `price_after_72h` for legacy rows. `window_hours` drives the
+    # horizon label (scalp/swing/position/legacy) shown on the outcome
+    # card; `scoring_version` ('v2' for new, NULL/'v1' for legacy) drives
+    # the "legacy scoring" badge.
+    price_at_validity_end: float | None = None
+    window_hours: int | None = None
+    scoring_version: str | None = None
     hit_target: bool | None = None
     hit_stop: bool | None = None
     max_favorable: float | None = None

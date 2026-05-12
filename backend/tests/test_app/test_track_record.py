@@ -55,6 +55,13 @@ async def _seed_signal_with_outcome(
     evaluated_at: datetime | None = None,
     key: str = "x",
     ai_prompt_version: str = "v3",
+    # PR B (#60) — horizon-aware fields. Default to NULL (legacy) so the
+    # bulk of existing tests, which pre-date the v2 rubric, keep working
+    # without touching the cohort math (flat aggregates are bucket-blind).
+    # Tests that need bucket-aware behaviour pass explicit values.
+    window_hours: int | None = None,
+    scoring_version: str | None = None,
+    price_at_validity_end: Decimal | None = None,
 ) -> SignalOutcome:
     """Seed one Signal + one SignalOutcome (the public surface for /track-record).
 
@@ -93,6 +100,9 @@ async def _seed_signal_with_outcome(
         max_favorable=Decimal("0.064") if hit_target else Decimal("0.011"),
         max_adverse=Decimal("0.005"),
         evaluated_at=evaluated_at or _NOW,
+        window_hours=window_hours,
+        scoring_version=scoring_version,
+        price_at_validity_end=price_at_validity_end,
     )
     db_session.add(outcome)
     await db_session.flush()
@@ -123,6 +133,15 @@ class TestEmptyTrackRecord:
             "stops_hit": 0,
             "targeted_count": 0,
             "hit_rate_pct": None,
+            # PR B (#60) — every bucket null on an empty DB (same null-vs-zero
+            # convention as the flat `hit_rate_pct`). All four labels always
+            # present so the FE renders a stable widget shape.
+            "hit_rate_by_horizon": {
+                "scalp": None,
+                "swing": None,
+                "position": None,
+                "legacy": None,
+            },
             "avg_confidence_hits": None,
             "avg_confidence_misses": None,
         }
@@ -478,3 +497,161 @@ class TestSortOrder:
         items = (await client.get("/api/track-record")).json()["items"]
         timestamps = [datetime.fromisoformat(item["evaluated_at"]) for item in items]
         assert timestamps == sorted(timestamps, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# PR B (#60) — horizon bucketing
+# ---------------------------------------------------------------------------
+
+
+class TestHorizonBucket:
+    """Bucketed track-record API — `summary.hit_rate_by_horizon` is
+    always present (every bucket key, null when empty), and the optional
+    `?horizon=` filter trims the paginated items + flat aggregates."""
+
+    async def test_summary_has_all_four_horizon_buckets_even_when_empty(self, db_session, client):
+        """Stable shape — empty buckets render as null (same null-vs-zero
+        convention as `hit_rate_pct`). FE doesn't have to defensively
+        check for missing keys."""
+        # Seed only a swing outcome — scalp/position/legacy stay empty.
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=72,
+            scoring_version="v2",
+            key="swing-only",
+        )
+
+        body = (await client.get("/api/track-record")).json()
+        h = body["summary"]["hit_rate_by_horizon"]
+        assert set(h.keys()) == {"scalp", "swing", "position", "legacy"}
+        assert h["swing"] == 100.0  # 1 hit / 1 targeted
+        assert h["scalp"] is None
+        assert h["position"] is None
+        assert h["legacy"] is None
+
+    async def test_legacy_rows_bucket_separately_from_v2_swing(self, db_session, client):
+        """A NULL `scoring_version` outcome is "legacy", not "swing" — even
+        if it has window_hours=72 by coincidence. The bucket key is the
+        rubric pin, not the window. (Verified: outcomes with NULL
+        window_hours bucket as "legacy".)"""
+        # Two outcomes: one v2-swing hit, one legacy miss.
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=72,
+            scoring_version="v2",
+            key="v2-swing",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=False,
+            window_hours=None,  # legacy
+            scoring_version=None,
+            key="legacy",
+        )
+
+        body = (await client.get("/api/track-record")).json()
+        h = body["summary"]["hit_rate_by_horizon"]
+        # Swing got the one hit (1/1 = 100%); legacy got the miss (0/1 = 0%).
+        assert h["swing"] == 100.0
+        assert h["legacy"] == 0.0
+
+    async def test_horizon_filter_trims_items_and_flat_aggregates(self, db_session, client):
+        """`?horizon=swing` excludes legacy + position rows from the paginated
+        list AND from the flat `total_evaluated`/`targets_hit` counts.
+        The bucketed summary itself is computed across ALL rows (so the
+        side-by-side UI still works) — only the filtered aggregates respect
+        the param."""
+        # 1 swing hit, 1 swing miss, 1 position hit (≥96h), 1 legacy.
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=72,
+            scoring_version="v2",
+            key="sw-hit",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=False,
+            window_hours=72,
+            scoring_version="v2",
+            key="sw-miss",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=168,
+            scoring_version="v2",
+            key="pos-hit",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=None,
+            scoring_version=None,
+            key="legacy-hit",
+        )
+
+        body = (await client.get("/api/track-record?horizon=swing")).json()
+        # Flat aggregates trimmed to swing: 2 evaluated, 1 hit, 50%.
+        assert body["summary"]["total_evaluated"] == 2
+        assert body["summary"]["targets_hit"] == 1
+        assert body["summary"]["hit_rate_pct"] == 50.0
+        assert len(body["items"]) == 2
+        # Bucketed summary remains all-buckets — that's the side-by-side
+        # widget's whole point. Swing bucket: 1/2 = 50%. Position: 1/1 = 100%.
+        # Legacy: 1/1 = 100%. Scalp: empty → null.
+        h = body["summary"]["hit_rate_by_horizon"]
+        assert h["swing"] == 50.0
+        assert h["position"] == 100.0
+        assert h["legacy"] == 100.0
+        assert h["scalp"] is None
+
+    async def test_horizon_legacy_filter_isolates_grandfathered_rows(self, db_session, client):
+        """Operators need a way to inspect the pre-v2 cohort alone for
+        the wipe-and-reevaluate cleanup (#61). `?horizon=legacy` does that
+        via `window_hours IS NULL`."""
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=72,
+            scoring_version="v2",
+            key="v2",
+        )
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=False,
+            window_hours=None,
+            scoring_version=None,
+            key="legacy",
+        )
+
+        body = (await client.get("/api/track-record?horizon=legacy")).json()
+        assert body["summary"]["total_evaluated"] == 1
+        assert len(body["items"]) == 1
+        # The legacy row has NULL window_hours + scoring_version — FE uses
+        # this to render the "scored against legacy 72h window" badge.
+        assert body["items"][0]["window_hours"] is None
+        assert body["items"][0]["scoring_version"] is None
+
+    async def test_v2_outcome_fields_serialize_through_items(self, db_session, client):
+        """Pin the response contract: TrackRecordItemOut surfaces the three
+        new v2 fields (`price_at_validity_end`, `window_hours`,
+        `scoring_version`) on every row. Without these, the FE can't render
+        horizon-aware labels or the legacy badge."""
+        await _seed_signal_with_outcome(
+            db_session,
+            hit_target=True,
+            window_hours=168,
+            scoring_version="v2",
+            price_at_validity_end=Decimal("90100"),
+            key="pos-shape",
+        )
+
+        body = (await client.get("/api/track-record")).json()
+        assert len(body["items"]) == 1
+        item = body["items"][0]
+        assert item["window_hours"] == 168
+        assert item["scoring_version"] == "v2"
+        assert item["price_at_validity_end"] == 90100.0

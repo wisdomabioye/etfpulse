@@ -1,33 +1,52 @@
 """Outcome evaluator — turns aged Signals into SignalOutcome rows.
 
-Stage 8-P2.
+Stage 8-P2; v2 horizon-aware rubric shipped in PR B ([[#60]]).
 
 Public surface:
     `evaluate_pending_outcomes(session) -> dict[str, int]`
-        Drains every Signal that's at least `_EVAL_DELAY_HOURS` old AND has
-        no SignalOutcome row yet AND has an actionable suggested_action AND
-        a non-NULL `price_at_creation`. For each, fetches daily OHLC bars
+        Drains every Signal whose stated validity window has ended
+        (`Signal.expires_at <= now`) AND has no SignalOutcome row yet AND
+        a non-NULL `price_at_creation`. For each, derives the per-signal
+        `window_hours = (expires_at - created_at)`, fetches daily OHLC bars
         from the SAME source as the signal's price_at_creation (no fallback —
-        avoids SoSoValue↔Binance micro-skew), computes hit/stop/24h/72h
-        prices over the next 72h window, and inserts one SignalOutcome.
+        avoids SoSoValue↔Binance micro-skew), computes hit/stop and the
+        in-window price checkpoints (24h, 72h when inside the window) plus
+        `price_at_validity_end` (close at t0 + window_hours), and inserts
+        one SignalOutcome stamped with `scoring_version='v2'` + `window_hours`.
         Caller owns the transaction (D14/D18) — same contract as
         `pipeline.signal_builder.build_signal`.
 
-Why daily granularity is enough:
-    The detectors run on daily ETF flow data; signals naturally fire at the
-    close of a UTC trading day. Sub-day price action might be more accurate
-    for hit/stop checks, but daily highs/lows are good enough for a public
-    track record and stay within the existing kline plumbing — no new
-    intraday-price adapter needed (which would be Phase 2 scope creep).
+Per-horizon behavior:
+    - **scalp (window < 24h)**: skipped with `skipped_scalp_intraday_unsupported`
+      counter. Daily klines have no bar inside a 6h window; honest scoring
+      requires intraday kline support ([[#62]]). UI buckets scalp signals
+      as "intraday data pending" until that lands.
+    - **swing (24h ≤ window < 96h)**: full scoring. `price_after_24h` +
+      `price_after_72h` populated (where `price_after_72h == price_at_validity_end`
+      by construction).
+    - **position (window ≥ 96h)**: full scoring. All three checkpoints
+      populated — `price_after_24h`, `price_after_72h` (interim mid-trade
+      reading), and `price_at_validity_end` (close at the stated end).
+
+Why daily granularity for swing/position:
+    The detectors run on daily ETF flow data; swing/position signals
+    naturally fire at the close of a UTC trading day. Sub-day price action
+    might be more accurate for hit/stop checks but daily highs/lows are
+    good enough for a public track record and stay within the existing
+    kline plumbing. Scalp signals do NOT have this property — see [[#62]].
 
 Why no upper time cutoff:
-    The Stage 8 design doc proposed a 24h-72h window for `Signal.created_at`,
-    but that loses signals if any eval tick is missed. We instead require
-    "at least 72h old" with no upper bound (capped indirectly by kline
-    history availability — Binance keeps years, SoSoValue ~3 months). A
-    30-day-old signal that was never evaluated will be picked up the next
-    time this runs, then never re-evaluated (the SignalOutcome row makes
-    the candidate query skip it).
+    A signal that was never evaluated (e.g. eval ticks missed during an
+    outage) gets picked up the next time this runs, then never re-evaluated
+    (the SignalOutcome row makes the candidate query skip it). Bounded
+    indirectly by kline history availability (Binance keeps years,
+    SoSoValue ~3 months).
+
+Legacy rows (pre-PR-B): carry NULL `scoring_version` / `window_hours` /
+    `price_at_validity_end`. They were scored against a fixed 72h window
+    regardless of the signal's stated `time_horizon`. The reader treats
+    NULL `scoring_version` as legacy/'v1' for bucket filtering. Wiping +
+    re-evaluating these rows under the v2 rubric is tracked in [[#61]].
 
 Direction is derived from `signal.ai_analysis["suggested_action"]`:
     - "consider long"  → SignalDirection.LONG
@@ -44,7 +63,7 @@ Direction is derived from `signal.ai_analysis["suggested_action"]`:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal, cast
 
@@ -58,21 +77,53 @@ from etfpulse.pipeline.prices import PriceBar, PriceSource, get_daily_klines_fro
 log = structlog.get_logger()
 
 
-# Wait at least 72h after the signal fires so we have enough kline coverage
-# to compute hit/stop AND the 24h+72h close prices in one pass. Evaluating
-# at <72h would leave `price_after_72h` and the running max/adverse fields
-# permanently NULL, polluting the dashboard's hit-rate aggregate.
-_EVAL_DELAY_HOURS = 72
+# PR B (issue #60 v2 rubric): the window is derived per-signal from
+# `(Signal.expires_at - Signal.created_at)` so scalp/swing/position signals
+# are scored against the window the AI committed to, not a fixed 72h ruler.
+# `_window_hours_for(signal)` is the canonical reader; the candidate query
+# uses `Signal.expires_at <= now` as the readiness gate.
 
-# Window we score against — fixed regardless of when the eval runs. A
-# signal that fires at t0 is scored over bars in [t0, t0 + 72h].
-_HORIZON_HOURS = 72
+# Minimum window where daily klines provide enough resolution. Below this,
+# the daily bar containing t0 closes ~14h+ past the signal's validity end,
+# so any "close at validity end" pick would lie. Scalp signals (6h validity)
+# fall below this floor and are explicitly skipped (#62). When intraday
+# kline support ships, lower this floor or remove the gate entirely.
+_MIN_SCORABLE_WINDOW_HOURS = 24
 
-# The kline range we ask the source for. Add headroom so a daily bar that
-# OPENS just after t0+72h still falls in the response — picking the close
-# at t0+72h needs the bar containing that timestamp, which can extend
-# slightly past the horizon.
+# Active rubric version stamped on every new outcome row. Pre-PR-B rows
+# carry NULL `scoring_version` — the reader treats NULL as v1 / legacy
+# (scored against the fixed 72h window the constants used to encode).
+_SCORING_VERSION = "v2"
+
+# The kline fetch range. Padded on both ends so a daily bar that opens
+# just after t0+window still falls in the response — picking the close
+# at the window end needs the bar containing that timestamp, which can
+# extend slightly past the horizon.
 _KLINE_FETCH_PAD_HOURS = 12
+
+
+def _window_hours_for(signal: Signal) -> int | None:
+    """Derive the scoring window from `(expires_at - created_at)`.
+
+    Reads the STORED fact (`expires_at`) rather than re-deriving from
+    `ai_analysis["time_horizon"]` — keeps the evaluator robust against
+    later changes to `_HORIZON_TO_DURATION` in pipeline/analysis.py.
+    A retroactive map change must NOT silently re-score historical rows.
+
+    Returns None when:
+      - `expires_at` is missing (AI-failed signal — already filtered upstream)
+      - the difference is <= 0 (clock skew, time-travel, future change to
+        compute_expires_at producing pre-creation timestamps)
+    The evaluator counts these as `skipped_invalid_window` rather than
+    treating them as "score over 0h" (which would either crash or produce
+    nonsense).
+    """
+    if signal.expires_at is None or signal.created_at is None:
+        return None
+    delta_seconds = (signal.expires_at - signal.created_at).total_seconds()
+    if delta_seconds <= 0:
+        return None
+    return round(delta_seconds / 3600)
 
 
 # Map suggested_action strings → SignalDirection. Single source of truth so
@@ -91,11 +142,23 @@ _KNOWN_ASSETS: frozenset[str] = frozenset({"BTC", "ETH"})
 
 @dataclass(frozen=True, slots=True)
 class _OutcomeMetrics:
-    """Computed result of scoring a signal's 72h kline window. Frozen so
-    callers can't accidentally mutate one and have it affect another row."""
+    """Computed result of scoring a signal against its native window. Frozen
+    so callers can't accidentally mutate one and have it affect another row.
+
+    `price_at_validity_end` is the close at `t0 + window_hours` — the
+    canonical "outcome price" under PR B's v2 rubric. The legacy
+    `price_after_24h` / `price_after_72h` columns are populated only when
+    the respective checkpoint falls inside the signal's window:
+        - swing (72h): both populated; price_after_72h == price_at_validity_end
+        - position (168h): both populated; price_at_validity_end is the close at 7d
+        - scalp (6h): not scored in PR B — see issue #62
+    Outside-window checkpoints stay NULL so consumers can render "not
+    applicable for this horizon" rather than a misleading price.
+    """
 
     price_after_24h: Decimal | None
     price_after_72h: Decimal | None
+    price_at_validity_end: Decimal | None
     max_favorable: Decimal | None
     max_adverse: Decimal | None
     hit_target: bool | None
@@ -109,26 +172,36 @@ def _compute_metrics(
     stop: Decimal | None,
     target: Decimal | None,
     t0_ms: int,
+    window_hours: int,
     bars: list[PriceBar],
 ) -> _OutcomeMetrics | None:
-    """Score a sorted list of daily bars against the entry/stop/target.
+    """Score a sorted list of daily bars against entry/stop/target over the
+    signal's NATIVE window. PR B — `window_hours` is per-signal (derived
+    from `expires_at - created_at`); pre-PR-B callers passed a constant 72.
 
     Pure function — no DB, no clock — so the test surface is just
-    "given these bars and these levels, compute the metrics."
+    "given these bars, these levels, and this window, compute the metrics."
 
     `max_favorable` / `max_adverse` are unsigned fractions of entry
     (e.g. `0.032` = +3.2% favorable; `0.018` = +1.8% adverse). Storing
     as fractions keeps the dashboard renderer asset-agnostic — no
     division by entry needed at display time.
 
-    Returns None when no bars fall inside [t0, t0+72h] — happens when
-    kline history is too short (e.g. evaluating a 30-day-old signal on
-    a source that only keeps a week). Caller skips inserting an outcome
-    row in that case rather than persisting a misleading all-NULL row
-    that would silently pollute the hit-rate aggregate.
+    Returns None when no bars fall inside [t0, t0+window_hours] — happens
+    when kline history is too short (e.g. evaluating a 30-day-old signal
+    on a source that only keeps a week) OR when the window is sub-daily
+    and no daily bar opens inside it. Caller skips inserting an outcome
+    row in that case rather than persisting a misleading all-NULL row.
+
+    `price_after_24h` and `price_after_72h` are populated only when those
+    checkpoints fall inside the signal's window — otherwise NULL. This
+    keeps the legacy column semantics ("price at exactly +24h / +72h")
+    intact while the new `price_at_validity_end` carries the horizon-aware
+    fact.
     """
-    horizon_end_ms = t0_ms + _HORIZON_HOURS * 3600 * 1000
+    horizon_end_ms = t0_ms + window_hours * 3600 * 1000
     twenty_four_ms = t0_ms + 24 * 3600 * 1000
+    seventy_two_ms = t0_ms + 72 * 3600 * 1000
 
     in_window = [b for b in bars if t0_ms <= b.timestamp_ms <= horizon_end_ms]
     if not in_window:
@@ -138,10 +211,17 @@ def _compute_metrics(
     # ordering "isn't contractually specified" so we can't rely on it.
     in_window.sort(key=lambda b: b.timestamp_ms)
 
-    # Pick the bar whose open is the latest one ≤ the target timestamp.
-    # `_pick_close_at` returns None if no bar covers the timestamp at all.
-    price_after_24h = _pick_close_at(in_window, twenty_four_ms)
-    price_after_72h = _pick_close_at(in_window, horizon_end_ms)
+    # `_pick_close_at` returns the close of the bar whose open is the
+    # latest one ≤ the target timestamp, or None when no such bar exists.
+    # Populate legacy checkpoints only when in-window — outside-window
+    # values would be coincidental noise.
+    price_after_24h = (
+        _pick_close_at(in_window, twenty_four_ms) if twenty_four_ms <= horizon_end_ms else None
+    )
+    price_after_72h = (
+        _pick_close_at(in_window, seventy_two_ms) if seventy_two_ms <= horizon_end_ms else None
+    )
+    price_at_validity_end = _pick_close_at(in_window, horizon_end_ms)
 
     # Max favorable / adverse over the window. For a long: favorable is
     # the highest high above entry; adverse is the lowest low below entry.
@@ -165,6 +245,7 @@ def _compute_metrics(
     return _OutcomeMetrics(
         price_after_24h=price_after_24h,
         price_after_72h=price_after_72h,
+        price_at_validity_end=price_at_validity_end,
         max_favorable=max_favorable,
         max_adverse=max_adverse,
         # Surface as None when the level wasn't set (e.g. AI declined to
@@ -277,6 +358,126 @@ class TrackRecordStat:
         return targeted
 
 
+# Horizon labels for the bucketed track-record (PR B). Mirror the AI's
+# `time_horizon` enum from `pipeline/analysis.py:_HORIZON_TO_DURATION`
+# (scalp 6h / swing 72h / position 168h). Ranges are tolerant of small
+# `round()` drift inside `_window_hours_for` — exact equality would brittle
+# on a future 7d-vs-168h definition change.
+HorizonLabel = Literal["scalp", "swing", "position", "legacy"]
+# Canonical ordering of horizon buckets — also re-exported so the
+# route/route-test/UI layers iterate without their own duplicate tuple
+# (DRY: a future "intraday" bucket lands in one place).
+HORIZON_LABELS: tuple[HorizonLabel, ...] = ("scalp", "swing", "position", "legacy")
+
+
+def horizon_label_for(window_hours: int | None) -> HorizonLabel:
+    """Bucket `window_hours` into one of {scalp, swing, position, legacy}.
+
+    `None` → "legacy" (rows written before PR B v2 rubric; scored against
+    the fixed 72h window).
+
+    Ranges are tolerant rather than exact equality:
+        - scalp: window < 24h (matches the AI's scalp slot at 6h)
+        - swing: 24h <= window < 96h (matches the swing slot at 72h)
+        - position: window >= 96h (matches the position slot at 168h)
+
+    The 96h boundary is the geometric mean-ish midpoint between swing (72h)
+    and position (168h). Future horizon additions land in the right bucket
+    without code change as long as they don't straddle a boundary by
+    rounding (12h scalp → still scalp; 100h position → still position).
+    """
+    if window_hours is None:
+        return "legacy"
+    if window_hours < 24:
+        return "scalp"
+    if window_hours < 96:
+        return "swing"
+    return "position"
+
+
+@dataclass(frozen=True, slots=True)
+class TrackRecordStatByHorizon:
+    """PR B (#60) — cumulative-by-floor hit-rate, bucketed by horizon.
+
+    Sibling of `TrackRecordStat`. Two parallel surfaces:
+        - `TrackRecordStat` (existing): mixed-horizon cumulative — kept for
+           legacy callers (Telegram /performance, internal cohort filtering
+           after additional horizon-slicing in the caller).
+        - `TrackRecordStatByHorizon` (new): per-(floor, horizon) cumulative
+           — feeds the bucketed track-record API and the per-signal alert
+           that now honors the signal's own horizon.
+
+    `by_floor_and_horizon[(N, label)]` is `(targeted, hits)`. The dict
+    always contains entries for every (1..10, label) combination, with
+    `(0, 0)` for empty cohorts — callers don't need to defensively check
+    `.get()` and the UI gets a stable shape across deploys.
+
+    `hit_rate_pct(N, label)` mirrors the flat version's API for symmetry.
+    """
+
+    by_floor_and_horizon: dict[tuple[int, HorizonLabel], tuple[int, int]]
+
+    def hit_rate_pct(self, confidence_floor: int, horizon: HorizonLabel) -> int | None:
+        targeted, hits = self.by_floor_and_horizon.get((confidence_floor, horizon), (0, 0))
+        pct = compute_hit_rate_pct(hits, targeted)
+        return round(pct) if pct is not None else None
+
+    def targeted_count(self, confidence_floor: int, horizon: HorizonLabel) -> int:
+        targeted, _ = self.by_floor_and_horizon.get((confidence_floor, horizon), (0, 0))
+        return targeted
+
+
+async def get_stats_by_confidence_floor_and_horizon(
+    session: AsyncSession,
+) -> TrackRecordStatByHorizon:
+    """Build the cumulative-by-(floor, horizon) snapshot in ONE GROUP BY.
+
+    Same shape as `get_stats_by_confidence_floor` but groups by
+    `window_hours` too. Legacy rows (NULL `window_hours`) bucket as
+    "legacy" — explicit, queryable, doesn't dilute the per-horizon
+    numbers with mis-scored history.
+
+    Cumulates in Python (10 floors × 4 labels = 40 iterations) — same
+    rationale as the flat version: trivial loop, SQL stays auditable.
+    """
+    stmt = (
+        select(
+            SignalOutcome.confidence,
+            SignalOutcome.window_hours,
+            func.count().filter(SignalOutcome.hit_target.is_not(None)).label("targeted"),
+            func.count().filter(SignalOutcome.hit_target.is_(True)).label("hits"),
+        )
+        .select_from(SignalOutcome)
+        .where(SignalOutcome.evaluated_at.is_not(None))
+        .group_by(SignalOutcome.confidence, SignalOutcome.window_hours)
+    )
+    rows = (await session.execute(stmt)).all()
+
+    # Stage 1 — flatten (confidence, window_hours) rows into
+    # (confidence, label) pairs. Multiple distinct window_hours values can
+    # share a label (e.g. 168 and 240 both → "position") so we accumulate.
+    per_confidence_label: dict[tuple[int, HorizonLabel], tuple[int, int]] = {}
+    for row in rows:
+        label = horizon_label_for(row.window_hours)
+        key = (row.confidence, label)
+        prior_t, prior_h = per_confidence_label.get(key, (0, 0))
+        per_confidence_label[key] = (prior_t + row.targeted, prior_h + row.hits)
+
+    # Stage 2 — cumulate by floor (10 → 1) within each label independently.
+    # Pre-seed every (floor, label) so consumers see (0, 0) for empty cohorts.
+    by_floor_and_horizon: dict[tuple[int, HorizonLabel], tuple[int, int]] = {}
+    for label in HORIZON_LABELS:
+        cum_targeted = 0
+        cum_hits = 0
+        for c in range(10, 0, -1):
+            t, h = per_confidence_label.get((c, label), (0, 0))
+            cum_targeted += t
+            cum_hits += h
+            by_floor_and_horizon[(c, label)] = (cum_targeted, cum_hits)
+
+    return TrackRecordStatByHorizon(by_floor_and_horizon=by_floor_and_horizon)
+
+
 async def get_stats_by_confidence_floor(session: AsyncSession) -> TrackRecordStat:
     """Build the cumulative-by-floor snapshot in ONE GROUP BY query.
 
@@ -369,6 +570,11 @@ async def evaluate_pending_outcomes(
         "skipped_unknown_asset": 0,
         "skipped_no_klines": 0,
         "skipped_no_bars_in_window": 0,
+        # PR B (#60) — per-signal window derived from expires_at. These
+        # counters surface horizons we can't honestly score yet so an
+        # operator can see "X scalps skipped, intraday support pending."
+        "skipped_invalid_window": 0,
+        "skipped_scalp_intraday_unsupported": 0,
         "errored": 0,
         # Eligible candidates left over after the limit truncation. 0 in the
         # unlimited / fully-drained case; > 0 means another tick (or another
@@ -376,14 +582,20 @@ async def evaluate_pending_outcomes(
         "remaining": 0,
     }
 
-    cutoff = datetime.now(UTC) - timedelta(hours=_EVAL_DELAY_HOURS)
+    now = datetime.now(UTC)
 
-    # LEFT JOIN to filter out signals that already have an outcome row,
+    # PR B (#60) — readiness gate is per-signal: a signal is a candidate
+    # when its OWN stated validity window has ended (`expires_at <= now`).
+    # Replaces the pre-PR-B fixed `created_at <= now - 72h` filter which
+    # mis-aligned scalp (eligible too late) and position (eligible too
+    # early) signals. `expires_at IS NOT NULL` subsumes the old
+    # `confidence IS NOT NULL` proxy — AI-failed signals lack both.
+    # LEFT JOIN filters out signals that already have an outcome row,
     # rather than a NOT IN subquery — cheaper plan + clearer.
     base_filters = (
         Signal.price_at_creation.is_not(None),
-        Signal.confidence.is_not(None),
-        Signal.created_at <= cutoff,
+        Signal.expires_at.is_not(None),
+        Signal.expires_at <= now,
     )
     stmt = (
         select(Signal)
@@ -453,6 +665,36 @@ async def _evaluate_one(session: AsyncSession, signal: Signal, summary: dict[str
         log.warning("outcome_eval_skip_unknown_asset", signal_id=signal.id, asset=signal.asset)
         return
 
+    # PR B (#60) — derive the per-signal scoring window. None means either
+    # NULL expires_at (filtered upstream, defensive recheck) or non-positive
+    # delta (clock skew / future bug); treat both as invalid and count.
+    window_hours = _window_hours_for(signal)
+    if window_hours is None:
+        summary["skipped_invalid_window"] += 1
+        log.warning(
+            "outcome_eval_skip_invalid_window",
+            signal_id=signal.id,
+            created_at=str(signal.created_at),
+            expires_at=str(signal.expires_at),
+        )
+        return
+
+    # PR B (#60 + #62) — scalp signals (6h validity) have no daily bar
+    # inside their window. Skip explicitly with a dedicated counter rather
+    # than letting `_compute_metrics` return None via the generic
+    # "no bars in window" path — distinguishes "kline data missing" from
+    # "window is sub-daily by design." Lift this gate when intraday kline
+    # support lands (#62).
+    if window_hours < _MIN_SCORABLE_WINDOW_HOURS:
+        summary["skipped_scalp_intraday_unsupported"] += 1
+        log.info(
+            "outcome_eval_skip_scalp_intraday_unsupported",
+            signal_id=signal.id,
+            window_hours=window_hours,
+            note="see issue #62 — daily klines insufficient for sub-day windows",
+        )
+        return
+
     # `Signal.price_source` is nullable. When NULL (legacy pre-Stage-7
     # signals), default to "sosovalue" — same primary the live composer
     # would have tried at signal creation. `cast` here because mypy
@@ -468,12 +710,11 @@ async def _evaluate_one(session: AsyncSession, signal: Signal, summary: dict[str
             stored_source=signal.price_source,
         )
 
-    # Bind the t0 epoch ms ONCE per iteration; downstream uses it three
-    # times (start_ms, end_ms, _compute_metrics) and recomputing each
-    # time would be smelly + risk drift if the conversion ever changes.
+    # Bind t0 + horizon ms ONCE per iteration; downstream uses both several
+    # times. Horizon is now per-signal (#60 v2 rubric).
     t0_ms = int(signal.created_at.timestamp() * 1000)
     pad_ms = _KLINE_FETCH_PAD_HOURS * 3600 * 1000
-    horizon_ms = _HORIZON_HOURS * 3600 * 1000
+    horizon_ms = window_hours * 3600 * 1000
 
     # Pad both ends so daily bars whose open straddles the boundary
     # are still included — `_pick_close_at` does the precise selection.
@@ -506,6 +747,7 @@ async def _evaluate_one(session: AsyncSession, signal: Signal, summary: dict[str
         stop=signal.stop_price,
         target=signal.target_price,
         t0_ms=t0_ms,
+        window_hours=window_hours,
         bars=bars,
     )
     if metrics is None:
@@ -530,6 +772,13 @@ async def _evaluate_one(session: AsyncSession, signal: Signal, summary: dict[str
         price_at_signal=price_at_signal,
         price_after_24h=metrics.price_after_24h,
         price_after_72h=metrics.price_after_72h,
+        # PR B (#60) — v2 fields stamped on every new outcome. NULL on
+        # pre-PR-B rows = legacy 72h scoring; the public reader uses
+        # COALESCE(scoring_version, 'v1') semantics. `window_hours` is the
+        # rubric's data fact; `scoring_version` is the rubric pin.
+        price_at_validity_end=metrics.price_at_validity_end,
+        window_hours=window_hours,
+        scoring_version=_SCORING_VERSION,
         hit_target=metrics.hit_target,
         hit_stop=metrics.hit_stop,
         max_favorable=metrics.max_favorable,

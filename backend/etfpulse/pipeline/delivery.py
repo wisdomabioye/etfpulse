@@ -51,7 +51,7 @@ from __future__ import annotations
 import html
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from cachetools import TTLCache
@@ -79,8 +79,9 @@ from etfpulse.models import (
     User,
 )
 from etfpulse.pipeline.track_record import (
-    TrackRecordStat,
-    get_stats_by_confidence_floor,
+    HorizonLabel,
+    TrackRecordStatByHorizon,
+    get_stats_by_confidence_floor_and_horizon,
 )
 
 log = structlog.get_logger()
@@ -293,16 +294,23 @@ _TRIGGER_DUMP_SKIP_KEYS = frozenset({"regime_at_creation", "news_context"})
 # only one global track record at a time.
 _TRACK_RECORD_CACHE_TTL_SEC = 600
 _TRACK_RECORD_CACHE_KEY = "current"
-_track_record_cache: TTLCache[str, TrackRecordStat] = TTLCache(
+_track_record_cache: TTLCache[str, TrackRecordStatByHorizon] = TTLCache(
     maxsize=1, ttl=_TRACK_RECORD_CACHE_TTL_SEC
 )
 
 
-async def _get_track_record_stat(session: AsyncSession) -> TrackRecordStat:
-    """Memoised per-process snapshot. Caller — `send_pending_deliveries` —
-    invokes this ONCE per tick, then passes the same TrackRecordStat to
-    every `format_signal_message` call so a 100-message tick still pays
-    one DB query for the cohort stats.
+async def _get_track_record_stat(session: AsyncSession) -> TrackRecordStatByHorizon:
+    """Memoised per-process snapshot of the bucketed cohort stats. Caller —
+    `send_pending_deliveries` — invokes this ONCE per tick, then passes the
+    same `TrackRecordStatByHorizon` to every `format_signal_message` call
+    so a 100-message tick still pays one DB query for the cohort stats.
+
+    PR B (#60) — switched from `TrackRecordStat` (mixed-horizon) to
+    `TrackRecordStatByHorizon` (per-bucket). The per-signal alert now
+    slices the cohort stat by the signal's own horizon — a scalp signal's
+    "Our signals at confidence ≥7 hit target X%" line uses scalp-bucket
+    numbers, not a swing+position+legacy mix. Honest framing of the proof
+    point that the signal recipient is being shown.
 
     Cache miss: one GROUP BY query against `signal_outcomes`. Cache hit:
     no DB roundtrip at all. Tests can clear the cache via `_track_record_cache.clear()`.
@@ -310,7 +318,7 @@ async def _get_track_record_stat(session: AsyncSession) -> TrackRecordStat:
     cached = _track_record_cache.get(_TRACK_RECORD_CACHE_KEY)
     if cached is not None:
         return cached
-    fresh = await get_stats_by_confidence_floor(session)
+    fresh = await get_stats_by_confidence_floor_and_horizon(session)
     _track_record_cache[_TRACK_RECORD_CACHE_KEY] = fresh
     return fresh
 
@@ -388,16 +396,35 @@ def _format_decision_block(signal: Signal, analysis: dict[str, Any]) -> str | No
     return "\n" + "\n".join(lines)
 
 
-def _format_track_record_stat_line(signal: Signal, stat: TrackRecordStat | None) -> str | None:
-    """Render the killer "Our signals at confidence ≥N hit target Y% of the
-    time (over M signals)" stat line, or None when not applicable.
+def _format_track_record_stat_line(
+    signal: Signal, stat: TrackRecordStatByHorizon | None
+) -> str | None:
+    """Render the killer "Our {horizon} signals at confidence ≥N hit target
+    Y% of the time (over M signals)" stat line, or None when not applicable.
+
+    PR B (#60) — the cohort is now sliced by the signal's OWN horizon, not
+    averaged across all horizons. A scalp recipient sees scalp-bucket
+    numbers; a swing recipient sees swing-bucket numbers. The pre-PR-B
+    line was misleading by construction — mixing windows in the denominator
+    of "X% of signals at confidence ≥N hit their target."
+
+    Horizon is read directly from `signal.ai_analysis["time_horizon"]`
+    (set by `apply_analysis_to_signal` alongside `expires_at`). The AI
+    prompt's `time_horizon` Literal {scalp, swing, position} maps 1:1
+    to the HorizonLabel bucket — no derivation needed when both ends use
+    the same enum strings. Going through `window_hours = expires_at -
+    created_at` would be equivalent for live signals but adds a
+    `created_at` dependency that pure-formatter tests don't always supply.
 
     Skips when:
       - `stat` not provided (legacy callers / pure-formatter tests)
       - `signal.confidence` is NULL (AI failed at build time — no cohort
-        applies because the signal isn't even in the cohort denominator)
-      - the cohort at this floor has zero targeted signals (fresh deploy
-        with no outcomes yet — better than rendering "0% over 0 signals")
+        applies because the signal isn't in the cohort denominator)
+      - `time_horizon` missing/unrecognised (defensive — should never fire
+        in production since the AI schema constrains it)
+      - the signal's horizon bucket has zero targeted signals (e.g. a
+        scalp signal at any deploy where scalp scoring is gated on #62
+        → empty scalp bucket → no proof point yet → suppress cleanly)
 
     The stat is intentionally the LAST piece of the message body (just
     before the footer) so the alert ends on the proof point — same
@@ -405,13 +432,17 @@ def _format_track_record_stat_line(signal: Signal, stat: TrackRecordStat | None)
     """
     if stat is None or signal.confidence is None:
         return None
+    horizon_raw = (signal.ai_analysis or {}).get("time_horizon")
+    if horizon_raw not in ("scalp", "swing", "position"):
+        return None
+    horizon = cast(HorizonLabel, horizon_raw)
     confidence = signal.confidence
-    pct = stat.hit_rate_pct(confidence)
+    pct = stat.hit_rate_pct(confidence, horizon)
     if pct is None:
         return None
-    cohort = stat.targeted_count(confidence)
+    cohort = stat.targeted_count(confidence, horizon)
     return (
-        f"\n<i>Our signals at confidence ≥{confidence} hit target "
+        f"\n<i>Our {horizon} signals at confidence ≥{confidence} hit target "
         f"{pct}% of the time (over {cohort} evaluated).</i>"
     )
 
@@ -549,7 +580,7 @@ def build_signal_keyboard(signal: Signal) -> InlineKeyboardMarkup | None:
 
 
 def format_signal_message(
-    signal: Signal, *, track_record_stat: TrackRecordStat | None = None
+    signal: Signal, *, track_record_stat: TrackRecordStatByHorizon | None = None
 ) -> str:
     """Render a Signal as an HTML message (parse_mode=HTML compatible).
 
