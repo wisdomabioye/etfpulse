@@ -27,6 +27,12 @@ def production(monkeypatch):
     monkeypatch.setattr(settings, "admin_api_key", "admin-key")
     monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
     monkeypatch.setattr(settings, "run_bot", False)
+    # `check_config_health` reads `os.environ` directly for the deprecated
+    # `ACCELERATION_MIN_PRIOR_USD` warning (#38). A developer .env or CI
+    # shell that happens to set it would spuriously add a warning to the
+    # "clean prod" baseline. Drop it for every production test; the
+    # deprecation-specific test re-sets it explicitly.
+    monkeypatch.delenv("ACCELERATION_MIN_PRIOR_USD", raising=False)
 
 
 def test_dev_returns_empty_report(monkeypatch):
@@ -141,3 +147,27 @@ def test_production_localhost_frontend_url_is_warning(production, monkeypatch):
     monkeypatch.setattr(settings, "frontend_url", "http://localhost:5173")
     report = check_config_health()
     assert any("localhost" in w and "frontend_url" in w for w in report.warnings)
+
+
+def test_production_deprecated_acceleration_min_prior_usd_is_warning(production, monkeypatch):
+    """PR #38 — `ACCELERATION_MIN_PRIOR_USD` was the legacy env name
+    (pre-F.1 it floored prior-window SUM; F.1 repurposed it to floor
+    |slope_old|). AliasChoices keeps the old name working as a
+    deprecation alias, but operators should migrate to
+    `ACCELERATION_MIN_SLOPE_OLD_USD`. Production preflight surfaces a
+    warning so the migration nudge is visible in deploy logs."""
+    monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "750000")
+    report = check_config_health()
+    assert any("ACCELERATION_MIN_PRIOR_USD is deprecated" in w for w in report.warnings)
+    # Hard errors should remain empty — this is a soft-deprecation, not a
+    # hard failure (existing deploys must keep booting).
+    assert report.errors == []
+
+
+def test_dev_does_not_emit_acceleration_min_prior_usd_warning(monkeypatch):
+    """Deprecation warning is production-gated like every other config
+    preflight check. Dev/test runs stay quiet even with the old var set."""
+    monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "750000")
+    report = check_config_health()
+    assert report.warnings == []

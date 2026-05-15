@@ -77,7 +77,7 @@ ALL_DETECTORS.extend(
         AccelerationDetector(
             window=settings.acceleration_window,
             change_threshold=settings.acceleration_change_threshold,
-            min_prior_usd=settings.acceleration_min_prior_usd,
+            min_slope_old_usd=settings.acceleration_min_slope_old_usd,
         ),
         DivergenceDetector(
             lookback_days=settings.divergence_lookback_days,

@@ -127,7 +127,7 @@ class TestRegistry:
         acc = by_name["acceleration"]
         assert acc.window == settings.acceleration_window
         assert acc.change_threshold == settings.acceleration_change_threshold
-        assert acc.min_prior_usd == settings.acceleration_min_prior_usd
+        assert acc.min_slope_old_usd == settings.acceleration_min_slope_old_usd
 
         div = by_name["divergence"]
         assert div.lookback_days == settings.divergence_lookback_days

@@ -21,7 +21,7 @@ def _seq(*flows: int | float, start: date = date(2026, 4, 1)) -> list[tuple[date
 
 @pytest.fixture
 def detector() -> AccelerationDetector:
-    # Defaults: window=7 (so 21 rows needed), threshold=1.00, min_prior_usd=$1M.
+    # Defaults: window=7 (so 21 rows needed), threshold=1.00, min_slope_old_usd=$1M.
     return AccelerationDetector()
 
 
@@ -105,7 +105,7 @@ class TestAccelerationDetection:
 
     def test_zero_slope_old_handled_gracefully(self, detector: AccelerationDetector):
         """Identical oldest and mid window sums → slope_old = 0 → blocked
-        by the floor (which uses `<` so 0 < min_prior_usd is True). Must
+        by the floor (which uses `<` so 0 < min_slope_old_usd is True). Must
         not raise ZeroDivisionError on the ratio calc."""
         # 7d at 1M (sum=7M), 7d at 1M (sum=7M), 7d at 5M (sum=35M).
         rows = _seq(*([1_000_000] * 14 + [5_000_000] * 7))

@@ -24,6 +24,7 @@ Dev/test environments expect missing keys (offline work) and stay quiet.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from etfpulse.config import settings
@@ -115,6 +116,18 @@ def check_config_health() -> ConfigHealth:
             f"frontend_url points at a local address ({settings.frontend_url!r}) — "
             "signal alert buttons will be broken for every recipient. Set "
             "FRONTEND_URL to the public SPA origin."
+        )
+
+    # Deprecated env-var alias (#38). `ACCELERATION_MIN_PRIOR_USD` still
+    # works via pydantic AliasChoices but the canonical name is
+    # `ACCELERATION_MIN_SLOPE_OLD_USD` (the param now floors |slope_old|,
+    # not |prior_sum|). Warn so operators migrate before the alias is
+    # removed in a future release.
+    if "ACCELERATION_MIN_PRIOR_USD" in {k.upper() for k in os.environ}:
+        warnings.append(
+            "ACCELERATION_MIN_PRIOR_USD is deprecated (#38) — rename to "
+            "ACCELERATION_MIN_SLOPE_OLD_USD. The old name is still read as "
+            "an alias but will be removed in a future release."
         )
 
     # Partial Telegram config is a pit: `is_bot_enabled` silently returns

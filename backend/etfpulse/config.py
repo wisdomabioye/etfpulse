@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,13 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Allow direct construction by field name on top of the aliases —
+        # e.g. `Settings(acceleration_min_slope_old_usd=Decimal("..."))`.
+        # Without this, fields that declare `validation_alias=AliasChoices(...)`
+        # would reject their canonical Python name as an input key, which
+        # is a surprise that bites test fixtures and override helpers.
+        # (Attribute READ access — `settings.foo` — works regardless.)
+        populate_by_name=True,
     )
 
     # App
@@ -246,10 +253,23 @@ class Settings(BaseSettings):
     # floor; semantic shifted to slope under the second-derivative redesign.
     # `gt=0` (not `ge=0`) — a zero floor would let `slope_old=0` data
     # reach the `second_derivative / slope_old` division and crash the
-    # cycle with ZeroDivisionError. Boot-time pydantic validation
-    # surfaces the misconfiguration before any signal builds. Rename to
-    # `acceleration_min_slope_old_usd` deferred to task #38. USD.
-    acceleration_min_prior_usd: Decimal = Field(default=Decimal("1000000"), gt=Decimal("0"))
+    # cycle with ZeroDivisionError. Boot-time pydantic validation surfaces
+    # the misconfiguration before any signal builds. USD.
+    #
+    # PR #38 rename: previously `acceleration_min_prior_usd`, named after
+    # the pre-F.1 semantic (floor on |prior_sum|). F.1 repurposed the
+    # value to floor |slope_old| but kept the legacy name; #38 finished
+    # the migration. AliasChoices keeps the old env var working so
+    # existing deploys don't break on the rename; `config_check.py`
+    # warns when only the old name is set so operators migrate.
+    acceleration_min_slope_old_usd: Decimal = Field(
+        default=Decimal("1000000"),
+        gt=Decimal("0"),
+        validation_alias=AliasChoices(
+            "acceleration_min_slope_old_usd",
+            "acceleration_min_prior_usd",
+        ),
+    )
     divergence_lookback_days: int = Field(default=3, ge=1)
     # PR F.2 — magnitude floors. Divergence is a meaningful signal only when
     # both legs (flows + price) are economically significant. Without these

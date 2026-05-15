@@ -20,11 +20,13 @@ Algorithm (pure, in `_detect_acceleration`):
        And the second derivative:
          second_derivative = slope_new - slope_old
                            = recent_sum - 2*mid_sum + oldest_sum
-    5. If |slope_old| < `min_prior_usd` → None. The "before" slope must
-       have been real before we can talk about it changing. (Semantic note:
-       `min_prior_usd` was the floor on prior-window SUM under the pre-F.1
-       algorithm; PR F.1 reuses the same env var to floor |slope_old|.
-       Operators rarely tune this so renaming was deferred — see task #38.)
+    5. If |slope_old| < `min_slope_old_usd` → None. The "before" slope
+       must have been real before we can talk about it changing. (Semantic
+       note: the parameter was named `min_prior_usd` pre-F.1 when it
+       floored the prior-window SUM; PR F.1 repurposed it to floor
+       |slope_old|, and PR #38 renamed it to match. The env var
+       `ACCELERATION_MIN_PRIOR_USD` remains accepted as a deprecation
+       alias of `ACCELERATION_MIN_SLOPE_OLD_USD`.)
     6. change_ratio = second_derivative / slope_old. If |change_ratio| <
        `change_threshold` (default 1.00 = 100%) → None. Second derivatives
        are more volatile than first derivatives so the threshold is higher
@@ -42,7 +44,7 @@ What this catches vs. rejects:
       when growth was linear.)
     - $100M → $150M → $300M → strong upward acceleration → fires long.
     - $300M → $200M → $50M → strong downward deceleration → fires short.
-    - Tiny baseline ($100 → $200 → $5M) → blocked by min_prior_usd on
+    - Tiny baseline ($100 → $200 → $5M) → blocked by min_slope_old_usd on
       |slope_old|; near-zero denominators don't fire spurious signals.
 
 Fingerprint per spec #51: sha256(asset|"acceleration"|date|direction)[:32].
@@ -72,15 +74,16 @@ class AccelerationDetector:
         self,
         window: int = 7,
         change_threshold: float = 1.00,
-        min_prior_usd: Decimal = Decimal("1000000"),
+        min_slope_old_usd: Decimal = Decimal("1000000"),
     ) -> None:
         # PR F.1 — defaults: 7-day windows × 3 = 21d history needed; 100%
         # threshold (raised from 50% under the pre-F.1 first-derivative
         # algorithm — second derivatives are more volatile and need a higher
-        # bar). `min_prior_usd` now floors |slope_old| instead of |prior_sum|.
+        # bar). `min_slope_old_usd` floors |slope_old| (was `min_prior_usd`
+        # pre-#38 when it floored |prior_sum|).
         self.window = window
         self.change_threshold = change_threshold
-        self.min_prior_usd = min_prior_usd
+        self.min_slope_old_usd = min_slope_old_usd
 
     async def detect(self, session: AsyncSession) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
@@ -126,7 +129,7 @@ class AccelerationDetector:
         # can meaningfully say it's changed. Also avoids huge ratios from
         # near-zero denominators (same numeric-stability rationale as the
         # pre-F.1 prior-sum floor).
-        if abs(slope_old) < self.min_prior_usd:
+        if abs(slope_old) < self.min_slope_old_usd:
             return None
 
         # Second derivative (rate of rate of change in USD).

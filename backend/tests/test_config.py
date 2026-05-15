@@ -43,8 +43,8 @@ def test_normalize_database_url(raw: str, expected: str):
     assert normalize_database_url(raw) == expected
 
 
-class TestAccelerationMinPriorUsdConstraint:
-    """PR F.1 — `acceleration_min_prior_usd` MUST be strictly positive.
+class TestAccelerationMinSlopeOldUsdConstraint:
+    """PR F.1 — `acceleration_min_slope_old_usd` MUST be strictly positive.
 
     A zero floor would let `slope_old=0` data reach the
     `second_derivative / slope_old` division in the detector and crash the
@@ -52,31 +52,54 @@ class TestAccelerationMinPriorUsdConstraint:
     constraint surfaces this misconfiguration at app boot instead of
     silently mid-cycle.
 
-    Pre-F.1 the constraint was `ge=0` and the same crash path existed for
-    `prior_sum=0` data — exposed by F.1's documentation of the floor's
-    zero-divide protection role.
+    PR #38 renamed the field from `acceleration_min_prior_usd`; the old
+    env-var name is still accepted as a deprecation alias.
     """
 
-    def test_zero_min_prior_usd_raises_at_boot(self, monkeypatch):
+    def test_zero_raises_at_boot(self, monkeypatch):
         # Patch the field via env so pydantic-settings parses it through
         # the same path as a production override.
-        monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "0")
+        monkeypatch.setenv("ACCELERATION_MIN_SLOPE_OLD_USD", "0")
         with pytest.raises(ValidationError) as exc_info:
             Settings()
-        # The Decimal field's gt=0 violation must mention the field name
-        # so an operator reading the boot log can find it instantly.
-        assert "acceleration_min_prior_usd" in str(exc_info.value).lower()
+        # Error must mention one of the accepted alias names so an operator
+        # reading the boot log can find it instantly.
+        msg = str(exc_info.value).lower()
+        assert "slope_old" in msg or "prior_usd" in msg
 
-    def test_negative_min_prior_usd_raises_at_boot(self, monkeypatch):
+    def test_negative_raises_at_boot(self, monkeypatch):
         """Defensive — pydantic should reject negatives too. `abs(slope_old)`
         in the detector would never be < a negative floor, so the floor
         would effectively never block anything. Surface as ValidationError."""
-        monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "-1000000")
+        monkeypatch.setenv("ACCELERATION_MIN_SLOPE_OLD_USD", "-1000000")
         with pytest.raises(ValidationError):
             Settings()
 
-    def test_positive_min_prior_usd_accepted(self, monkeypatch):
+    def test_positive_accepted(self, monkeypatch):
         """Defaults work; explicit positive overrides work."""
-        monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "500000")
+        monkeypatch.setenv("ACCELERATION_MIN_SLOPE_OLD_USD", "500000")
         s = Settings()
-        assert s.acceleration_min_prior_usd == Decimal("500000")
+        assert s.acceleration_min_slope_old_usd == Decimal("500000")
+
+
+class TestAccelerationMinPriorUsdDeprecatedAlias:
+    """PR #38 — `ACCELERATION_MIN_PRIOR_USD` is the legacy env name (pre-F.1
+    it floored prior-window sum; F.1 repurposed it to floor |slope_old|).
+    Pydantic AliasChoices keeps the old name readable so existing deploys
+    don't break on the rename; the canonical name is
+    `ACCELERATION_MIN_SLOPE_OLD_USD`."""
+
+    def test_old_env_name_populates_new_field(self, monkeypatch):
+        """The deprecation seam: setting only the old env name must still
+        populate `settings.acceleration_min_slope_old_usd`."""
+        monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "750000")
+        s = Settings()
+        assert s.acceleration_min_slope_old_usd == Decimal("750000")
+
+    def test_new_env_name_wins_when_both_set(self, monkeypatch):
+        """When an operator has set both during migration, the new
+        canonical name takes priority. AliasChoices order is authoritative."""
+        monkeypatch.setenv("ACCELERATION_MIN_SLOPE_OLD_USD", "111111")
+        monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "999999")
+        s = Settings()
+        assert s.acceleration_min_slope_old_usd == Decimal("111111")
