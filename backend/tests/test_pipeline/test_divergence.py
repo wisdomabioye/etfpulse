@@ -57,10 +57,11 @@ class TestAllSameSign:
 
 
 class TestPriceChangeOverWindow:
-    """PR F.2 — helper now returns `(price_change, start_close)` instead of
-    just `price_change`. Returning both values from one bar-walk lets the
-    detector compute `price_change_pct = abs(change) / start_close` without
-    repeating the lookup."""
+    """PR F.2 — helper returns `(price_change, start_close, end_close)`.
+    Returning all three values from one bar-walk lets the detector compute
+    `price_change_pct = abs(change) / start_close` AND populate the
+    trigger_data endpoint snapshots without re-reading `bars[0]` /
+    `bars[-1]` (which are PADDING bars; issue #37)."""
 
     def test_simple_drop(self):
         flows = _flow_seq(100, 200, 300)  # 2026-04-18..20
@@ -70,7 +71,7 @@ class TestPriceChangeOverWindow:
             _bar(date(2026, 4, 20), 85_000),
         ]
         result = _price_change_over_window(bars, flows)
-        assert result == (Decimal("-5000"), Decimal("90000"))
+        assert result == (Decimal("-5000"), Decimal("90000"), Decimal("85000"))
 
     def test_simple_rise(self):
         flows = _flow_seq(-100, -200)
@@ -81,6 +82,7 @@ class TestPriceChangeOverWindow:
         assert _price_change_over_window(bars, flows) == (
             Decimal("4000"),
             Decimal("80000"),
+            Decimal("84000"),
         )
 
     def test_falls_back_to_previous_bar_on_gap(self):
@@ -94,6 +96,30 @@ class TestPriceChangeOverWindow:
         assert _price_change_over_window(bars, flows) == (
             Decimal("-2000"),
             Decimal("90000"),
+            Decimal("88000"),
+        )
+
+    def test_ignores_padding_bars(self):
+        """Issue #37 regression. `_load_price_bars` pads the window by one
+        day on each side; the helper MUST resolve closes by flow-window
+        date, not by bar index. We construct bars where the padding-day
+        closes differ sharply from the in-window closes and assert the
+        helper returns the in-window values."""
+        flows = _flow_seq(100, 200, 300)  # 2026-04-18..20
+        bars = [
+            # Pre-window padding bar — wildly different close so a buggy
+            # `bars[0]` reader would obviously fail.
+            _bar(date(2026, 4, 17), 50_000),
+            _bar(date(2026, 4, 18), 90_000),
+            _bar(date(2026, 4, 19), 88_000),
+            _bar(date(2026, 4, 20), 85_000),
+            # Post-window padding bar.
+            _bar(date(2026, 4, 21), 130_000),
+        ]
+        assert _price_change_over_window(bars, flows) == (
+            Decimal("-5000"),
+            Decimal("90000"),
+            Decimal("85000"),
         )
 
     def test_no_matching_bars_returns_none(self):
@@ -330,6 +356,58 @@ class TestMagnitudeFloors:
         assert Decimal(hit.trigger_data["flow_sum_usd"]) == Decimal("400000000")
         # 4000 / 80000 = 0.05 → 5%.
         assert Decimal(hit.trigger_data["price_change_pct"]) == Decimal("0.05")
+
+    async def test_trigger_data_endpoints_ignore_padding_bars(self, db_session, monkeypatch):
+        """Issue #37 regression. `_load_price_bars` pads the kline window
+        by one day on each side; `trigger_data["price_at_window_start"]` and
+        `price_at_window_end` must be the closes on the actual flow-window
+        endpoints, NOT the padding bars. This test sets distinct padding
+        closes so a buggy `bars[0].close` / `bars[-1].close` reader would
+        immediately fail.
+
+        Invariant check: `price_change_pct` from `trigger_data` MUST equal
+        `(end - start) / start` computed from the same `trigger_data`
+        fields. Pre-fix the algebra was broken because pct used the right
+        start close but the snapshot field used the padding-bar one.
+        """
+        start = date(2026, 4, 18)
+        _seed_flows(
+            db_session,
+            [Decimal("100_000_000"), Decimal("200_000_000"), Decimal("100_000_000")],
+            start=start,
+        )
+        await db_session.flush()
+
+        async def _stub(asset, start_time_ms=None, end_time_ms=None, limit=100):
+            return (
+                [
+                    # Pre-window padding: wildly different close.
+                    _bar(start - timedelta(days=1), 50_000),
+                    _bar(start, 80_000),
+                    _bar(start + timedelta(days=2), 76_000),
+                    # Post-window padding: also wildly different.
+                    _bar(start + timedelta(days=3), 130_000),
+                ],
+                "sosovalue",
+            )
+
+        monkeypatch.setattr(
+            "etfpulse.pipeline.detectors.divergence.get_daily_klines_with_source",
+            _stub,
+        )
+
+        hits = await DivergenceDetector(lookback_days=3).detect(db_session)
+        btc = [h for h in hits if h.asset == "BTC"]
+        assert len(btc) == 1
+        td = btc[0].trigger_data
+        # Endpoints are the IN-WINDOW closes, not the padding bars.
+        assert Decimal(td["price_at_window_start"]) == Decimal("80000")
+        assert Decimal(td["price_at_window_end"]) == Decimal("76000")
+        # Algebra invariant: pct from trigger_data is internally consistent.
+        start_close = Decimal(td["price_at_window_start"])
+        end_close = Decimal(td["price_at_window_end"])
+        expected_pct = abs(end_close - start_close) / start_close
+        assert Decimal(td["price_change_pct"]) == expected_pct
 
     async def test_constructor_overrides_bypass_settings(self, db_session, monkeypatch):
         """Constructor kwargs override the global defaults — used by tighter

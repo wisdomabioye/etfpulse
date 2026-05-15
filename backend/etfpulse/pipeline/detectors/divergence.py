@@ -96,7 +96,7 @@ class DivergenceDetector:
         change_result = _price_change_over_window(bars, flow_rows)
         if change_result is None:
             return None  # not enough kline coverage to compute a change
-        price_change, price_at_start = change_result
+        price_change, price_at_start, price_at_end = change_result
 
         # Divergence is sign-mismatch between flow and price.
         if flow_sign > 0 and price_change >= 0:
@@ -135,8 +135,11 @@ class DivergenceDetector:
                 "flow_sum_usd": str(flow_sum),
                 "price_change_usd": str(price_change),
                 "price_change_pct": str(price_change_pct),
-                "price_at_window_start": str(bars[0].close),
-                "price_at_window_end": str(bars[-1].close),
+                # Closes on the actual earliest/latest flow dates — NOT
+                # `bars[0]` / `bars[-1]`, which are the padding bars from
+                # `_load_price_bars` (issue #37).
+                "price_at_window_start": str(price_at_start),
+                "price_at_window_end": str(price_at_end),
             },
             fingerprint=compute_fingerprint(
                 asset,
@@ -197,19 +200,22 @@ def _all_same_sign(flow_rows: list[tuple[date, Decimal]]) -> int | None:
 
 def _price_change_over_window(
     bars: list[PriceBar], flow_rows: list[tuple[date, Decimal]]
-) -> tuple[Decimal, Decimal] | None:
-    """`(price_change, start_close)` over the flow window, or None if missing.
+) -> tuple[Decimal, Decimal, Decimal] | None:
+    """`(price_change, start_close, end_close)` over the flow window, or None.
 
     `price_change = close(latest_flow_date) - close(earliest_flow_date)`.
-    `start_close` is the close on the EARLIEST flow date (used by callers
-    that need to express the change as a percentage of the starting price).
+    `start_close` / `end_close` are the closes on the EARLIEST / LATEST
+    flow dates respectively — NOT the first/last bar in the padded kline
+    series (`_load_price_bars` pads by one day on each side for timezone
+    resilience). Issue #37 fix: callers used to read `bars[0].close` /
+    `bars[-1].close` for trigger_data snapshots, which silently picked up
+    the padding bars and produced a `price_change_pct` that didn't match
+    `(end - start) / start` from the trigger_data fields. Returning all
+    three values from one walk eliminates that drift.
 
     Walks the (date-ascending) bars to find the closes that match the flow
     window endpoints. Falls back to the closest-available bar if the exact
     date isn't in the kline series (provider gap).
-
-    Returning both values from one walk eliminates a downstream re-lookup
-    (PR F.2 — the magnitude-floor check needs `start_close` to compute %).
     """
     earliest_date, _ = flow_rows[0]
     latest_date, _ = flow_rows[-1]
@@ -219,7 +225,7 @@ def _price_change_over_window(
     end_close = _closest_close_on_or_before(by_date, latest_date)
     if start_close is None or end_close is None:
         return None
-    return end_close - start_close, start_close
+    return end_close - start_close, start_close, end_close
 
 
 def _closest_close_on_or_before(closes: dict[date, Decimal], target: date) -> Decimal | None:
