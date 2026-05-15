@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useDashboardStats, useSignals } from '../api/queries';
 import { HeroHitRatePanel } from '../components/home/HeroHitRatePanel';
+import { HeroOutcomeRow } from '../components/home/HeroOutcomeRow';
 import { HowItWorks } from '../components/home/HowItWorks';
 import { RegimeTile } from '../components/home/RegimeTile';
 import { SignalTypesGrid } from '../components/home/SignalTypesGrid';
@@ -99,6 +100,18 @@ export function Home() {
           />
         </div>
       </section>
+
+      {/* PR E.2 — hero outcome cards. The whole <section> is wrapped in a
+          null-check so cold-start (no qualifying outcomes yet) doesn't
+          render an empty band between the hero and the regime tile. */}
+      {(stats.data?.last_target_hit || stats.data?.last_stop_saved) && (
+        <section className="border-b border-border-2 px-6 sm:px-8 py-8 md:py-10">
+          <HeroOutcomeRow
+            targetHit={stats.data?.last_target_hit ?? null}
+            stopSaved={stats.data?.last_stop_saved ?? null}
+          />
+        </section>
+      )}
 
       <section className="border-b border-border-2 px-6 sm:px-8 py-10 md:py-12">
         <RegimeTile

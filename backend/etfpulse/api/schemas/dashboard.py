@@ -1,13 +1,56 @@
-"""Response DTO for `GET /api/dashboard/stats`.
+"""Response DTOs for `GET /api/dashboard/stats`.
 
-Pure value object — the aggregation query lives in the route.
+Pure value objects — the aggregation queries live in the route.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
+
+
+class HeroOutcome(BaseModel):
+    """Single closed `SignalOutcome` surfaced on the home page hero card.
+
+    Two slots populated independently in `DashboardStats`:
+      * `last_target_hit`  — most recently evaluated outcome with hit_target=True
+      * `last_stop_saved`  — most recently evaluated outcome with hit_stop=True
+
+    `max_favorable` and `max_adverse` are **unsigned fractions of entry**
+    (e.g. `0.05` for 5%), matching the column semantics in
+    `pipeline/track_record.py:_compute_metrics`. The FE multiplies by 100
+    for display. Naming intentionally drops the `_pct` suffix used in earlier
+    drafts — calling a fraction "pct" would mislead future readers.
+
+    `entry_price`, `stop_price`, `target_price` carry the suggested levels
+    from the signal at creation time; the FE can compute the actual gain to
+    target (or stop loss) without an extra API call.
+
+    `headline` is sourced from `signal.ai_analysis["headline"]` for cards
+    that want a one-line description. None only if AI failed at build time,
+    which can't happen for rows surfacing here — hit_target/hit_stop both
+    require AI-set levels.
+    """
+
+    signal_id: int
+    asset: str
+    signal_type: str
+    direction: str  # "long" | "short"
+    confidence: int = Field(ge=1, le=10)
+    headline: str | None = None
+
+    entry_price: Decimal
+    stop_price: Decimal | None = None
+    target_price: Decimal | None = None
+    price_at_signal: Decimal
+
+    max_favorable: Decimal | None = None
+    max_adverse: Decimal | None = None
+
+    evaluated_at: datetime
+    signal_created_at: datetime
 
 
 class DashboardStats(BaseModel):
@@ -66,3 +109,10 @@ class DashboardStats(BaseModel):
     # ("on N evaluated signals"). 0 when the eval job hasn't produced any
     # outcome rows yet (cold-boot before signals age past 72h).
     evaluated_count: int = Field(default=0, ge=0)
+
+    # PR E.1 — hero card slots. Both None on cold-start or when no
+    # qualifying outcome exists. The FE renders the aggregate strip
+    # alone in that case — no hollow placeholder. Rotation between the
+    # two cards is an FE concern (see PR E.2 / task #29).
+    last_target_hit: HeroOutcome | None = None
+    last_stop_saved: HeroOutcome | None = None

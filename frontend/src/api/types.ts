@@ -177,6 +177,36 @@ export interface SignalFilters {
 // Dashboard
 // ---------------------------------------------------------------------------
 
+/** PR E.1 — single `SignalOutcome` surfaced on the home page hero card.
+ *
+ *  `max_favorable` and `max_adverse` are **unsigned fractions of entry**
+ *  (e.g. `"0.05"` for 5%), matching the backend column semantics. The FE
+ *  multiplies by 100 for display. Naming intentionally drops the `_pct`
+ *  suffix — calling a fraction "pct" would mislead future readers.
+ *
+ *  Decimal-shaped fields arrive as strings over the wire (Pydantic default
+ *  for Decimal). `Number(...)` at the rendering boundary; same pattern as
+ *  the `Signal` price levels.
+ *
+ *  Keep this in sync with `etfpulse/backend/etfpulse/api/schemas/dashboard.py::HeroOutcome` —
+ *  field-by-field; the response model is strict. */
+export interface HeroOutcome {
+  signal_id: number;
+  asset: AssetSymbol;
+  signal_type: SignalType;
+  direction: 'long' | 'short';
+  confidence: number;
+  headline: string | null;
+  entry_price: string;
+  stop_price: string | null;
+  target_price: string | null;
+  price_at_signal: string;
+  max_favorable: string | null;
+  max_adverse: string | null;
+  evaluated_at: string;
+  signal_created_at: string;
+}
+
 export interface DashboardStats {
   total_signals: number;
   signals_today: number;
@@ -208,6 +238,11 @@ export interface DashboardStats {
    *  ("on N evaluated signals"). 0 before any signal ages past its
    *  validity window. */
   evaluated_count: number;
+  /** PR E.1 — hero card slots. Both null on cold-start or when no
+   *  qualifying outcome exists. The `HeroOutcomeRow` component collapses
+   *  the whole section when both are null — no hollow placeholder. */
+  last_target_hit: HeroOutcome | null;
+  last_stop_saved: HeroOutcome | null;
 }
 
 // ---------------------------------------------------------------------------
