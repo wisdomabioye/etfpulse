@@ -68,6 +68,7 @@ from etfpulse.adapters.telegram import (
     telegram_client,
 )
 from etfpulse.config import settings
+from etfpulse.constants import MARKET_ASSET
 from etfpulse.models import (
     ChannelType,
     DeliveryStatus,
@@ -222,12 +223,7 @@ async def _match_users(session: AsyncSession, signal: Signal) -> list[tuple[int,
             User.pref_paused.is_(False),
             NotificationChannel.is_active.is_(True),
             NotificationChannel.channel_type == ChannelType.TELEGRAM.value,
-            # Empty pref_assets = "all assets" (edge case 15). Non-empty →
-            # must contain the signal's asset.
-            or_(
-                func.cardinality(User.pref_assets) == 0,
-                User.pref_assets.contains([signal.asset]),
-            ),
+            *_asset_pref_filter(User.pref_assets, signal.asset),
             User.pref_min_confidence <= signal.confidence,
         )
     )
@@ -246,14 +242,39 @@ async def _match_groups(session: AsyncSession, signal: Signal) -> list[int]:
     stmt = select(TelegramGroup.id).where(
         TelegramGroup.is_active.is_(True),
         TelegramGroup.pref_paused.is_(False),
-        or_(
-            func.cardinality(TelegramGroup.pref_assets) == 0,
-            TelegramGroup.pref_assets.contains([signal.asset]),
-        ),
+        *_asset_pref_filter(TelegramGroup.pref_assets, signal.asset),
         TelegramGroup.pref_min_confidence <= signal.confidence,
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+def _asset_pref_filter(pref_column: Any, signal_asset: str) -> tuple[Any, ...]:
+    """Build the WHERE clause for the `pref_assets` filter.
+
+    Two modes (PR F.3):
+      * Single-asset signal → empty `pref_assets` means "all assets",
+        non-empty must contain the signal's asset.
+      * MARKET signal → bypass the `pref_assets` filter entirely. Regime
+        shifts (the only MARKET signal type today) are market-wide events
+        that reach every subscriber regardless of their asset preferences.
+        Users who don't want them can use `pref_paused` or set a confidence
+        floor above the regime classifier's typical output.
+
+    Returns a tuple of SQLAlchemy WHERE-clause fragments (empty tuple for
+    MARKET signals — splatted into the call site's `.where(...)` arg list).
+    Keeping the rule in one helper means `_match_users` and `_match_groups`
+    can't drift, and the admin trace mirror (`api/routes/admin._asset_matches`)
+    has a single Python-side rule to mirror.
+    """
+    if signal_asset == MARKET_ASSET:
+        return ()
+    return (
+        or_(
+            func.cardinality(pref_column) == 0,
+            pref_column.contains([signal_asset]),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

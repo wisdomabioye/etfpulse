@@ -387,6 +387,8 @@ def _make_signal(
     stop_price: Decimal | None = Decimal("83000"),
     target_price: Decimal | None = Decimal("85000"),
     fingerprint_extra: str = "x",
+    asset: str = "BTC",
+    signal_type: str = "flow_anomaly",
 ) -> Signal:
     """Build an in-memory Signal for evaluator tests.
 
@@ -401,8 +403,8 @@ def _make_signal(
     `server_default=func.now()`, but assigning explicitly sends our value
     on INSERT instead of letting the server clock fire."""
     signal = Signal(
-        signal_type="flow_anomaly",
-        asset="BTC",
+        signal_type=signal_type,
+        asset=asset,
         trigger_data={"streak_days": 4},
         ai_analysis={"suggested_action": suggested_action, "headline": "x"}
         if suggested_action
@@ -532,6 +534,36 @@ class TestEvaluatePendingOutcomes:
 
         summary = await evaluate_pending_outcomes(db_session)
         assert summary["candidates"] == 0  # filtered at the SQL level
+
+    async def test_skips_market_signal_even_with_price(self, db_session, stub_klines):
+        """PR F.3 — MARKET regime_shift signals must be filtered at the SQL
+        level (`Signal.asset != MARKET_ASSET` in `base_filters`).
+
+        Defensive: even if a future change populates `price_at_creation`
+        for MARKET signals (e.g. weighted BTC+ETH average), they should
+        still be skipped because there's no single asset price series to
+        score against. The explicit asset filter decouples the skip
+        behavior from the price-null coincidence today.
+        """
+        signal = _make_signal(
+            created_at=datetime.now(UTC) - timedelta(hours=80),
+            asset="MARKET",
+            signal_type="regime_shift",
+            # Force a non-null price so this test pins the asset filter
+            # specifically, not the price-null filter.
+            price_at_creation=Decimal("84200"),
+            fingerprint_extra="market-skip",
+        )
+        signal.created_at = datetime.now(UTC) - timedelta(hours=80)
+        db_session.add(signal)
+        await db_session.flush()
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 0
+        assert summary["evaluated"] == 0
+        # No klines fetched — the SQL filter rejected the signal before
+        # the per-signal loop ran.
+        assert stub_klines["calls"] == []
 
     async def test_idempotent_skips_signal_with_existing_outcome(self, db_session, stub_klines):
         t0 = datetime.now(UTC) - timedelta(hours=80)

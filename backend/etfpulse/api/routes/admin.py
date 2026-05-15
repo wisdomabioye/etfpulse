@@ -41,6 +41,7 @@ from etfpulse.api.schemas.telegram_admin import (
 )
 from etfpulse.bot.constants import ALLOWED_UPDATES
 from etfpulse.config import settings
+from etfpulse.constants import MARKET_ASSET
 from etfpulse.models import (
     ChannelType,
     DeliveryStatus,
@@ -298,8 +299,15 @@ def _trace_group(
 
 
 def _asset_matches(pref_assets: list[str], signal_asset: str) -> bool:
-    """Pinned to `_match_users`'s `or_(cardinality == 0, contains([asset]))`
-    rule — empty pref_assets means "all assets"."""
+    """Pinned to `_match_users`/`_match_groups`'s `_asset_pref_filter` rule.
+
+    Two modes (PR F.3):
+      * MARKET signal → always matches; regime shifts bypass `pref_assets`.
+      * Single-asset signal → empty `pref_assets` means "all assets",
+        non-empty must contain the signal's asset.
+    """
+    if signal_asset == MARKET_ASSET:
+        return True
     return len(pref_assets) == 0 or signal_asset in pref_assets
 
 

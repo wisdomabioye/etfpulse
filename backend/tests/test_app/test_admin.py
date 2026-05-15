@@ -181,15 +181,17 @@ async def _seed_signal(
     status: str = SignalStatus.PENDING.value,
     confidence: int | None = 7,
     expires_at: datetime | None = None,
+    asset: str = "BTC",
+    signal_type: str = "flow_anomaly",
 ) -> Signal:
     signal = Signal(
-        signal_type="flow_anomaly",
-        asset="BTC",
+        signal_type=signal_type,
+        asset=asset,
         trigger_data={},
         confidence=confidence,
         status=status,
         expires_at=expires_at,
-        fingerprint=compute_fingerprint("BTC", "metrics-test", fp_seed),
+        fingerprint=compute_fingerprint(asset, "metrics-test", fp_seed),
         signal_date=date(2026, 4, 23),
     )
     db_session.add(signal)
@@ -998,6 +1000,125 @@ class TestDeliveryTraceConsistency:
         group_recipients = [rec for rec in body["recipients"] if rec["kind"] == "group"]
         matched_groups = sum(1 for rec in group_recipients if rec["matched"])
         assert matched_groups == inserted
+
+    async def test_market_signal_trace_mirrors_fan_out(self, db_session, metrics_client):
+        """PR F.3 — pins the SQL/Python mirror for the MARKET branch.
+
+        `_match_users` / `_match_groups` bypass `pref_assets` for MARKET
+        signals; `_asset_matches` mirrors. If a future maintainer changes
+        ONE side without the other, the matched-set/inserted-set invariant
+        breaks. Without this case the existing consistency suite only
+        exercises the single-asset branch.
+
+        Seeds users + groups whose `pref_assets` would NORMALLY exclude
+        a BTC signal (ETH-only / unrelated), plus the standard set of
+        non-asset filters (paused, inactive, confidence floor) to confirm
+        the MARKET branch only bypasses pref_assets, not the other rules.
+        """
+        from etfpulse.constants import MARKET_ASSET
+        from etfpulse.pipeline.delivery import fan_out_signal
+
+        sig = await _seed_signal(
+            db_session,
+            fp_seed="consistency-market",
+            status=SignalStatus.PENDING.value,
+            confidence=7,
+            asset=MARKET_ASSET,
+            signal_type="regime_shift",
+        )
+
+        # Each label encodes the expected match outcome. The MARKET branch
+        # ignores pref_assets, so ETH-only and unrelated lists STILL match;
+        # paused/inactive/confidence rules still apply.
+        user_cases = [
+            ("market_match_btc_prefs", {"pref_assets": ["BTC"]}, {}),
+            ("market_match_eth_prefs", {"pref_assets": ["ETH"]}, {}),
+            ("market_match_empty_prefs", {"pref_assets": []}, {}),
+            ("market_excluded_paused", {"pref_paused": True}, {}),
+            ("market_excluded_inactive_user", {"is_active": False}, {}),
+            ("market_excluded_inactive_channel", {}, {"is_active": False}),
+            ("market_excluded_confidence", {"pref_min_confidence": 9}, {}),
+        ]
+        for idx, (_label, u_kwargs, c_kwargs) in enumerate(user_cases):
+            user = User(
+                pref_assets=u_kwargs.get("pref_assets", ["BTC"]),
+                pref_min_confidence=u_kwargs.get("pref_min_confidence", 5),
+                is_active=u_kwargs.get("is_active", True),
+                pref_paused=u_kwargs.get("pref_paused", False),
+            )
+            db_session.add(user)
+            await db_session.flush()
+            db_session.add(
+                NotificationChannel(
+                    user_id=user.id,
+                    channel_type=ChannelType.TELEGRAM.value,
+                    channel_identifier=f"market-consist-{idx}",
+                    is_active=c_kwargs.get("is_active", True),
+                )
+            )
+
+        # Group cases — same MARKET bypass logic must mirror on the group side.
+        from etfpulse.models import TelegramGroup
+
+        group_cases = [
+            ("market_group_match_eth_prefs", {"pref_assets": ["ETH"]}),
+            ("market_group_excluded_paused", {"pref_paused": True}),
+            ("market_group_excluded_confidence", {"pref_min_confidence": 9}),
+        ]
+        for idx, (_label, kwargs) in enumerate(group_cases):
+            db_session.add(
+                TelegramGroup(
+                    chat_id=-200_000 - idx,
+                    title=f"market-group-{idx}",
+                    pref_assets=kwargs.get("pref_assets", ["BTC"]),
+                    pref_min_confidence=kwargs.get("pref_min_confidence", 5),
+                    is_active=kwargs.get("is_active", True),
+                    pref_paused=kwargs.get("pref_paused", False),
+                )
+            )
+        await db_session.flush()
+
+        inserted = await fan_out_signal(db_session, sig.id)
+        await db_session.flush()
+
+        r = await metrics_client.get(
+            f"/api/admin/signals/{sig.id}/delivery-trace",
+            headers={"X-Admin-Key": "secret-key"},
+        )
+        body = r.json()
+
+        # Anti-drift invariant — matched set MUST equal inserted set.
+        assert body["matched_count"] == inserted, (
+            f"trace.matched_count={body['matched_count']} but fan-out "
+            f"inserted={inserted} for MARKET signal; one side filters differently"
+        )
+
+        # Per-recipient pairing — same as the BTC consistency test.
+        for rec in body["recipients"]:
+            if rec["matched"]:
+                assert rec["delivery_status"] is not None, (
+                    f"matched MARKET recipient {rec['target_id']} ({rec['kind']}) "
+                    f"has no SignalDelivery row"
+                )
+            else:
+                assert rec["delivery_status"] is None, (
+                    f"NON-matched MARKET recipient {rec['target_id']} ({rec['kind']}) "
+                    f"has a SignalDelivery row — fan-out's MARKET branch is "
+                    f"weaker than _asset_matches claims"
+                )
+
+        # Specifically pin the bypass — at least one ETH-prefs recipient
+        # MUST be in the matched set. If pref_assets filtering ever
+        # accidentally returns to MARKET signals, this assertion fails.
+        eth_only_user_match = any(
+            rec["matched"]
+            for rec in body["recipients"]
+            if rec["kind"] == "user" and "market-consist-1" in (rec["chat_id"] or "")
+        )
+        assert eth_only_user_match, (
+            "MARKET signal must reach a user with pref_assets=['ETH'] — "
+            "the bypass invariant is broken"
+        )
 
 
 class TestRetryAiRoute:

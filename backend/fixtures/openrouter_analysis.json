@@ -70,7 +70,7 @@
     "target_price": "2640.00"
   },
   "regime_shift": {
-    "headline": "Regime transition: accumulation → markup — posture moves to normal",
+    "headline": "Market regime transition: accumulation → markup — posture moves to normal",
     "reasoning": [
       "Combined 7-day BTC + ETH flow score crossed the markup threshold.",
       "News velocity remained moderate — directional signal isn't drowning in noise.",
@@ -79,12 +79,12 @@
     "confidence": 7,
     "risks": [
       "Regime transitions are coincident, not leading — entry on the very first crossing has historically been worse than waiting for one confirming day.",
-      "Single-asset breakouts can drag the combined score across without broad participation."
+      "Regime is a market-wide read; individual assets may diverge from the headline call."
     ],
-    "suggested_action": "consider long",
+    "suggested_action": "wait",
     "time_horizon": "position",
-    "entry_price": "2520.00",
-    "stop_price": "2380.00",
-    "target_price": "2810.00"
+    "entry_price": null,
+    "stop_price": null,
+    "target_price": null
   }
 }

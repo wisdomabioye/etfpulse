@@ -24,3 +24,13 @@ from __future__ import annotations
 from typing import Final
 
 SUPPORTED_ASSETS: Final[tuple[str, ...]] = ("BTC", "ETH")
+
+# Cross-asset sentinel — used as `Signal.asset` for market-wide events that
+# don't belong to any single tracked asset (e.g. regime_shift signals after
+# PR F.3). Deliberately NOT a member of `SUPPORTED_ASSETS` because it is not
+# part of the asset universe — flows aren't ingested for it, klines aren't
+# fetched for it, and user `pref_assets` lists don't include it. Fan-out
+# bypasses the `pref_assets` filter when `Signal.asset == MARKET_ASSET` so
+# users still receive these signals regardless of their asset preferences;
+# outcome scoring skips them because there's no asset price to score against.
+MARKET_ASSET: Final[str] = "MARKET"

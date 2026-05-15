@@ -71,6 +71,7 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.constants import MARKET_ASSET
 from etfpulse.models import Signal, SignalDirection, SignalOutcome
 from etfpulse.pipeline.prices import PriceBar, PriceSource, get_daily_klines_from_source
 
@@ -592,7 +593,14 @@ async def evaluate_pending_outcomes(
     # `confidence IS NOT NULL` proxy — AI-failed signals lack both.
     # LEFT JOIN filters out signals that already have an outcome row,
     # rather than a NOT IN subquery — cheaper plan + clearer.
+    # PR F.3 — `asset != MARKET_ASSET` excludes regime_shift MARKET signals
+    # from outcome scoring. They carry no asset to price against (no BTC/ETH
+    # klines apply to "the market as a whole"), so any score would be
+    # arbitrary. The `price_at_creation.is_not(None)` filter incidentally
+    # excludes them today (no spot price fetched for MARKET), but making it
+    # explicit keeps the intent decoupled from that coincidence.
     base_filters = (
+        Signal.asset != MARKET_ASSET,
         Signal.price_at_creation.is_not(None),
         Signal.expires_at.is_not(None),
         Signal.expires_at <= now,

@@ -358,6 +358,115 @@ class TestFanOutIdempotency:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# MARKET sentinel (PR F.3) — regime_shift signals bypass `pref_assets`.
+# ---------------------------------------------------------------------------
+
+
+class TestFanOutMarketSentinel:
+    """A MARKET signal must reach every active+non-paused recipient that
+    meets the confidence floor, regardless of their `pref_assets` setting
+    (which lists user-selectable assets like BTC/ETH and would otherwise
+    exclude MARKET as 'not in my asset list').
+    """
+
+    async def test_market_signal_delivers_to_user_with_btc_only_prefs(self, db_session):
+        """User opted into BTC only — but a market-wide regime shift still
+        reaches them. That's the whole point of the MARKET sentinel; if it
+        respected pref_assets, no one would ever receive a regime_shift
+        since 'MARKET' isn't in anyone's pref_assets array."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=7)
+        user, channel = await _make_user(
+            db_session, chat_id=800, pref_assets=["BTC"], pref_min_confidence=5
+        )
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 1
+        deliveries = await _deliveries_for(db_session, signal.id)
+        assert len(deliveries) == 1
+        assert deliveries[0].user_id == user.id
+        assert deliveries[0].channel_id == channel.id
+
+    async def test_market_signal_delivers_to_user_with_empty_prefs(self, db_session):
+        """`pref_assets=[]` (the "all assets" sentinel) — still receives
+        MARKET, no regression from the existing all-assets path."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=7)
+        await _make_user(db_session, chat_id=801, pref_assets=[], pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 1
+
+    async def test_market_signal_delivers_to_group_with_eth_only_prefs(self, db_session):
+        """Group analogue — `_match_groups` must mirror `_match_users` for
+        MARKET signals. Pre-PR-F.3 a group with `pref_assets=["ETH"]` would
+        never receive a regime_shift."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=7)
+        await _make_group(db_session, chat_id=-100800, pref_assets=["ETH"], pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 1
+
+    async def test_market_signal_excluded_by_paused_user(self, db_session):
+        """MARKET bypasses `pref_assets`, NOT `pref_paused`. Paused users
+        still don't receive anything — that's the universal opt-out lever."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=7)
+        await _make_user(db_session, chat_id=802, pref_paused=True, pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 0
+
+    async def test_market_signal_excluded_by_low_confidence(self, db_session):
+        """MARKET bypasses `pref_assets`, NOT `pref_min_confidence`. A user
+        with a high floor still filters MARKET signals below it."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=4)
+        await _make_user(db_session, chat_id=803, pref_min_confidence=7)
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 0
+
+    async def test_market_signal_excluded_by_inactive_channel(self, db_session):
+        """Active user but inactive Telegram channel (e.g. blocked) — no
+        delivery, same as non-MARKET signals."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=7)
+        await _make_user(db_session, chat_id=804, channel_active=False)
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 0
+
+    async def test_market_signal_delivers_to_mix_of_recipients(self, db_session):
+        """End-to-end — MARKET fans out to several users with diverse prefs
+        + a group simultaneously. Pins the cross-asset reach property."""
+        signal = await _make_signal(db_session, asset="MARKET", confidence=7)
+        await _make_user(
+            db_session, chat_id=805, pref_assets=["BTC"], pref_min_confidence=5
+        )  # match
+        await _make_user(
+            db_session, chat_id=806, pref_assets=["ETH"], pref_min_confidence=5
+        )  # match
+        await _make_user(db_session, chat_id=807, pref_assets=[], pref_min_confidence=5)  # match
+        await _make_user(
+            db_session, chat_id=808, pref_min_confidence=9, pref_assets=["BTC"]
+        )  # excluded by confidence
+        await _make_group(
+            db_session, chat_id=-100801, pref_assets=["ETH"], pref_min_confidence=5
+        )  # match
+
+        count = await fan_out_signal(db_session, signal.id)
+
+        assert count == 4  # 3 matching users + 1 matching group
+
+
+# ---------------------------------------------------------------------------
+# Smoke — Decimal flow data doesn't crash
+# ---------------------------------------------------------------------------
+
+
 async def test_fan_out_works_with_decimal_price(db_session):
     """Sanity — signal with Decimal price_at_creation set doesn't break the
     match query (#34 says NULL is expected for now, but test both paths)."""
