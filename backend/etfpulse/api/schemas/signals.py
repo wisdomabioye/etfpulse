@@ -31,7 +31,12 @@ DisplayStatus = Literal["pending", "alerted", "evaluated", "expired"]
 # in one file, not a coordinated multi-file change. Stage 8-P6 cross-cut
 # review extracted these from the per-route declarations they had drifted
 # into.
-AssetLiteral = Literal["BTC", "ETH"]
+# MARKET is the cross-asset sentinel (PR F.3 — regime_shift signals).
+# Accepted by /api/signals so the UI can filter to market-wide tags.
+# /api/track-record also accepts it but always returns empty: MARKET
+# signals have no `price_at_creation` and are excluded from scoring at
+# the query layer (`pipeline/track_record.py`).
+AssetLiteral = Literal["BTC", "ETH", "MARKET"]
 SignalTypeLiteral = Literal[
     "flow_anomaly", "magnitude", "acceleration", "divergence", "regime_shift"
 ]

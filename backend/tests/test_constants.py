@@ -14,7 +14,7 @@ import typing
 
 from etfpulse.api.schemas.signals import AssetLiteral
 from etfpulse.bot.constants import VALID_ASSETS
-from etfpulse.constants import SUPPORTED_ASSETS
+from etfpulse.constants import MARKET_ASSET, SUPPORTED_ASSETS
 from etfpulse.pipeline.prices import Asset
 
 
@@ -39,6 +39,11 @@ class TestAssetAlignment:
         assert _literal_args(Asset) == SUPPORTED_ASSETS
 
     def test_api_asset_literal_matches(self):
-        """`api.schemas.signals.AssetLiteral` is the public API contract
-        — exposed through frontend `AssetSymbol`. Same guard as above."""
-        assert _literal_args(AssetLiteral) == SUPPORTED_ASSETS
+        """`api.schemas.signals.AssetLiteral` is the public API filter
+        contract — exposed through frontend `AssetSymbol`. Intentionally
+        broader than `SUPPORTED_ASSETS`: it accepts the `MARKET` sentinel
+        (PR F.3 — regime_shift signals) as a filter value even though
+        MARKET is not a tradeable/priceable asset. The pipeline-side
+        `Asset` Literal stays narrow because pricing genuinely is only
+        BTC/ETH."""
+        assert _literal_args(AssetLiteral) == SUPPORTED_ASSETS + (MARKET_ASSET,)

@@ -12,7 +12,11 @@
  * import the arrays from this module when you need the runtime list.
  */
 
-export const ASSETS = ['BTC', 'ETH'] as const;
+// MARKET is the cross-asset sentinel (PR F.3 — regime_shift fires once
+// per UTC-day transition against the whole market, not per asset). It
+// renders as a neutral chip in AssetBadge and appears as a third pill
+// in the FilterBar so users can isolate market-wide tags.
+export const ASSETS = ['BTC', 'ETH', 'MARKET'] as const;
 
 export const SIGNAL_TYPES = [
   'flow_anomaly',

@@ -177,6 +177,20 @@ class TestListFilters:
         assert len(items) == 1
         assert items[0]["asset"] == "BTC"
 
+    async def test_filter_by_asset_market(self, db_session, client):
+        # PR F.3.FE — MARKET is the cross-asset sentinel for regime_shift
+        # signals; the asset filter must accept it (was 422 pre-widen).
+        await _seed_signal(db_session, asset="BTC", headline="btc")
+        await _seed_signal(
+            db_session, asset="MARKET", signal_type="regime_shift", headline="market"
+        )
+
+        r = await client.get("/api/signals?asset=MARKET")
+        assert r.status_code == 200
+        items = r.json()["items"]
+        assert len(items) == 1
+        assert items[0]["asset"] == "MARKET"
+
     async def test_filter_by_signal_type(self, db_session, client):
         await _seed_signal(db_session, signal_type="flow_anomaly", headline="fa")
         await _seed_signal(db_session, signal_type="magnitude", headline="m")
