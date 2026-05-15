@@ -234,12 +234,22 @@ class Settings(BaseSettings):
     magnitude_percentile_threshold: float = Field(default=0.80, gt=0.0, lt=1.0)
     magnitude_min_history_days: int = Field(default=30, ge=1)
     acceleration_window: int = Field(default=7, ge=1)
-    # Ratio change required to fire — 0.50 = ±50% acceleration. NOT
-    # bounded at 1.0; loose configs may want to demand 2x or 5x.
-    acceleration_change_threshold: float = Field(default=0.50, gt=0.0)
-    # Floor on the prior window's total flow so a near-zero baseline
-    # doesn't produce huge ratios from tiny absolute moves. USD.
-    acceleration_min_prior_usd: Decimal = Field(default=Decimal("1000000"), ge=Decimal("0"))
+    # PR F.1 — second-derivative threshold. Default raised from 0.50 (the
+    # pre-F.1 first-derivative ratio default) to 1.00 because second
+    # derivatives are more volatile and the bar for "trend is genuinely
+    # accelerating" should be higher. NOT bounded above 1.0 — tight configs
+    # may want 2x or higher to suppress all but the strongest inflections.
+    acceleration_change_threshold: float = Field(default=1.00, gt=0.0)
+    # Floor on |slope_old| (the prior 7-day → mid 7-day window-sum delta)
+    # so a near-zero baseline slope doesn't produce huge ratios from tiny
+    # absolute moves. Same numeric-stability role as the pre-F.1 prior-sum
+    # floor; semantic shifted to slope under the second-derivative redesign.
+    # `gt=0` (not `ge=0`) — a zero floor would let `slope_old=0` data
+    # reach the `second_derivative / slope_old` division and crash the
+    # cycle with ZeroDivisionError. Boot-time pydantic validation
+    # surfaces the misconfiguration before any signal builds. Rename to
+    # `acceleration_min_slope_old_usd` deferred to task #38. USD.
+    acceleration_min_prior_usd: Decimal = Field(default=Decimal("1000000"), gt=Decimal("0"))
     divergence_lookback_days: int = Field(default=3, ge=1)
     # PR F.2 — magnitude floors. Divergence is a meaningful signal only when
     # both legs (flows + price) are economically significant. Without these
