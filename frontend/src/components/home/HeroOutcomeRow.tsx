@@ -1,4 +1,5 @@
 import type { HeroOutcome } from '../../api/types';
+import { Skeleton } from '../ui';
 import { HeroOutcomeCard } from './HeroOutcomeCard';
 
 /**
@@ -18,9 +19,26 @@ import { HeroOutcomeCard } from './HeroOutcomeCard';
 interface HeroOutcomeRowProps {
   targetHit: HeroOutcome | null;
   stopSaved: HeroOutcome | null;
+  /** When true, render placeholder skeletons so the home page doesn't
+   *  collapse-then-expand as stats resolve. */
+  loading?: boolean;
 }
 
-export function HeroOutcomeRow({ targetHit, stopSaved }: HeroOutcomeRowProps) {
+// Height tuned to match the rendered HeroOutcomeCard (header strip + body
+// with magnitude/headline/levels/CTA) so the skeleton-to-real swap doesn't
+// jolt the page.
+const HERO_SKELETON_HEIGHT = 'h-[180px]';
+
+export function HeroOutcomeRow({ targetHit, stopSaved, loading = false }: HeroOutcomeRowProps) {
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <Skeleton className={HERO_SKELETON_HEIGHT} />
+        <Skeleton className={HERO_SKELETON_HEIGHT} />
+      </div>
+    );
+  }
+
   if (targetHit === null && stopSaved === null) {
     return null;
   }

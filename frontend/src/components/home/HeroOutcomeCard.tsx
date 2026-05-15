@@ -87,10 +87,16 @@ export function HeroOutcomeCard({ outcome, variant }: HeroOutcomeCardProps) {
   // honest about what happened.
   const magnitudePrefix = isTargetHit ? '+' : 'Saved ';
   const magnitudeSuffix = isTargetHit ? ' to target' : ' drawdown';
+  // Screen-reader narration — fires before the visual content. Variant +
+  // asset + direction + magnitude in one sentence so a screen-reader user
+  // gets the headline before tabbing into details. `magnitudeText` already
+  // carries the "%" suffix.
+  const ariaLabel = `${headerLabel.toLowerCase()}: ${outcome.asset} ${outcome.direction} signal, ${magnitudePrefix.trim()}${magnitudeText}${magnitudeSuffix}. View signal detail.`;
 
   return (
     <Link
       to={`/signals/${outcome.signal_id}`}
+      aria-label={ariaLabel}
       className="block border border-border-2 rounded-[10px] bg-bg-2 overflow-hidden hover:border-border-1 transition-colors"
     >
       {/* Header strip — variant label + asset + direction + relative time. */}

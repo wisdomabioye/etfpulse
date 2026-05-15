@@ -103,12 +103,17 @@ export function Home() {
 
       {/* PR E.2 — hero outcome cards. The whole <section> is wrapped in a
           null-check so cold-start (no qualifying outcomes yet) doesn't
-          render an empty band between the hero and the regime tile. */}
-      {(stats.data?.last_target_hit || stats.data?.last_stop_saved) && (
+          render an empty band between the hero and the regime tile. While
+          stats is loading we render skeletons (PR E.3) so the band doesn't
+          pop in after first paint. */}
+      {(stats.isLoading ||
+        stats.data?.last_target_hit ||
+        stats.data?.last_stop_saved) && (
         <section className="border-b border-border-2 px-6 sm:px-8 py-8 md:py-10">
           <HeroOutcomeRow
             targetHit={stats.data?.last_target_hit ?? null}
             stopSaved={stats.data?.last_stop_saved ?? null}
+            loading={stats.isLoading}
           />
         </section>
       )}
