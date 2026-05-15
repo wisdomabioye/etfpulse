@@ -241,6 +241,13 @@ class Settings(BaseSettings):
     # doesn't produce huge ratios from tiny absolute moves. USD.
     acceleration_min_prior_usd: Decimal = Field(default=Decimal("1000000"), ge=Decimal("0"))
     divergence_lookback_days: int = Field(default=3, ge=1)
+    # PR F.2 — magnitude floors. Divergence is a meaningful signal only when
+    # both legs (flows + price) are economically significant. Without these
+    # floors, the detector fires on tiny ~0.1% drifts across small flow weeks,
+    # which dominated the signal cohort with low-information output (see #76).
+    # Defaults: 2% price move + $300M flow volume over the lookback window.
+    divergence_min_price_change_pct: float = Field(default=0.02, gt=0.0)
+    divergence_min_flow_sum_usd: Decimal = Field(default=Decimal("300000000"), ge=Decimal("0"))
 
     # Bounded wait at scheduler shutdown (issue #28). 10s gives in-flight
     # jobs (a daily cycle, an outcome eval batch) a chance to finish their

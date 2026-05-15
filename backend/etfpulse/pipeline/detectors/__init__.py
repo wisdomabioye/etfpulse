@@ -79,7 +79,11 @@ ALL_DETECTORS.extend(
             change_threshold=settings.acceleration_change_threshold,
             min_prior_usd=settings.acceleration_min_prior_usd,
         ),
-        DivergenceDetector(lookback_days=settings.divergence_lookback_days),
+        DivergenceDetector(
+            lookback_days=settings.divergence_lookback_days,
+            min_price_change_pct=settings.divergence_min_price_change_pct,
+            min_flow_sum_usd=settings.divergence_min_flow_sum_usd,
+        ),
         RegimeShiftDetector(),
     ]
 )
