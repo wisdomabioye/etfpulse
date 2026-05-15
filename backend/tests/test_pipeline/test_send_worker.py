@@ -675,6 +675,152 @@ class TestSendPendingDeliveries:
         # Group MUST stay reachable; it didn't disappear, it just moved.
         assert group.is_active is True
 
+    async def test_chat_migrated_collision_soft_deletes_stale_row(self, db_session, stub_send):
+        """Issue #77 — regression for the prod re-delivery loop.
+
+        Setup: TWO TelegramGroup rows exist — `legacy` (pre-migration chat_id)
+        and `survivor` (already registered at the post-migration chat_id, e.g.
+        via `my_chat_member`). A pending delivery targets `legacy`; Telegram
+        returns ChatMigrated pointing at `survivor`'s chat_id.
+
+        The old code did `legacy.chat_id = exc.new_chat_id` unconditionally,
+        violating `uq_telegram_groups_chat_id` on flush → wrapper rollback →
+        every sibling DELIVERED state in the same tick reverted to PENDING →
+        worker re-sent the same messages every 30s forever.
+
+        New behavior: collision detected → `legacy.is_active=False`, sentinel
+        error message names the survivor, NO IntegrityError, `survivor` is
+        untouched (still active, still holds the migrated chat_id).
+        """
+        legacy_chat = -100500
+        survivor_chat = -1003991800653
+        stub_send.side_effect = TelegramChatMigratedError(
+            f"Group migrated to supergroup. New chat id: {survivor_chat}",
+            new_chat_id=survivor_chat,
+        )
+        delivery, _, legacy = await _seed_group_delivery(db_session, chat_id=legacy_chat)
+        survivor = TelegramGroup(chat_id=survivor_chat, title="Migrated Supergroup")
+        db_session.add(survivor)
+        await db_session.flush()
+        survivor_id = survivor.id
+
+        # The actual contract: this call must NOT raise. The prior bug
+        # surfaced as IntegrityError on flush inside the worker.
+        summary = await send_pending_deliveries(db_session)
+
+        assert summary["migrated"] == 1
+        assert summary["failed"] == 0
+        await db_session.refresh(delivery)
+        await db_session.refresh(legacy)
+        await db_session.refresh(survivor)
+
+        # Stale row: deactivated, chat_id UNTOUCHED (would have collided).
+        assert legacy.is_active is False
+        assert legacy.chat_id == legacy_chat
+
+        # Survivor: completely untouched.
+        assert survivor.is_active is True
+        assert survivor.chat_id == survivor_chat
+        assert survivor.id == survivor_id
+
+        # Delivery: terminal with a sentinel that names the surviving group
+        # so an operator can match logs without parsing chat_ids.
+        assert delivery.status == DeliveryStatus.FAILED.value
+        assert delivery.error_message == (
+            f"migrated: target already registered as group_id={survivor.id}"
+        )
+
+    async def test_chat_migrated_collision_does_not_rollback_siblings(self, db_session, stub_send):
+        """The actual user-visible symptom from issue #77 — sibling deliveries
+        in the same tick must commit independently of the collision.
+
+        Before the fix: IntegrityError from the collision propagated out of
+        the per-row try/except (it raised at session.flush()), the wrapper
+        rolled back the WHOLE tick, and the already-sent DM messages stayed
+        PENDING → re-sent every 30s.
+
+        After the fix: collision is handled cleanly inline, the healthy DM
+        delivery in the same tick lands as DELIVERED on the very first tick.
+        """
+        legacy_chat = -100501
+        survivor_chat = -1003991800654
+        legacy_delivery, _, legacy = await _seed_group_delivery(db_session, chat_id=legacy_chat)
+        survivor = TelegramGroup(chat_id=survivor_chat, title="Migrated Supergroup")
+        db_session.add(survivor)
+        await db_session.flush()
+
+        healthy_delivery, _, _ = await _seed_user_delivery(db_session, chat_id="700")
+
+        sent_at = datetime(2026, 4, 23, 12, 0, tzinfo=UTC)
+
+        def _route(chat_id, *args, **kwargs):
+            if chat_id == legacy_chat:
+                raise TelegramChatMigratedError(
+                    f"Group migrated to supergroup. New chat id: {survivor_chat}",
+                    new_chat_id=survivor_chat,
+                )
+            return SentMessage(message_id=99, chat_id=int(chat_id), sent_at=sent_at)
+
+        stub_send.side_effect = _route
+
+        summary = await send_pending_deliveries(db_session)
+        # IMPORTANT — the wrapper isn't in the loop here, so we mimic the
+        # real flush boundary by committing. Pre-fix this would IntegrityError.
+        await db_session.commit()
+
+        assert summary["migrated"] == 1
+        assert summary["sent"] == 1
+
+        await db_session.refresh(healthy_delivery)
+        await db_session.refresh(legacy_delivery)
+        await db_session.refresh(legacy)
+
+        # The actual regression check — healthy delivery is DELIVERED, not
+        # rolled back to PENDING by the sibling collision.
+        assert healthy_delivery.status == DeliveryStatus.DELIVERED.value
+        assert healthy_delivery.delivered_at is not None
+
+        # And the collision row is properly terminal.
+        assert legacy_delivery.status == DeliveryStatus.FAILED.value
+        assert legacy.is_active is False
+
+    async def test_chat_migrated_collision_multiple_stale_rows(self, db_session, stub_send):
+        """Defensive — two stale TelegramGroup rows both migrate to the same
+        survivor in one tick. Each must soft-delete cleanly without
+        cross-row interference."""
+        survivor_chat = -1003991800655
+        survivor = TelegramGroup(chat_id=survivor_chat, title="Migrated Supergroup")
+        db_session.add(survivor)
+        await db_session.flush()
+
+        stale_a_delivery, _, stale_a = await _seed_group_delivery(db_session, chat_id=-100600)
+        stale_b_delivery, _, stale_b = await _seed_group_delivery(db_session, chat_id=-100601)
+
+        stub_send.side_effect = TelegramChatMigratedError(
+            f"Group migrated to supergroup. New chat id: {survivor_chat}",
+            new_chat_id=survivor_chat,
+        )
+
+        summary = await send_pending_deliveries(db_session)
+        await db_session.commit()
+
+        assert summary["migrated"] == 2
+        for delivery, stale in (
+            (stale_a_delivery, stale_a),
+            (stale_b_delivery, stale_b),
+        ):
+            await db_session.refresh(delivery)
+            await db_session.refresh(stale)
+            assert stale.is_active is False
+            assert delivery.status == DeliveryStatus.FAILED.value
+            assert delivery.error_message == (
+                f"migrated: target already registered as group_id={survivor.id}"
+            )
+
+        await db_session.refresh(survivor)
+        assert survivor.is_active is True
+        assert survivor.chat_id == survivor_chat
+
     async def test_transient_error_stays_pending_for_retry(self, db_session, stub_send):
         """Branch 2: transient errors (rate limit / 5xx / network) keep
         the row PENDING until `delivery_max_attempts` is reached. Channel

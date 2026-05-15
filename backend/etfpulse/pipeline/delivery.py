@@ -706,9 +706,12 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
         - success                     → status=DELIVERED, delivered_at=now
         - TelegramBlockedError        → status=FAILED, deactivate channel/group
         - TelegramChatNotFoundError   → status=FAILED, deactivate channel/group
-        - TelegramChatMigratedError   → status=FAILED, update group.chat_id
-          to exc.new_chat_id; group stays active so future signals land on
-          the migrated supergroup.
+        - TelegramChatMigratedError   → status=FAILED. If no other group
+          row holds `exc.new_chat_id`, update `group.chat_id` and keep
+          active so future signals land on the migrated supergroup. If a
+          collision exists (e.g. `my_chat_member` already registered the
+          supergroup), soft-delete this row instead; the survivor row
+          becomes the live target. See issue #77.
         - TelegramError (other)       → if attempt_count < max_attempts:
           status STAYS PENDING and the row is re-picked next tick once the
           backoff window elapses. At the cap, status=FAILED. Channel/group
@@ -841,14 +844,40 @@ async def send_pending_deliveries(session: AsyncSession) -> dict[str, int]:
             summary["chat_not_found"] += 1
         except TelegramChatMigratedError as exc:
             # Basic group was converted to a supergroup — chat_id changed.
-            # Self-heal: update the group row so the NEXT signal lands on the
-            # new chat. This delivery is lost (stale by the time we'd retry);
-            # group stays active. Channels (DMs) cannot migrate — defensive
-            # `if group` covers the impossible-but-cheap case.
+            # Two-branch self-heal (issue #77):
+            #   * NO collision  → update this row's chat_id; group stays active.
+            #   * COLLISION     → another TelegramGroup already holds the new
+            #     chat_id (typically because `my_chat_member` already
+            #     registered the post-migration supergroup as a new row). Doing
+            #     the naive UPDATE here would violate `uq_telegram_groups_chat_id`
+            #     on flush, the whole tick rolls back, sibling DELIVERED rows
+            #     get reverted to PENDING, and the worker re-sends them every
+            #     30s forever. Soft-delete the stale row instead — `_match_groups`
+            #     filters `is_active=True` so future fan-outs route to the
+            #     survivor naturally.
+            # Channels (DMs) cannot migrate — `if group` covers the
+            # impossible-but-cheap case.
             if group is not None:
-                group.chat_id = exc.new_chat_id
+                existing_id = (
+                    await session.execute(
+                        select(TelegramGroup.id).where(
+                            TelegramGroup.chat_id == exc.new_chat_id,
+                            TelegramGroup.id != group.id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing_id is not None:
+                    group.is_active = False
+                    delivery.error_message = (
+                        f"migrated: target already registered as group_id={existing_id}"
+                    )
+                else:
+                    group.chat_id = exc.new_chat_id
+                    delivery.error_message = f"migrated: new chat_id={exc.new_chat_id}"
+            else:
+                # DM path — preserve historical message shape.
+                delivery.error_message = f"migrated: new chat_id={exc.new_chat_id}"
             delivery.status = DeliveryStatus.FAILED.value
-            delivery.error_message = f"migrated: new chat_id={exc.new_chat_id}"
             summary["migrated"] += 1
         except TelegramError as exc:
             # Transient (rate limit, 5xx, network). Retry until the cap.
