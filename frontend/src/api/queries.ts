@@ -14,6 +14,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { ApiError, apiGet, apiPost } from './client';
 import type {
   AdminMetrics,
+  CalibrationResponse,
   DashboardStats,
   PaginatedSignals,
   PaginatedTrackRecord,
@@ -184,6 +185,37 @@ export function useTrackRecord(filters?: TrackRecordFilters) {
   return useQuery({
     queryKey: ['track-record', filters ?? {}],
     queryFn: () => apiGet<PaginatedTrackRecord>('/api/track-record', filters),
+  });
+}
+
+/** PR I.1 — confidence calibration reliability curve.
+ *
+ *  Defaults to the active `AI_PROMPT_VERSION` server-side, so the FE
+ *  doesn't have to coordinate the version on every page mount. Pass
+ *  `ai_prompt_version` explicitly when comparing cohorts.
+ *
+ *  Backend caches the aggregation per (version, lookback, bucket_size,
+ *  min_samples) for 5 min, so FE polling burst → ≤1 DB hit per window
+ *  per worker. We mirror that with a 60s staleTime — long enough to
+ *  ride a tab session without refetching, short enough that a manual
+ *  page revisit gets a near-fresh number. retry off — cold-boot
+ *  returns 200 with empty buckets (not 503), so any error here is
+ *  config / network and won't self-fix on retry. */
+export function useCalibration(params?: {
+  ai_prompt_version?: string;
+  lookback_days?: number;
+}) {
+  return useQuery({
+    queryKey: [
+      'track-record',
+      'calibration',
+      params?.ai_prompt_version,
+      params?.lookback_days,
+    ],
+    queryFn: () =>
+      apiGet<CalibrationResponse>('/api/track-record/calibration', params ?? {}),
+    staleTime: 60_000,
+    retry: false,
   });
 }
 

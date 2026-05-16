@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
-import { useTrackRecord } from '../api/queries';
+import { useCalibration, useTrackRecord } from '../api/queries';
 import type {
   AssetSymbol,
   HorizonLabel,
@@ -18,6 +18,10 @@ import {
   Skeleton,
   StatTile,
 } from '../components/ui';
+import {
+  ReliabilityChart,
+  ReliabilityChartSkeleton,
+} from '../components/track-record/ReliabilityChart';
 import { formatAgo, formatSignalType } from '../lib/format';
 
 /**
@@ -64,6 +68,12 @@ export function TrackRecord() {
   };
 
   const query = useTrackRecord({ ...filters, page });
+  // PR I.1 — reliability chart. Independent of the page's filters (the
+  // chart's bucket-by-confidence view is across-the-board, not per-asset
+  // or per-detector) so the user sees a stable cohort view as they
+  // explore the list. Falls back to a skeleton on first paint; the
+  // component handles empty/insufficient-cell rendering itself.
+  const calibrationQuery = useCalibration();
 
   const items = query.data?.items ?? [];
   const totalPages = query.data?.total_pages ?? 0;
@@ -119,6 +129,18 @@ export function TrackRecord() {
         <>
           <SummaryGrid summary={summary} className="mt-6" />
           <HorizonBucketGrid summary={summary} className="mt-3" />
+
+          {/* PR I.1 — reliability curve. Sits between the summary stats
+              (the "what is our hit rate?" tiles) and the filter row
+              (the "drill in" controls) because it answers a higher-order
+              question: do the confidence scores mean what they say?
+              Renders independently of the list filters — the calibration
+              cohort is fixed at the active prompt version, not sliced. */}
+          {calibrationQuery.isLoading ? (
+            <ReliabilityChartSkeleton className="mt-8" />
+          ) : calibrationQuery.data ? (
+            <ReliabilityChart data={calibrationQuery.data} className="mt-8" />
+          ) : null}
 
           <FilterRow
             value={filters}

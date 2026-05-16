@@ -23,7 +23,7 @@ consumers, two different endpoints — clean separation.
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeVar
+from typing import Any, TypeVar
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -39,6 +39,7 @@ from etfpulse.api.schemas.signals import (
     parse_cursor,
 )
 from etfpulse.api.schemas.track_record import (
+    HorizonLiteral,
     PaginatedTrackRecord,
     TrackRecordItemOut,
     TrackRecordSummary,
@@ -47,19 +48,18 @@ from etfpulse.models import Signal, SignalOutcome
 from etfpulse.pipeline.track_record import (
     HORIZON_LABELS,
     compute_hit_rate_pct,
+    evaluated_outcomes_predicate,
     get_stats_by_confidence_floor_and_horizon,
 )
 
-# PR B (#60) — `horizon` query param surface. Mirrors
-# `pipeline.track_record.HorizonLabel`. `legacy` lets operators inspect the
-# pre-v2 grandfathered rows in isolation — necessary while the wipe-and-
-# reevaluate cleanup (#61) is pending.
-HorizonFilterLiteral = Literal["scalp", "swing", "position", "legacy"]
 # Inclusive boundaries — mirror `horizon_label_for` so the filter query
 # can't drift from the bucketing helper. Each label maps to a
 # `(min_hours, max_hours_exclusive)` range; NULL → "legacy" via a separate
 # `IS NULL` filter rather than a range. Keeps the SQL trivially auditable.
-_HORIZON_RANGE_HOURS: dict[HorizonFilterLiteral, tuple[int, int | None]] = {
+# `HorizonLiteral` is the canonical Literal — defined once in
+# `api/schemas/track_record.py` and shared with the calibration route so
+# adding an "intraday" bucket updates ONE list.
+_HORIZON_RANGE_HOURS: dict[HorizonLiteral, tuple[int, int | None]] = {
     "scalp": (0, 24),
     "swing": (24, 96),
     "position": (96, 24 * 365 * 10),  # 10y cap — sentinel "no upper bound" for SQL
@@ -95,7 +95,7 @@ async def get_track_record(
     # numbers are the whole point of the UI's "see all four side-by-side"
     # widget. Only the paginated `items` + the flat aggregate counts
     # (`total_evaluated`, `targets_hit`, etc) respect the filter.
-    horizon: HorizonFilterLiteral | None = Query(
+    horizon: HorizonLiteral | None = Query(
         default=None,
         description=(
             "Restrict to one horizon bucket: scalp (<24h), swing (24-96h), "
@@ -120,13 +120,13 @@ async def get_track_record(
     as `/api/signals`.
     """
 
-    # WHERE-clause builder shared by row + summary queries. `evaluated_at
-    # IS NOT NULL` is defensive — the orchestrator always sets it on insert,
-    # but the column is nullable, so a future writer (e.g. a manual seed)
-    # could leak NULLs into the public surface. Filter at SQL so the FE
-    # never sees them.
+    # WHERE-clause builder shared by row + summary queries. The
+    # "evaluated outcome" predicate is centralised in
+    # `pipeline.track_record.evaluated_outcomes_predicate()` — same definition
+    # used by calibration, per-confidence-floor stats, recent outcomes, and
+    # the future backtest. Filter at SQL so the FE never sees NULLs.
     def _apply_filters(q: _S) -> _S:
-        q = q.where(SignalOutcome.evaluated_at.is_not(None))
+        q = q.where(evaluated_outcomes_predicate())
         if asset is not None:
             q = q.where(SignalOutcome.asset == asset)
         if signal_type is not None:

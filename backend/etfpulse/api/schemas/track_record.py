@@ -17,8 +17,17 @@ Why a separate `TrackRecordItemOut` rather than reusing `SignalOutcomeOut`:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Single source of truth for the horizon bucket literal. Mirrors
+# `pipeline.track_record.HorizonLabel` (the Python-side type) and gets
+# imported by every API surface that filters or returns horizon-labelled
+# data (track-record route, calibration route). Defining it here keeps
+# the two literal-string lists from drifting; a future addition (e.g.
+# an "intraday" bucket once #62 lands) updates one place.
+HorizonLiteral = Literal["scalp", "swing", "position", "legacy"]
 
 
 class TrackRecordSummary(BaseModel):

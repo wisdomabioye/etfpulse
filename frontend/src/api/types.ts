@@ -337,6 +337,37 @@ export interface PaginatedTrackRecord {
   total_pages: number;
 }
 
+/** PR I.1 — one cell of the reliability curve. Mirrors
+ *  `CalibrationBucketOut` on the backend. `bucket_floor` and
+ *  `bucket_ceiling` are inclusive [1..10] confidence range; with the
+ *  default `bucket_size=2`, ranges are (1,2), (3,4), (5,6), (7,8), (9,10).
+ *  `hit_rate`, `ci_low`, `ci_high` are 0..1 fractions (not percents) and
+ *  null when the cell is empty OR below `min_samples` — FE renders "—"
+ *  in both cases. */
+export interface CalibrationBucket {
+  bucket_floor: number;
+  bucket_ceiling: number;
+  horizon: HorizonLabel;
+  n_samples: number;
+  wins: number;
+  losses: number;
+  hit_rate: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+}
+
+/** PR I.1 — full reliability surface for one (prompt_version, lookback)
+ *  cohort. `buckets` is ALWAYS the full grid (every bucket × horizon
+ *  combination); empty cells carry `n_samples=0` + `hit_rate=null` so
+ *  the FE can render fixed-position tiles without layout shift. */
+export interface CalibrationResponse {
+  ai_prompt_version: string;
+  lookback_days: number;
+  min_samples: number;
+  bucket_size: number;
+  buckets: CalibrationBucket[];
+}
+
 /** Query params for `GET /api/track-record`. Subset of `SignalFilters`
  *  (no `sort` / `include_expired`) — the track-record endpoint sorts
  *  fixed by `evaluated_at DESC` and only ever returns evaluated rows. */

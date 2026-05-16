@@ -70,10 +70,28 @@ from typing import Literal, cast
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import ColumnElement
 
 from etfpulse.constants import MARKET_ASSET
 from etfpulse.models import Signal, SignalDirection, SignalOutcome
 from etfpulse.pipeline.prices import PriceBar, PriceSource, get_daily_klines_from_source
+
+
+def evaluated_outcomes_predicate() -> ColumnElement[bool]:
+    """Single source of truth for "this outcome counts toward public stats."
+
+    Currently `SignalOutcome.evaluated_at IS NOT NULL`. Centralised here so
+    calibration, per-confidence-floor stats, per-detector breakdowns, recent
+    outcomes, the route's `_apply_filters`, and the future backtest all share
+    one definition. If the definition ever grows (e.g. also require
+    `scoring_version IS NOT NULL`), the change lands here and propagates
+    everywhere by construction.
+
+    Returns a SQL expression suitable for `.where(...)` — callers don't
+    need to import the column directly.
+    """
+    return SignalOutcome.evaluated_at.is_not(None)
+
 
 log = structlog.get_logger()
 
@@ -449,7 +467,7 @@ async def get_stats_by_confidence_floor_and_horizon(
             func.count().filter(SignalOutcome.hit_target.is_(True)).label("hits"),
         )
         .select_from(SignalOutcome)
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .group_by(SignalOutcome.confidence, SignalOutcome.window_hours)
     )
     rows = (await session.execute(stmt)).all()
@@ -495,7 +513,7 @@ async def get_stats_by_confidence_floor(session: AsyncSession) -> TrackRecordSta
             func.count().filter(SignalOutcome.hit_target.is_(True)).label("hits"),
         )
         .select_from(SignalOutcome)
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .group_by(SignalOutcome.confidence)
     )
     rows = (await session.execute(stmt)).all()
@@ -528,7 +546,7 @@ async def get_recent_outcomes(session: AsyncSession, *, limit: int = 5) -> list[
     """
     stmt = (
         select(SignalOutcome)
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .order_by(SignalOutcome.evaluated_at.desc(), SignalOutcome.id.desc())
         .limit(limit)
     )

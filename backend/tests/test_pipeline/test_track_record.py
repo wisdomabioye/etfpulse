@@ -24,6 +24,9 @@ from etfpulse.pipeline.track_record import (
     evaluate_pending_outcomes,
     get_stats_by_confidence_floor,
 )
+from tests._helpers.seed_outcomes import (
+    seed_signal_with_outcome as _seed_outcome_only,
+)
 
 # ---------------------------------------------------------------------------
 # compute_hit_rate_pct — canonical helper, single source of truth for the
@@ -728,34 +731,12 @@ class TestEvaluatePendingOutcomes:
 # ---------------------------------------------------------------------------
 
 
-async def _seed_outcome_only(
-    db_session,
-    *,
-    confidence: int,
-    hit_target: bool | None,
-    key: str,
-    evaluated_at: datetime | None = None,
-) -> None:
-    """Tiny helper for the per-floor stats tests — seeds Signal + Outcome
-    in one call. Distinct from `_make_signal` (used by the eval-loop tests)
-    because here we never call the eval loop; we just need the rows present."""
-    signal = _make_signal(created_at=datetime.now(UTC) - timedelta(hours=80), fingerprint_extra=key)
-    db_session.add(signal)
-    await db_session.flush()
-    db_session.add(
-        SignalOutcome(
-            signal_id=signal.id,
-            asset="BTC",
-            signal_type="flow_anomaly",
-            direction="long",
-            confidence=confidence,
-            target_price=Decimal("89500"),
-            price_at_signal=Decimal("84200"),
-            hit_target=hit_target,
-            evaluated_at=evaluated_at or datetime.now(UTC),
-        )
-    )
-    await db_session.flush()
+# Stage 8-P8 stats-aggregation tests use the shared seed helper imported
+# at the top of this file (`_seed_outcome_only` is `seed_signal_with_outcome`
+# aliased to preserve the existing call-site names). The pre-PR-I.1
+# inline helper was collapsed into `tests/_helpers/seed_outcomes.py`
+# so calibration / track-record / future backtest tests can't drift on
+# what an "evaluated outcome" row looks like.
 
 
 class TestGetStatsByConfidenceFloor:

@@ -287,6 +287,36 @@ class Settings(BaseSettings):
     # the grace entirely (legacy wait=False behaviour).
     scheduler_shutdown_grace_seconds: int = Field(default=10, ge=0)
 
+    # PR I.1 — confidence calibration (on-read reliability curve). The route
+    # caches the aggregation result in-process for `calibration_cache_ttl_seconds`,
+    # so DB cost is sub-millisecond at steady state regardless of FE traffic.
+    # No persisted snapshot table — recompute is cheap and historical
+    # tracking value is speculative (see PR I.1 design note). If we later
+    # want history, add a periodic snapshot writer over the same aggregation
+    # function.
+    #
+    # `lookback_days` defines the rolling window — 90d strikes a balance
+    # between "enough N" (a quarter of signal activity) and "still relevant"
+    # (older signals were built with a possibly-different `ai_prompt_version`
+    # so calibration is grouped by version regardless).
+    calibration_lookback_days: int = Field(default=90, ge=30, le=365)
+    # Below this per-bucket sample count, the bucket reports `hit_rate=None`
+    # rather than a noisy point estimate. 20 is the inflection where Wilson
+    # CIs stop being absurdly wide for proportions near 0.5. Tighten to
+    # surface earlier (riskier readings); raise to be more conservative.
+    calibration_min_samples_per_bucket: int = Field(default=20, ge=1, le=1000)
+    # Confidence 1..10 carved into N equal buckets. MUST divide 10 evenly
+    # ({1, 2, 5, 10}); pydantic only enforces the range — the strict-divisor
+    # check lives in `pipeline.calibration.make_buckets` so a bad value
+    # surfaces at first request with a clear ValueError rather than at boot
+    # against a default. `bucket_size=2` (default) → 5 buckets.
+    calibration_bucket_size: int = Field(default=2, ge=1, le=10)
+    # Per-key TTL on the route's in-process cache. 300s is enough to absorb a
+    # FE polling burst without making the data stale enough to mislead;
+    # calibration drifts on the order of days, not minutes. 60s floor keeps
+    # test misconfigurations from accidentally bypassing the cache.
+    calibration_cache_ttl_seconds: int = Field(default=300, ge=60, le=3600)
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 
