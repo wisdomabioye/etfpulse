@@ -287,6 +287,32 @@ class Settings(BaseSettings):
     # the grace entirely (legacy wait=False behaviour).
     scheduler_shutdown_grace_seconds: int = Field(default=10, ge=0)
 
+    # PR I.2 — cross-factor confirmation gate. After AI returns, score the
+    # signal across price + regime + news factors (news always 0 in v1).
+    # `delivery_min_confirmation`: signals with `confirmation_score IS NOT
+    # NULL AND < N` are filtered from fan-out. NULL pass-through preserved
+    # so AI-failed and "wait" signals follow their existing paths.
+    #
+    # Default 1: at least one orthogonal factor must agree with the AI's
+    # direction. With news=0 always in v1, this means price or regime
+    # confirms — a low bar that filters obviously-isolated detector hits
+    # without cutting most of the cohort. Tune up to 2 once v1 cohort
+    # data shows confirmation=0 hit-rate is materially worse than
+    # confirmation>=1 (PR I.1 calibration will surface this).
+    delivery_min_confirmation: int = Field(default=1, ge=0, le=3)
+    # Price-factor lookback window. 24h matches the swing signal's first
+    # checkpoint and the daily-kline granularity (sub-day needs intraday
+    # klines — #62). Bounded 6..168 so a config typo can't silently flip
+    # the factor's semantic.
+    factor_price_window_hours: int = Field(default=24, ge=6, le=168)
+    # Minimum |price change| over the lookback window for the price vote
+    # to fire non-zero. 0.01 = 1%. Below this the factor reports vote=0
+    # ("flat — no signal") rather than dragging the score on noise.
+    # Same magnitude-floor philosophy as `divergence_min_price_change_pct`
+    # but lives in its own setting because the factor's window is shorter
+    # (24h vs 3 days) and the right floor is correspondingly tighter.
+    factor_price_min_pct: Decimal = Field(default=Decimal("0.01"), gt=Decimal("0"))
+
     # PR I.1 — confidence calibration (on-read reliability curve). The route
     # caches the aggregation result in-process for `calibration_cache_ttl_seconds`,
     # so DB cost is sub-millisecond at steady state regardless of FE traffic.

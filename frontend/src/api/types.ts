@@ -55,6 +55,11 @@ export interface SignalListItem {
 
   /** Count of SignalDelivery rows — "attempted" semantics. */
   alerted_to: number;
+
+  /** PR I.2 — confirmation score 0..3, summing per-factor votes (price,
+   *  regime, news). NULL on wait / AI-failed / pre-I.2 historical rows.
+   *  List shape carries only the integer; the breakdown lives on detail. */
+  confirmation_score: number | null;
 }
 
 export interface AIAnalysis {
@@ -142,6 +147,25 @@ export interface SignalDetail {
    *  backend — keep field names + nullability in sync. */
   price_at_creation: number | null;
   price_source: string | null;
+
+  /** PR I.2 — confirmation score 0..3 and per-factor breakdown.
+   *  `confirmation_score` is the sum of votes across factors; NULL on
+   *  wait/AI-failed/MARKET/pre-I.2 rows. `factor_votes` is the raw JSONB
+   *  the backend wrote — keys are factor names (`price`, `regime`, `news`),
+   *  each value carries at minimum `vote: -1 | 0 | +1` plus factor-specific
+   *  diagnostic fields (e.g. price's `pct_change`, regime's `regime`). Both
+   *  null together on rows where scoring didn't apply. */
+  confirmation_score: number | null;
+  factor_votes: Record<string, FactorVote> | null;
+}
+
+/** PR I.2 — per-factor vote shape on `SignalDetail.factor_votes`. Backend
+ *  writes JSONB so the read-side type is intentionally permissive: a
+ *  guaranteed `vote` field plus factor-specific diagnostic fields the UI
+ *  can probe via `unknown` lookups. */
+export interface FactorVote {
+  vote: -1 | 0 | 1;
+  [key: string]: unknown;
 }
 
 export interface PaginatedSignals {

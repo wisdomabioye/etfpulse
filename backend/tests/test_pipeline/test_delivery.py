@@ -36,6 +36,7 @@ async def _make_signal(
     confidence: int | None = 7,
     status: str = SignalStatus.PENDING.value,
     expires_at: datetime | None = None,
+    confirmation_score: int | None = None,
 ) -> Signal:
     signal = Signal(
         signal_type="flow_anomaly",
@@ -45,7 +46,10 @@ async def _make_signal(
         confidence=confidence,
         status=status,
         expires_at=expires_at,
-        fingerprint=compute_fingerprint(asset, "fan-test", str(confidence or "none")),
+        confirmation_score=confirmation_score,
+        fingerprint=compute_fingerprint(
+            asset, "fan-test", str(confidence or "none"), str(confirmation_score or "n")
+        ),
         signal_date=date(2026, 4, 23),
     )
     db_session.add(signal)
@@ -262,6 +266,44 @@ class TestFanOutSkipConditions:
         assert count == 0
         await db_session.refresh(signal)
         assert signal.status == SignalStatus.PENDING.value
+
+    async def test_low_confirmation_score_skipped(self, db_session, monkeypatch):
+        """PR I.2 — confirmation score below threshold filters the signal
+        from fan-out. Signal stays PENDING (the reaper handles eventual
+        expiration). Default threshold is 1; we set it to 2 here so the
+        confirmation=0 signal cleanly fails the bar."""
+        monkeypatch.setattr("etfpulse.pipeline.delivery.settings.delivery_min_confirmation", 2)
+        signal = await _make_signal(db_session, asset="BTC", confidence=7, confirmation_score=0)
+        await _make_user(db_session, chat_id=403, pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+        assert count == 0
+        await db_session.refresh(signal)
+        assert signal.status == SignalStatus.PENDING.value
+
+    async def test_confirmation_at_threshold_delivers(self, db_session, monkeypatch):
+        """Threshold is inclusive — confirmation == min_confirmation passes."""
+        monkeypatch.setattr("etfpulse.pipeline.delivery.settings.delivery_min_confirmation", 2)
+        signal = await _make_signal(db_session, asset="BTC", confidence=7, confirmation_score=2)
+        await _make_user(db_session, chat_id=404, pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+        assert count == 1
+        await db_session.refresh(signal)
+        assert signal.status == SignalStatus.ALERTED.value
+
+    async def test_null_confirmation_passes_through(self, db_session, monkeypatch):
+        """NULL confirmation = "scoring didn't apply" (wait signals OR
+        backfill-pending historicals). Preserve existing behaviour — those
+        signals still deliver. Only NUMERIC < threshold gets filtered."""
+        monkeypatch.setattr("etfpulse.pipeline.delivery.settings.delivery_min_confirmation", 2)
+        signal = await _make_signal(db_session, asset="BTC", confidence=7, confirmation_score=None)
+        await _make_user(db_session, chat_id=405, pref_min_confidence=5)
+
+        count = await fan_out_signal(db_session, signal.id)
+        assert count == 1
+        await db_session.refresh(signal)
+        assert signal.status == SignalStatus.ALERTED.value
 
 
 # ---------------------------------------------------------------------------

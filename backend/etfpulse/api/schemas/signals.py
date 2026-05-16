@@ -128,6 +128,12 @@ class SignalListItem(BaseModel):
     # COUNT of SignalDelivery rows — "attempted" count per edge-case decision.
     alerted_to: int
 
+    # PR I.2 — confirmation score (0..3). NULL on wait / AI-failed / pre-I.2
+    # rows. List shape carries the score only (not full `factor_votes`) so the
+    # feed can render a chip without bloating the 20-item page payload; the
+    # detail page is where the breakdown lives.
+    confirmation_score: int | None = Field(default=None, ge=0, le=3)
+
     @classmethod
     def from_row(
         cls,
@@ -156,6 +162,7 @@ class SignalListItem(BaseModel):
             created_at=signal.created_at,
             expires_at=signal.expires_at,
             alerted_to=alerted_to,
+            confirmation_score=signal.confirmation_score,
         )
 
 
@@ -192,6 +199,14 @@ class SignalDetail(BaseModel):
     # revisits these rows; once filled the field populates retroactively).
     price_at_creation: float | None = None
     price_source: str | None = None
+
+    # PR I.2 — cross-factor confirmation score (0..3) + per-factor breakdown.
+    # NULL when scoring didn't apply (AI failed → no direction, MARKET sentinel,
+    # or factor pipeline failed mid-build). `factor_votes` is the raw JSONB
+    # the scorer wrote (`{price: {vote, ...}, regime: {...}, news: {...}}`) so
+    # the detail page can render a per-factor breakdown without re-deriving.
+    confirmation_score: int | None = Field(default=None, ge=0, le=3)
+    factor_votes: dict[str, Any] | None = None
 
     @classmethod
     def from_row(
@@ -231,6 +246,8 @@ class SignalDetail(BaseModel):
                 float(signal.price_at_creation) if signal.price_at_creation is not None else None
             ),
             price_source=signal.price_source,
+            confirmation_score=signal.confirmation_score,
+            factor_votes=signal.factor_votes,
         )
 
 

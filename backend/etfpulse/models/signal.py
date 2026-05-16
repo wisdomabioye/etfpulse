@@ -12,8 +12,10 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -81,6 +83,24 @@ class Signal(Base):
     # that affect AI calibration (not wording edits). Used by the track-record
     # query to compare apples-to-apples across prompt revisions (issue #32).
     ai_prompt_version: Mapped[str] = mapped_column(String(10), nullable=False, server_default="v1")
+    # PR I.2 — cross-factor confirmation score. Count of orthogonal factors
+    # (price / regime / news) whose direction agrees with the AI's
+    # `suggested_action`. NULL when:
+    #   - AI didn't run (`confidence IS NULL`); no direction to confirm.
+    #   - `suggested_action == "wait"`; no directional claim to validate.
+    # Range 0..3 (CHECK); v1 news always votes 0, so realistic max is 2 until
+    # v2 news-sentiment ships. `factor_votes` carries the structured per-
+    # factor breakdown ({"price": {"vote": ±1|0, "reason": ...}, ...}) for
+    # audit + frontend "why" rendering.
+    # D23: confirmation_score is set ONCE per row and never updated. Three
+    # write paths share the invariant: `signal_builder.build_signal` (fresh
+    # insert), `ai_backfill.backfill_null_ai` (after late AI success — same
+    # one-write-per-row because the row was NULL before), and
+    # `pipeline.confirmation_backfill.backfill_null_confirmation` (historical
+    # NULL fill for pre-I.2 rows). Re-scoring would silently rewrite history
+    # because the inputs (regime snapshot, price window) are point-in-time.
+    confirmation_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    factor_votes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # 32 hex chars = 128 bits; combined with signal_date, collisions are not a concern.
     fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
     signal_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -103,10 +123,22 @@ class Signal(Base):
             "status IN ('pending','alerted','expired')",
             name="ck_signals_status_enum",
         ),
+        CheckConstraint(
+            "confirmation_score IS NULL OR confirmation_score BETWEEN 0 AND 3",
+            name="ck_signals_confirmation_score_range",
+        ),
         Index("ix_signals_fingerprint_date", "fingerprint", "signal_date", unique=True),
         Index("ix_signals_created", "created_at"),
         Index("ix_signals_asset_created", "asset", "created_at"),
         Index("ix_signals_expires", "expires_at"),
+        # Partial index — see migration for rationale. Skips the many NULL
+        # rows (legacy + AI-failed + wait signals) so the index size tracks
+        # only signals where the delivery filter actually fires.
+        Index(
+            "ix_signals_confirmation",
+            "confirmation_score",
+            postgresql_where=text("confirmation_score IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:

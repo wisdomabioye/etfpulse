@@ -270,6 +270,81 @@ class TestBackfillNullAi:
         await db_session.refresh(signal)
         assert signal.ai_analysis is not None
 
+    async def test_scores_confirmation_when_ai_succeeds_late(self, db_session, monkeypatch):
+        """PR I.2 fix — when AI succeeds via backfill, also score confirmation
+        so the recovered signal doesn't slip through fan-out's NULL pass-through
+        gate. Mirror of `signal_builder`'s post-AI hook.
+        """
+        # Seed with regime + price_source so the post-AI confirmation hook fires.
+        signal = await _seed_null_ai_signal(
+            db_session,
+            trigger_data={
+                "streak_length": 4,
+                "regime_at_creation": {
+                    "regime": "markup",
+                    "signal_posture": "normal",
+                    "confidence": 7,
+                    "macro_events_nearby": [],
+                },
+            },
+        )
+        signal.price_source = "binance"
+        await db_session.flush()
+
+        async def _ai(**kwargs):
+            return _VALID_ANALYSIS, None
+
+        from datetime import timedelta
+
+        from etfpulse.pipeline.prices import PriceBar
+
+        ref = signal.created_at
+        ts0 = int((ref - timedelta(hours=24)).timestamp() * 1000)
+        ts1 = int(ref.timestamp() * 1000)
+        c0, c1 = Decimal("100"), Decimal("102")
+        bars = [
+            PriceBar(timestamp_ms=ts0, open=c0, high=c0, low=c0, close=c0),
+            PriceBar(timestamp_ms=ts1, open=c1, high=c1, low=c1, close=c1),
+        ]
+
+        async def _fetch(asset, source, *, start_time_ms=None, end_time_ms=None, limit=100):
+            return bars
+
+        monkeypatch.setattr(
+            "etfpulse.pipeline.ai_backfill.openrouter_client.analyze_with_reason", _ai
+        )
+        monkeypatch.setattr("etfpulse.pipeline.factors.get_daily_klines_from_source", _fetch)
+
+        await backfill_null_ai(db_session, limit=10)
+
+        await db_session.refresh(signal)
+        # Long action + 2% up + MARKUP regime → score 2 (price + regime; news=0).
+        assert signal.confirmation_score == 2
+        assert signal.factor_votes is not None
+        assert signal.factor_votes["price"]["vote"] == 1
+        assert signal.factor_votes["regime"]["vote"] == 1
+
+    async def test_skips_confirmation_when_price_source_null(self, db_session, monkeypatch):
+        """Pre-Stage-7 signals lack `price_source`. The hook must skip
+        gracefully — confirmation stays NULL, AI fields still update.
+        Same `price_source is None` guard as `signal_builder.build_signal`."""
+        signal = await _seed_null_ai_signal(db_session)
+        # _seed_null_ai_signal doesn't stamp price_source; assert the seed.
+        assert signal.price_source is None
+
+        async def _ai(**kwargs):
+            return _VALID_ANALYSIS, None
+
+        monkeypatch.setattr(
+            "etfpulse.pipeline.ai_backfill.openrouter_client.analyze_with_reason", _ai
+        )
+        await backfill_null_ai(db_session, limit=10)
+
+        await db_session.refresh(signal)
+        assert signal.confidence == 7
+        assert signal.confirmation_score is None
+        assert signal.factor_votes is None
+
     async def test_partial_batch_continues_on_individual_failure(self, db_session, monkeypatch):
         """One failing row must not abort the loop — same catch-and-continue
         contract as `run_daily_cycle`."""

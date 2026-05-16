@@ -3,6 +3,8 @@ import { useSignal } from '../api/queries';
 import {
   AssetBadge,
   ConfidenceBadge,
+  ConfirmationChip,
+  FactorBreakdown,
   NewsContextSection,
   OutcomeCard,
   SignalTypeBadge,
@@ -97,6 +99,7 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
         <AssetBadge asset={s.asset} />
         <SignalTypeBadge type={s.signal_type} />
         <span className="flex-1" />
+        <ConfirmationChip score={s.confirmation_score} size="lg" />
         <ConfidenceBadge value={s.confidence} size="lg" />
       </div>
 
@@ -124,6 +127,12 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
       <SpotAtSignal price={s.price_at_creation} source={s.price_source} />
 
       {analysis && <SuggestedActionPanel analysis={analysis} />}
+
+      {s.confirmation_score !== null && s.factor_votes !== null && (
+        <div className="mt-6">
+          <FactorBreakdown score={s.confirmation_score} votes={s.factor_votes} />
+        </div>
+      )}
 
       {analysis && analysis.reasoning.length > 0 && (
         <section className="mt-10">

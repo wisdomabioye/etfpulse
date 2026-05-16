@@ -1,5 +1,7 @@
 export { AssetBadge } from './AssetBadge';
 export { ConfidenceBadge } from './ConfidenceBadge';
+export { ConfirmationChip } from './ConfirmationChip';
+export { FactorBreakdown } from './FactorBreakdown';
 export { FilterBar } from './FilterBar';
 export { NewsContextSection } from './NewsContextSection';
 export { OutcomeCard } from './OutcomeCard';

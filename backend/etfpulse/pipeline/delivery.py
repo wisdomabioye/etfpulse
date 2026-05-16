@@ -125,6 +125,25 @@ async def fan_out_signal(session: AsyncSession, signal_id: int) -> int:
         log.warning("fan_out_signal_skip_null_confidence", signal_id=signal_id)
         return 0
 
+    # PR I.2 — confirmation gate. Filter when the score is BELOW the
+    # threshold, but pass NULL through. NULL means "scoring didn't apply"
+    # (wait signal — no direction to confirm) and we keep the existing
+    # delivery behaviour for those rather than silently dropping them.
+    # AI-failed signals were already cut above via the confidence check.
+    if (
+        signal.confirmation_score is not None
+        and signal.confirmation_score < settings.delivery_min_confirmation
+    ):
+        log.info(
+            "fan_out_signal_skip_low_confirmation",
+            signal_id=signal_id,
+            asset=signal.asset,
+            signal_type=signal.signal_type,
+            confirmation_score=signal.confirmation_score,
+            threshold=settings.delivery_min_confirmation,
+        )
+        return 0
+
     user_rows = await _match_users(session, signal)
     group_ids = await _match_groups(session, signal)
 

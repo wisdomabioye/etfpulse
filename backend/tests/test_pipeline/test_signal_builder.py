@@ -124,6 +124,227 @@ class TestBuildSignal:
         assert signal.ai_analysis is None
         assert signal.confidence is None
         assert signal.expires_at is None
+        # PR I.2: AI-failed signals get NULL confirmation_score by design —
+        # there's no `suggested_action` to derive direction from. The delivery
+        # gate already filters them via `confidence IS NULL`; confirmation
+        # is the secondary gate, not a substitute.
+        assert signal.confirmation_score is None
+        assert signal.factor_votes is None
+
+
+class TestBuildSignalConfirmation:
+    """PR I.2 — confirmation score is computed post-AI when:
+        - AI returned a non-`wait` action (we have a direction), AND
+        - `price_source` is non-NULL (the price factor needs a provider
+          to pin its klines fetch to).
+
+    A factor-scoring failure inside `build_signal` is caught + logged;
+    the signal still persists with `confirmation_score=None` rather than
+    failing the whole build (same D13 catch-and-continue philosophy as the
+    cycle loop).
+    """
+
+    @staticmethod
+    def _stub_klines_returning(close_prices: tuple[str, str]):
+        """Build a klines_fetcher stub returning two synthetic bars anchored
+        to `now() - 24h` and `now()`. Anchoring to `now()` matters because
+        `signal_builder` sets `Signal.created_at = now()`; the price factor
+        scans bars in `[created_at - window_hours, created_at]`. Bars at
+        fixed historical dates would fall outside this window and silently
+        score vote=0.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from etfpulse.pipeline.prices import PriceBar
+
+        end = datetime.now(UTC)
+        start = end - timedelta(hours=24)
+        ts0 = int(start.timestamp() * 1000)
+        ts1 = int(end.timestamp() * 1000)
+        c0 = Decimal(close_prices[0])
+        c1 = Decimal(close_prices[1])
+        bars = [
+            PriceBar(timestamp_ms=ts0, open=c0, high=c0, low=c0, close=c0),
+            PriceBar(timestamp_ms=ts1, open=c1, high=c1, low=c1, close=c1),
+        ]
+
+        async def _fetch(asset, source, *, start_time_ms=None, end_time_ms=None, limit=100):
+            return bars
+
+        return _fetch
+
+    async def test_confirmation_populated_when_price_and_regime_agree(
+        self, db_session, monkeypatch
+    ):
+        # Long signal + 2% up move + MARKUP regime → score 2 (price + regime;
+        # news is always 0 in v1). All three votes in factor_votes.
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="Long signal",
+                reasoning=["r"],
+                confidence=8,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+        monkeypatch.setattr(
+            "etfpulse.pipeline.factors.get_daily_klines_from_source",
+            self._stub_klines_returning(("100", "102")),
+        )
+
+        regime = RegimeClassification(
+            regime=MarketRegime.MARKUP,
+            signal_posture=SignalPosture.NORMAL,
+            confidence=7,
+            reasoning={},
+            macro_events_nearby=[],
+            btc_dominance=None,
+        )
+        signal = await build_signal(
+            db_session,
+            _make_hit(extra="conf-2"),
+            price_at_creation=Decimal("100"),
+            price_source="binance",
+            regime=regime,
+        )
+        assert signal is not None
+        assert signal.confirmation_score == 2
+        assert signal.factor_votes is not None
+        assert set(signal.factor_votes.keys()) == {"price", "regime", "news"}
+        assert signal.factor_votes["price"]["vote"] == 1
+        assert signal.factor_votes["regime"]["vote"] == 1
+        assert signal.factor_votes["news"]["vote"] == 0
+
+    async def test_confirmation_null_for_wait_action(self, db_session, monkeypatch):
+        # "wait" means no direction to confirm; orchestrator short-circuits
+        # before scoring. Signal persists, confirmation stays NULL.
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="Wait signal",
+                reasoning=["r"],
+                confidence=5,
+                risks=["k"],
+                suggested_action="wait",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        signal = await build_signal(
+            db_session,
+            _make_hit(extra="wait-null"),
+            price_at_creation=Decimal("100"),
+            price_source="binance",
+        )
+        assert signal is not None
+        # AI persisted (the signal is real); only confirmation is NULL.
+        assert signal.ai_analysis is not None
+        assert signal.ai_analysis["suggested_action"] == "wait"
+        assert signal.confirmation_score is None
+        assert signal.factor_votes is None
+
+    async def test_confirmation_null_when_price_source_missing(self, db_session, monkeypatch):
+        # Defensive — when both price providers failed at cycle start the
+        # caller passes `price_source=None`. Without a pinned source we
+        # can't honestly score the price factor, so we skip scoring
+        # entirely. Signal persists; confirmation NULL.
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="No source",
+                reasoning=["r"],
+                confidence=7,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        signal = await build_signal(
+            db_session,
+            _make_hit(extra="no-source"),
+            price_at_creation=None,
+            price_source=None,
+        )
+        assert signal is not None
+        assert signal.confirmation_score is None
+        assert signal.factor_votes is None
+
+    async def test_confirmation_null_for_unsupported_asset(self, db_session, monkeypatch):
+        # PR F.3 — MARKET sentinel signals don't have a single asset to
+        # price against. The build_signal guard reads `hit.asset in ("BTC",
+        # "ETH")` and skips scoring otherwise. Future intra-asset MARKET
+        # logic would need its own factor design.
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="Market sentinel",
+                reasoning=["r"],
+                confidence=6,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+
+        # Override the hit's asset to MARKET — same shape regime_shift
+        # signals carry post-PR-F.3.
+        hit = DetectorHit(
+            signal_type="regime_shift",
+            asset="MARKET",
+            signal_date=date(2026, 4, 22),
+            trigger_data={},
+            fingerprint=compute_fingerprint("regime_shift", "MARKET", "2026-04-22", "conf"),
+        )
+        signal = await build_signal(
+            db_session,
+            hit,
+            price_at_creation=Decimal("100"),
+            price_source="binance",
+        )
+        assert signal is not None
+        assert signal.confirmation_score is None
+        assert signal.factor_votes is None
+
+    async def test_factor_failure_does_not_abort_signal_build(self, db_session, monkeypatch):
+        # D13-style: factor scoring is a non-fatal step. A buggy/throwing
+        # factor scorer must not abort the signal build — log + persist
+        # confirmation NULL, move on.
+        async def _ai(*args, **kwargs):
+            return AISignalAnalysis(
+                headline="Boom",
+                reasoning=["r"],
+                confidence=7,
+                risks=["k"],
+                suggested_action="consider long",
+                time_horizon="swing",
+            )
+
+        async def _explode(*args, **kwargs):
+            raise RuntimeError("simulated factor failure")
+
+        monkeypatch.setattr("etfpulse.pipeline.signal_builder.openrouter_client.analyze", _ai)
+        # Patch at the factor module itself — the shared helper in
+        # `pipeline.analysis` resolves the import lazily on each call.
+        monkeypatch.setattr(
+            "etfpulse.pipeline.factors.compute_confirmation",
+            _explode,
+        )
+
+        signal = await build_signal(
+            db_session,
+            _make_hit(extra="factor-boom"),
+            price_at_creation=Decimal("100"),
+            price_source="binance",
+        )
+        # Signal persisted; AI analysis attached; confirmation NULL
+        # because the scorer raised.
+        assert signal is not None
+        assert signal.ai_analysis is not None
+        assert signal.confirmation_score is None
+        assert signal.factor_votes is None
 
     async def test_idempotent_returns_none_on_duplicate(self, db_session, monkeypatch):
         """Second insert of same fingerprint+date is a silent no-op."""

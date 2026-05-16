@@ -50,7 +50,11 @@ from etfpulse.models import (
     RegimeSnapshot,
     Signal,
 )
-from etfpulse.pipeline.analysis import AI_PROMPT_VERSION, apply_analysis_to_signal
+from etfpulse.pipeline.analysis import (
+    AI_PROMPT_VERSION,
+    apply_analysis_to_signal,
+    apply_confirmation_to_signal,
+)
 from etfpulse.pipeline.detectors import ALL_DETECTORS, DetectorHit
 from etfpulse.pipeline.ingestor import ingest_etf_flows, ingest_news
 from etfpulse.pipeline.news_context import NewsContextItem, gather_news_context
@@ -183,11 +187,19 @@ async def build_signal(
         current_price=price_at_creation,
     )
     if analysis is not None:
-        # Single shared helper — see `pipeline.analysis.apply_analysis_to_signal`
-        # for the AI → Signal field mapping. Both this fresh-insert path and
-        # `ai_backfill.backfill_null_ai` (retry path) call it so columns
-        # never drift between the two writers.
+        # Two peer helpers from `pipeline.analysis` write the post-AI state:
+        # `apply_analysis_to_signal` mirrors AI → Signal columns; PR I.2's
+        # `apply_confirmation_to_signal` runs the multi-factor confirmation
+        # score and writes `confirmation_score` + `factor_votes`. Both are
+        # shared with `ai_backfill.backfill_null_ai` so the fresh-insert
+        # path and the late-AI-success path cannot drift.
         apply_analysis_to_signal(signal, analysis)
+        await apply_confirmation_to_signal(
+            signal,
+            analysis,
+            regime.regime if regime is not None else None,
+            phase="signal_build",
+        )
 
     log.info(
         "signal_built",
@@ -196,6 +208,7 @@ async def build_signal(
         asset=signal.asset,
         ai_present=analysis is not None,
         ai_prompt_version=signal.ai_prompt_version,
+        confirmation_score=signal.confirmation_score,
     )
     return signal
 

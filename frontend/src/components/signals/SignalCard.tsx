@@ -3,6 +3,7 @@ import type { SignalListItem } from '../../api/types';
 import { formatAgo } from '../../lib/format';
 import { AssetBadge } from './AssetBadge';
 import { ConfidenceBadge } from './ConfidenceBadge';
+import { ConfirmationChip } from './ConfirmationChip';
 import { SignalTypeBadge } from './SignalTypeBadge';
 
 interface SignalCardProps {
@@ -45,7 +46,10 @@ export function SignalCard({ signal, compact = false }: SignalCardProps) {
           <AssetBadge asset={signal.asset} />
           <SignalTypeBadge type={signal.signal_type} />
         </div>
-        <ConfidenceBadge value={signal.confidence} />
+        <div className="flex items-center gap-1.5">
+          <ConfirmationChip score={signal.confirmation_score} />
+          <ConfidenceBadge value={signal.confidence} />
+        </div>
       </div>
 
       {/* Headline */}

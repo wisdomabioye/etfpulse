@@ -39,7 +39,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.adapters.openrouter import openrouter_client
 from etfpulse.models import MarketRegime, Signal, SignalPosture
-from etfpulse.pipeline.analysis import apply_analysis_to_signal
+from etfpulse.pipeline.analysis import (
+    apply_analysis_to_signal,
+    apply_confirmation_to_signal,
+)
 from etfpulse.pipeline.news_context import NewsContextItem
 from etfpulse.pipeline.regime_monitor import RegimeClassification
 
@@ -128,6 +131,18 @@ async def backfill_null_ai(
             continue
 
         apply_analysis_to_signal(signal, analysis)
+        # PR I.2 — score confirmation now that AI has succeeded. Without it,
+        # an AI-backfilled signal would slip through fan-out's NULL
+        # pass-through gate (the NULL semantic is reserved for `wait`
+        # signals, not AI-recovered ones). Same shared helper the
+        # fresh-insert path uses — see `apply_confirmation_to_signal`.
+        await apply_confirmation_to_signal(
+            signal,
+            analysis,
+            regime.regime if regime is not None else None,
+            phase="ai_backfill",
+        )
+
         summary["updated"] += 1
         log.info(
             "ai_backfill_signal_updated",
@@ -135,6 +150,7 @@ async def backfill_null_ai(
             asset=signal.asset,
             signal_type=signal.signal_type,
             confidence=analysis.confidence,
+            confirmation_score=signal.confirmation_score,
         )
 
     await session.flush()

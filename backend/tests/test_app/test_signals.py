@@ -160,6 +160,7 @@ class TestListBasics:
             "created_at",
             "expires_at",
             "alerted_to",
+            "confirmation_score",
         }
 
 

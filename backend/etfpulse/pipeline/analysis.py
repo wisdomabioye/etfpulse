@@ -27,15 +27,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 if TYPE_CHECKING:
     # Type-only import — avoids a runtime cycle (`models` imports from
     # `pipeline` only via TYPE_CHECKING too). The helper below mutates a
     # Signal in-place; callers always pass a real ORM row.
-    from etfpulse.models import Signal
+    from etfpulse.models import MarketRegime, Signal
+
+log = structlog.get_logger()
 
 # Time horizon → signal validity window. Resolution R16. These set
 # `Signal.expires_at` so the dashboard can hide stale signals.
@@ -193,6 +196,76 @@ def apply_analysis_to_signal(signal: Signal, analysis: AISignalAnalysis) -> None
     signal.entry_price = analysis.entry_price
     signal.stop_price = analysis.stop_price
     signal.target_price = analysis.target_price
+
+
+async def apply_confirmation_to_signal(
+    signal: Signal,
+    analysis: AISignalAnalysis,
+    regime: MarketRegime | None,
+    *,
+    phase: str,
+) -> None:
+    """Compute the multi-factor confirmation score and write it onto `signal`.
+
+    Single source of truth for the post-AI confirmation hook (PR I.2). Both
+    `signal_builder.build_signal` (fresh-insert path, `phase="signal_build"`)
+    and `ai_backfill.backfill_null_ai` (late-AI-success retry path,
+    `phase="ai_backfill"`) call this so a future tweak (new factor, gate
+    change, vote remap) lands in one place rather than a coordinated
+    two-file edit that drifts. Peer to `apply_analysis_to_signal`.
+
+    No-op when the row lacks prerequisites:
+      - `price_source IS NULL` — the price factor has no provider to pin
+        klines fetch to (pre-Stage-7 legacy rows).
+      - `asset NOT IN (BTC, ETH)` — MARKET sentinels and any future cross-
+        asset signals have no single asset price window to score against.
+
+    Per-row D13 catch-and-continue: a factor-pipeline failure must never
+    abort the caller's batch — the signal persists with NULL confirmation
+    and `confirmation_backfill` picks it up later. `phase` is carried into
+    the failure log so operators can attribute the error to the correct
+    write path without grepping caller modules.
+
+    D23 invariant: only writes when `compute_confirmation` returns a real
+    result. Callers guarantee `confirmation_score IS NULL` before invoking
+    (build path: row just inserted; ai_backfill: filter is `ai_analysis IS
+    NULL` which implies `confirmation_score IS NULL` by construction).
+    """
+    # Late imports keep this module's import graph cheap for callers that
+    # only need `apply_analysis_to_signal` / `AISignalAnalysis` (the
+    # OpenRouter adapter does, and it's on the hot AI-call path).
+    from etfpulse.config import settings
+    from etfpulse.pipeline.factors import compute_confirmation
+    from etfpulse.pipeline.prices import Asset, PriceSource
+
+    if signal.price_source is None or signal.asset not in ("BTC", "ETH"):
+        return
+    try:
+        confirmation = await compute_confirmation(
+            suggested_action=analysis.suggested_action,
+            asset=cast(Asset, signal.asset),
+            signal_type=signal.signal_type,
+            price_source=cast(PriceSource, signal.price_source),
+            reference_time=signal.created_at,
+            regime=regime,
+            window_hours=settings.factor_price_window_hours,
+            min_pct=settings.factor_price_min_pct,
+        )
+    except Exception as exc:  # noqa: BLE001 — D13 catch-and-continue
+        log.warning(
+            "confirmation_compute_failed",
+            phase=phase,
+            signal_id=signal.id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return
+    if confirmation is None:
+        # `wait` action or unknown — no direction to confirm. Caller's
+        # row stays NULL by design (semantically "scoring didn't apply").
+        return
+    signal.confirmation_score = confirmation.score
+    signal.factor_votes = dict(confirmation.votes)
 
 
 def compute_expires_at(time_horizon: str, now: datetime | None = None) -> datetime:
