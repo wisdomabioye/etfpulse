@@ -132,13 +132,16 @@ def test_telegram_partial_skipped_when_run_bot_false(production, monkeypatch):
     assert not any("telegram" in w for w in report.warnings)
 
 
-def test_production_empty_frontend_url_is_warning(production, monkeypatch):
-    """Issue #38 — empty `frontend_url` in prod = signal alerts without
-    the 'View on web' button. Non-fatal but operator should fix."""
+def test_production_empty_frontend_url_is_error(production, monkeypatch):
+    """PR H.3 — promoted from warning to hard error. The Telegram alert
+    was trimmed to skim-only in PR H.2 and depends on the 'View on web'
+    inline keyboard for reasoning / regime / news / risks. With no
+    `frontend_url`, `build_signal_keyboard` returns None and the alert
+    becomes 6 lines with no path to the full analysis."""
     monkeypatch.setattr(settings, "frontend_url", "")
     report = check_config_health()
-    assert any("frontend_url is empty" in w for w in report.warnings)
-    assert report.ok is True
+    assert any("frontend_url is empty" in e for e in report.errors)
+    assert report.ok is False
 
 
 def test_production_localhost_frontend_url_is_warning(production, monkeypatch):

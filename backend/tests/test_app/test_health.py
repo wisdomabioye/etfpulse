@@ -152,6 +152,7 @@ async def test_readiness_200_with_warnings_when_production_admin_key_empty(
     monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
     monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://prod/db")
     monkeypatch.setattr(settings, "admin_api_key", "")
+    monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
     # Bot off → no telegram-partial warning either
     monkeypatch.setattr(settings, "run_bot", False)
 
@@ -176,6 +177,7 @@ async def test_readiness_warns_when_telegram_config_partial(
     monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
     monkeypatch.setattr(settings, "admin_api_key", "test-admin")
     monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://prod/db")
+    monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
     # Bot ON but only 2 of 4 fields populated.
     monkeypatch.setattr(settings, "run_bot", True)
     monkeypatch.setattr(settings, "telegram_bot_token", "1:abc")
@@ -201,6 +203,7 @@ async def test_readiness_no_telegram_warning_when_all_four_empty(
     monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
     monkeypatch.setattr(settings, "admin_api_key", "test-admin")
     monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://prod/db")
+    monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
     monkeypatch.setattr(settings, "run_bot", True)
     for f in (
         "telegram_bot_token",

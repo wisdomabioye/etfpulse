@@ -82,7 +82,11 @@ def _signal_with_ai(**overrides) -> Signal:
 
 
 class TestFormatSignalMessage:
-    def test_full_signal_renders_all_sections(self):
+    def test_full_signal_renders_skim_only_shape(self):
+        """PR H.2 — alert carries title, headline, decision/levels, footer.
+        Reasoning, regime, news, and risks live on /signals/:id (linked via
+        the inline keyboard) — duplicating them here was producing 30-line
+        messages most users skipped past."""
         msg = format_signal_message(_signal_with_ai())
 
         assert "<b>BTC flow anomaly signal</b>" in msg
@@ -92,11 +96,38 @@ class TestFormatSignalMessage:
         assert "consider short" in msg
         assert "Conf 7/10" in msg
         assert "swing" in msg
-        assert "Volume spike" in msg
-        assert "Institutional rotation" in msg
-        assert "Macro headwind" in msg
         assert "2026-04-23" in msg  # signal_date
         assert "2026-04-26 10:30 UTC" in msg  # expires_at
+
+        # PR H.3 — Risks are back in the alert (capped to top 2).
+        assert "<b>Risks:</b>" in msg
+        assert "Macro headwind" in msg
+
+        # Sections still owned exclusively by /signals/:id.
+        assert "Volume spike" not in msg
+        assert "Institutional rotation" not in msg
+        assert "<b>Reasoning:</b>" not in msg
+        assert "<b>Market regime:</b>" not in msg
+        assert "<b>News context:</b>" not in msg
+
+    def test_risks_capped_to_top_two_bullets(self):
+        """PR H.3 — risks come from the AI in priority order; the alert
+        renders the first 2 only. Anyone wanting the full list follows the
+        inline keyboard to /signals/:id."""
+        signal = _signal_with_ai(
+            ai_analysis={
+                "headline": "Risky breakout",
+                "reasoning": [],
+                "confidence": 7,
+                "risks": ["FOMC tomorrow", "Thin Asia liquidity", "Regime uncertain"],
+                "suggested_action": "consider long",
+                "time_horizon": "swing",
+            }
+        )
+        msg = format_signal_message(signal)
+        assert "FOMC tomorrow" in msg
+        assert "Thin Asia liquidity" in msg
+        assert "Regime uncertain" not in msg
 
     def test_null_ai_analysis_falls_back_to_trigger_data(self):
         signal = _signal_with_ai(
@@ -113,15 +144,16 @@ class TestFormatSignalMessage:
         assert "<b>Decision:</b>" not in msg
 
     def test_html_special_chars_escaped(self):
-        """LLM might return `<` / `>` / `&` in reasoning. Must escape to
-        prevent HTML parse errors OR (worst case) injection."""
+        """LLM might return `<` / `>` / `&` in headline, suggested_action,
+        or risks. Must escape to prevent HTML parse errors OR (worst case)
+        injection. Reasoning is no longer rendered (PR H.2) so not covered."""
         signal = _signal_with_ai(
             ai_analysis={
                 "headline": "BTC <script>alert(1)</script> breakout",
-                "reasoning": ["R&D spike", "A > B"],
+                "reasoning": [],
                 "confidence": 7,
                 "risks": ["Fake & risk"],
-                "suggested_action": "wait",
+                "suggested_action": "consider long & hold",
                 "time_horizon": "scalp",
             }
         )
@@ -129,10 +161,10 @@ class TestFormatSignalMessage:
 
         # Dangerous raw tags must not appear.
         assert "<script>" not in msg
-        # Escaped versions ARE present.
+        # Escaped versions of the rendered fields ARE present.
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in msg
-        assert "R&amp;D spike" in msg
-        assert "A &gt; B" in msg
+        assert "consider long &amp; hold" in msg
+        assert "Fake &amp; risk" in msg
 
     def test_truncates_long_messages(self):
         """Telegram's cap is 4096; we target 4000 for headroom. Verify that
@@ -160,12 +192,15 @@ class TestFormatSignalMessage:
         assert "expires:" not in msg
 
     # -----------------------------------------------------------------------
-    # Stage 7-P9 additions — regime + news_context blocks. Both render only
-    # when the matching trigger_data key is present, so older signals (built
-    # before the v2 prompt) format identically to pre-Stage-7.
+    # PR H.2 — regime + news blocks were removed from the alert body. They
+    # remain visible on /signals/:id (linked via the inline keyboard). These
+    # tests pin the absence so a future "render regime in the alert" change
+    # has to deliberately update both the formatter and these assertions.
     # -----------------------------------------------------------------------
 
-    def test_regime_block_renders_when_trigger_data_has_regime_at_creation(self):
+    def test_regime_at_creation_does_not_render_in_alert(self):
+        """Even when `trigger_data.regime_at_creation` is fully populated,
+        the alert body MUST NOT echo it. The web detail page surfaces this."""
         signal = _signal_with_ai(
             trigger_data={
                 "streak_length": 4,
@@ -179,52 +214,13 @@ class TestFormatSignalMessage:
         )
         msg = format_signal_message(signal)
 
-        assert "<b>Market regime:</b>" in msg
-        assert "Regime:</i> distribution" in msg
-        assert "Posture:</i> cautious" in msg
-        assert "Conf:</i> 7/10" in msg
-        assert "Macro nearby:" in msg
-        assert "FOMC meeting" in msg
-
-    def test_regime_block_omitted_when_absent(self):
-        """Signals built before Stage 7-P6 have no `regime_at_creation` key
-        — message must format without the regime block, no placeholder."""
-        signal = _signal_with_ai(trigger_data={"streak_length": 4})
-        msg = format_signal_message(signal)
-
         assert "<b>Market regime:</b>" not in msg
-        assert "Regime:" not in msg
+        assert "distribution" not in msg
+        assert "FOMC meeting" not in msg
 
-    def test_regime_block_tolerates_partial_blob(self):
-        """A future writer that drops one of the keys must not 500 the send.
-        Posture-only blob renders just the posture bit."""
-        signal = _signal_with_ai(
-            trigger_data={
-                "regime_at_creation": {"signal_posture": "paused"},
-            }
-        )
-        msg = format_signal_message(signal)
-
-        assert "Posture:</i> paused" in msg
-        assert "Regime:</i>" not in msg
-
-    def test_regime_block_html_escaped(self):
-        """JSONB blob is technically writeable; escape every dynamic value."""
-        signal = _signal_with_ai(
-            trigger_data={
-                "regime_at_creation": {
-                    "regime": "<script>x</script>",
-                    "macro_events_nearby": ["FOMC & CPI"],
-                },
-            }
-        )
-        msg = format_signal_message(signal)
-
-        assert "<script>x</script>" not in msg
-        assert "&lt;script&gt;" in msg
-        assert "FOMC &amp; CPI" in msg
-
-    def test_news_block_renders_with_title_and_summary(self):
+    def test_news_context_does_not_render_in_alert(self):
+        """Even when `trigger_data.news_context` is fully populated, the
+        alert body MUST NOT echo it. The web detail page surfaces this."""
         signal = _signal_with_ai(
             trigger_data={
                 "news_context": [
@@ -239,84 +235,9 @@ class TestFormatSignalMessage:
         )
         msg = format_signal_message(signal)
 
-        assert "<b>News context:</b>" in msg
-        assert "BTC breakout above 70k" in msg
-        assert "Spot inflows accelerated" in msg
-
-    def test_news_block_caps_to_three_items(self):
-        """`gather_news_context` can return 10+ items on busy days; the
-        formatter caps to 3 to stay well under Telegram's 4000-char limit."""
-        signal = _signal_with_ai(
-            trigger_data={
-                "news_context": [
-                    {
-                        "title": f"Item {i}",
-                        "summary": f"Summary {i}",
-                        "category": 1,
-                        "published_iso": "x",
-                    }
-                    for i in range(10)
-                ],
-            }
-        )
-        msg = format_signal_message(signal)
-
-        assert "Item 0" in msg
-        assert "Item 1" in msg
-        assert "Item 2" in msg
-        # Items 3+ must not appear — caller would need to follow the link
-        # to /signals/:id for the full list.
-        assert "Item 3" not in msg
-        assert "Item 9" not in msg
-
-    def test_news_block_trims_long_summary(self):
-        """A 500-char summary must be trimmed to keep the message terse."""
-        signal = _signal_with_ai(
-            trigger_data={
-                "news_context": [
-                    {
-                        "title": "Long",
-                        "summary": "A" * 500,
-                        "category": 1,
-                        "published_iso": "x",
-                    }
-                ],
-            }
-        )
-        msg = format_signal_message(signal)
-
-        # Trimmed to 180-1 chars + ellipsis, so 500 A's must NOT all appear.
-        assert "A" * 500 not in msg
-        assert "…" in msg
-
-    def test_news_block_omitted_when_absent(self):
-        signal = _signal_with_ai(trigger_data={"streak_length": 4})
-        msg = format_signal_message(signal)
-
-        assert "News context:" not in msg
-
-    def test_news_block_skips_items_with_no_title_or_summary(self):
-        """Items where both title and summary are null/empty contribute
-        nothing useful — they must be skipped, not rendered as bullets."""
-        signal = _signal_with_ai(
-            trigger_data={
-                "news_context": [
-                    {"title": None, "summary": None, "category": 1, "published_iso": "x"},
-                    {
-                        "title": "Real headline",
-                        "summary": None,
-                        "category": 1,
-                        "published_iso": "x",
-                    },
-                ],
-            }
-        )
-        msg = format_signal_message(signal)
-
-        assert "Real headline" in msg
-        # The empty item must not produce a stray "• " bullet.
-        # (Counting the "Real headline" bullet — exactly one news bullet.)
-        assert msg.count("• <b>Real headline</b>") == 1
+        assert "<b>News context:</b>" not in msg
+        assert "BTC breakout above 70k" not in msg
+        assert "Spot inflows accelerated" not in msg
 
     def test_no_ai_trigger_dump_filters_before_slicing(self):
         """The 6-key cap on the trigger-data dump must apply to *rendered*
@@ -467,9 +388,11 @@ class TestFormatSignalMessage:
         msg = format_signal_message(signal, track_record_stat=stat)
         assert "Our swing signals at confidence" not in msg
 
-    def test_no_ai_still_renders_regime_and_news_blocks(self):
-        """Regime + news context are captured at build-time independent of
-        AI success. A no-AI signal must still carry these reads."""
+    def test_no_ai_omits_regime_and_news_dump(self):
+        """PR H.2 — no-AI fallback dumps trigger_data but skips the bulky
+        regime/news JSONB blobs (they'd dwarf the actual detector signal).
+        The web detail page renders the full objects for anyone who follows
+        the inline keyboard link."""
         signal = _signal_with_ai(
             ai_analysis=None,
             confidence=None,
@@ -489,13 +412,13 @@ class TestFormatSignalMessage:
         msg = format_signal_message(signal)
 
         assert "AI analysis unavailable" in msg
-        assert "Regime:</i> markup" in msg
-        assert "Macro update" in msg
-        # The trigger_data dump must NOT echo the regime/news keys (they're
-        # already rendered as their own blocks).
+        # Bulky JSONB blobs MUST NOT appear in the dump or anywhere else.
         assert "regime_at_creation:" not in msg
         assert "news_context:" not in msg
-        # Other trigger_data keys still appear in the dump.
+        assert "<b>Market regime:</b>" not in msg
+        assert "<b>News context:</b>" not in msg
+        assert "Macro update" not in msg
+        # Real detector keys still appear in the dump.
         assert "streak_length" in msg
 
 

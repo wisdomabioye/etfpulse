@@ -20,6 +20,7 @@ import type {
   RegimeResponse,
   SignalDetail,
   SignalFilters,
+  SpotPrices,
   TrackRecordBreakdown,
   TrackRecordFilters,
 } from './types';
@@ -85,6 +86,24 @@ export function useDashboardStats() {
   return useQuery({
     queryKey: ['dashboard', 'stats'],
     queryFn: () => apiGet<DashboardStats>('/api/dashboard/stats'),
+  });
+}
+
+/** Live BTC + ETH spot prices for the top-nav strip.
+ *
+ * Backend's in-process cache TTL is 30s, so refetching faster than that just
+ * burns network roundtrips for the same payload. 60s here keeps the visible
+ * price reasonably fresh while letting the cache absorb traffic from
+ * multiple tabs. retry disabled — a transient blip recovers on the next
+ * cadence tick and isn't worth an immediate re-bang. */
+export function useSpotPrices() {
+  return useQuery({
+    queryKey: ['prices', 'spot'],
+    queryFn: () => apiGet<SpotPrices>('/api/prices/spot'),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    retry: false,
+    staleTime: 30_000,
   });
 }
 

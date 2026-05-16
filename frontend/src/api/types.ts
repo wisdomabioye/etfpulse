@@ -451,6 +451,16 @@ export interface SchedulerJobInfo {
   pending: boolean;
 }
 
+/** Response from `GET /api/prices/spot` — live BTC + ETH spot for the top nav. */
+export interface SpotPrices {
+  btc: number | null;
+  eth: number | null;
+  /** "sosovalue" | "binance" | "mixed" | null (both providers failed). */
+  source: string | null;
+  /** ISO-8601 UTC datetime — when the backend cache last refreshed. */
+  fetched_at: string;
+}
+
 /** Response from `GET /api/admin/metrics` (admin-keyed). */
 export interface AdminMetrics {
   signal_status_counts: SignalStatusCounts;

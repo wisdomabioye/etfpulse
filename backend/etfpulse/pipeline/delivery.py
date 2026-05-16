@@ -283,27 +283,26 @@ def _asset_pref_filter(pref_column: Any, signal_asset: str) -> tuple[Any, ...]:
 # dynamic field to prevent injection from LLM output or user-configured
 # trigger data, and truncates to Telegram's safe body size.
 #
-# Stage 7-P9: extended with two optional sections sourced from
-# `trigger_data` — `regime_at_creation` (one compact line + macro-events
-# list) and `news_context` (capped summary list). Both render only when
-# the matching key is present, so signals built before the v2 prompt
-# (no regime + no news in trigger_data) still format identically to
-# pre-Stage-7. Web detail page (`/signals/:id`) shows the same data —
-# this is parity, not divergence.
+# PR H.2 — trimmed to a skim-only format. Reasoning, regime, news, and risks
+# all live on /signals/:id (linked via `build_signal_keyboard`). The alert
+# itself carries title, headline, decision/levels, optional track-record
+# stat, and footer. This is intentional divergence from /signals/:id —
+# Telegram is for skim + decide + click; the web page is for the full read.
 # ---------------------------------------------------------------------------
 
 _TELEGRAM_TEXT_CAP = 4000  # Telegram's hard limit is 4096; headroom for safety.
 
-# News-context truncation: a v2 signal can carry 10+ headlines. Inlining
-# all of them blows past the 4000-char cap on busy days. Cap to the most
-# recent 3 (gather_news_context returns ordered desc) and trim each
-# summary so the section stays well under 800 chars even at the limit.
-_NEWS_MAX_ITEMS = 3
-_NEWS_SUMMARY_CAP = 180
+# Risks render in the alert (PR H.3) — capped to the first 2 bullets. Risks
+# are the most actionable line in the message ("FOMC tomorrow" tells you
+# when NOT to act); reasoning and news context are explanatory and live on
+# the web page. Two is the cap because alerts are skim-only — anyone who
+# needs the full risk list follows the inline keyboard to /signals/:id.
+_RISKS_MAX_BULLETS = 2
 
 # Trigger-data dump (no-AI branch) caps and the keys we deliberately
-# exclude — the regime + news blocks render their own sections, so dumping
-# them again as raw key:value would be redundant AND ugly.
+# exclude — regime + news blobs are bulky JSONB structures that would
+# dwarf the actual detector signal in the dump. Skip them; the full
+# objects are visible on /signals/:id for anyone who clicks through.
 _TRIGGER_DUMP_LIMIT = 6
 _TRIGGER_DUMP_SKIP_KEYS = frozenset({"regime_at_creation", "news_context"})
 
@@ -481,106 +480,6 @@ def _format_usd(d: Decimal) -> str:
     return f"${float(d):,.2f}"
 
 
-def _format_regime_block(trigger_data: dict[str, Any]) -> str | None:
-    """Render the `regime_at_creation` JSONB blob as one HTML block, or None.
-
-    Persisted shape (`pipeline/signal_builder.build_signal`):
-        {
-            "regime": "<MarketRegime.value>",
-            "signal_posture": "<SignalPosture.value>",
-            "confidence": int,
-            "macro_events_nearby": list[str],
-        }
-
-    Tolerant of partial blobs — any missing key just hides that bit so a
-    future writer change can't crash the formatter. Returns None when the
-    key is absent (legacy signal predating Stage 7-P6) so the caller skips
-    the section entirely rather than rendering a "Regime: —" stub.
-    """
-    raw = trigger_data.get("regime_at_creation")
-    if not isinstance(raw, dict):
-        return None
-
-    regime = raw.get("regime")
-    posture = raw.get("signal_posture")
-    confidence = raw.get("confidence")
-    events = raw.get("macro_events_nearby") or []
-
-    line_bits: list[str] = []
-    if isinstance(regime, str) and regime:
-        line_bits.append(f"<i>Regime:</i> {html.escape(regime)}")
-    if isinstance(posture, str) and posture:
-        line_bits.append(f"<i>Posture:</i> {html.escape(posture)}")
-    if isinstance(confidence, int):
-        line_bits.append(f"<i>Conf:</i> {confidence}/10")
-
-    if not line_bits:
-        return None
-
-    block = "\n<b>Market regime:</b> " + " · ".join(line_bits)
-
-    if isinstance(events, list) and events:
-        # str() is defense-in-depth — today only strings flow in (classifier
-        # writes list[str]), but a non-string leak would 500 the send rather
-        # than rendering "42". Same approach as `/api/regime` (see
-        # api/routes/regime.py).
-        bullets = "\n".join(f"• {html.escape(str(item))}" for item in events)
-        block += f"\n<i>Macro nearby:</i>\n{bullets}"
-
-    return block
-
-
-def _format_news_block(trigger_data: dict[str, Any]) -> str | None:
-    """Render the `news_context` JSONB list as a capped HTML block, or None.
-
-    Persisted shape per item (`pipeline/news_context.NewsContextItem`):
-        {"title": str|None, "category": int, "published_iso": str, "summary": str|None}
-
-    Caps at `_NEWS_MAX_ITEMS` (most recent 3) and trims each summary to
-    `_NEWS_SUMMARY_CAP` chars — Telegram's 4000-char cap is a real ceiling
-    on busy news days, and a long news block would push the AI reasoning
-    off the screen. Items with no title AND no summary are skipped (nothing
-    useful to render).
-
-    Returns None when:
-        - the key is absent (legacy signal pre-Stage-7-P6), OR
-        - the key is present but every item was malformed/empty.
-    """
-    raw = trigger_data.get("news_context")
-    if not isinstance(raw, list):
-        return None
-
-    rendered_items: list[str] = []
-    for entry in raw[:_NEWS_MAX_ITEMS]:
-        if not isinstance(entry, dict):
-            continue
-        title = entry.get("title")
-        summary = entry.get("summary")
-        title_str = html.escape(title) if isinstance(title, str) and title else ""
-        summary_str = ""
-        if isinstance(summary, str) and summary:
-            if len(summary) <= _NEWS_SUMMARY_CAP:
-                trimmed = summary
-            else:
-                trimmed = summary[: _NEWS_SUMMARY_CAP - 1].rstrip() + "…"
-            summary_str = html.escape(trimmed)
-
-        if not title_str and not summary_str:
-            continue
-
-        if title_str and summary_str:
-            rendered_items.append(f"• <b>{title_str}</b> — {summary_str}")
-        elif title_str:
-            rendered_items.append(f"• <b>{title_str}</b>")
-        else:
-            rendered_items.append(f"• {summary_str}")
-
-    if not rendered_items:
-        return None
-
-    return "\n<b>News context:</b>\n" + "\n".join(rendered_items)
-
-
 def build_signal_keyboard(signal: Signal) -> InlineKeyboardMarkup | None:
     """Inline keyboard attached to a signal alert (issue #38).
 
@@ -607,24 +506,23 @@ def format_signal_message(
 
     Every dynamic field goes through `html.escape()` so LLM output containing
     `<` / `>` / `&` can't break Telegram's HTML parser or (worst case) inject
-    tags. Falls back to a trigger-data summary if `ai_analysis` is NULL.
+    tags. Falls back to a terse trigger-data summary if `ai_analysis` is NULL.
 
-    Section order — trader-actionable info FIRST, context after. Mirrors
-    `/signals/:id` on the web for parity:
+    PR H.2 — trimmed to a skim-only format. The web detail page (linked via
+    `build_signal_keyboard`) carries reasoning, regime, and news context;
+    the Telegram alert was duplicating all of them, producing 30-line
+    messages most users skipped past. Section order:
         1. Title line — "<asset> <signal_type> signal"
         2. Headline (when AI succeeded)
         3. Decision block — direction · confidence · horizon, then prices
            (spot at signal · entry · stop · target · R:R). One compact
-           two-line block carrying everything a skimming trader needs
-           on the first screen of a mobile alert.
-        4. Reasoning bullets
-        5. Regime block (when `trigger_data.regime_at_creation` present)
-        6. News context (when `trigger_data.news_context` present)
-        7. Risks bullets
-        8. Track-record stat line (Stage 8-P8, when track_record_stat is
-           supplied AND the cohort at this confidence floor has data)
-        9. Footer — signal date · expires
-    Sections 3, 5, 6, 8 are conditional — older / partial signals render
+           two-line block carrying everything a skimming trader needs.
+        4. Risks — top 2 bullets only (PR H.3). Risks tell you when NOT to
+           act and are the most actionable text in the message.
+        5. Track-record stat line (when track_record_stat supplied AND the
+           cohort at this confidence floor has data)
+        6. Footer — signal date · expires
+    Sections 3, 4, and 5 are conditional — older / partial signals render
     without them, no rule branch needed at the call site.
 
     `track_record_stat` is opt-in. The pure-formatter test surface omits
@@ -634,8 +532,7 @@ def format_signal_message(
     asset = html.escape(signal.asset)
     signal_type = html.escape(signal.signal_type.replace("_", " "))
     # Bind once — `signal.trigger_data` is JSONB-nullable and several
-    # downstream callers want a dict to .get() against. `or {}` four times
-    # would just be noise.
+    # downstream callers want a dict to .get() against.
     trigger_data: dict[str, Any] = signal.trigger_data or {}
 
     parts: list[str] = [f"<b>{asset} {signal_type} signal</b>"]
@@ -650,33 +547,20 @@ def format_signal_message(
         if decision_block:
             parts.append(decision_block)
 
-        reasoning = analysis.get("reasoning") or []
-        if reasoning:
-            bullets = "\n".join(f"• {html.escape(str(r))}" for r in reasoning)
-            parts.append(f"\n<b>Reasoning:</b>\n{bullets}")
-
-        regime_block = _format_regime_block(trigger_data)
-        if regime_block:
-            parts.append(regime_block)
-
-        news_block = _format_news_block(trigger_data)
-        if news_block:
-            parts.append(news_block)
-
+        # Risks — capped to the top 2 bullets. The AI prompt returns risks
+        # in priority order, so the first N is a clean cap rather than
+        # dropping the "most important" ambiguity. Full list lives on the
+        # web detail page for anyone who needs it.
         risks = analysis.get("risks") or []
         if risks:
-            bullets = "\n".join(f"• {html.escape(str(r))}" for r in risks)
+            visible_risks = risks[:_RISKS_MAX_BULLETS]
+            bullets = "\n".join(f"• {html.escape(str(r))}" for r in visible_risks)
             parts.append(f"\n<b>Risks:</b>\n{bullets}")
     else:
         # No AI — surface what we have from trigger_data so the signal is
-        # still actionable rather than a bare headline. Regime + news context
-        # blocks still render here when present (they were captured at
-        # build-time independent of AI success), so a no-AI signal still
-        # carries the regime/news read.
-        regime_block = _format_regime_block(trigger_data)
-        if regime_block:
-            parts.append(regime_block)
-
+        # still actionable rather than a bare headline. Regime + news blobs
+        # are filtered out of the dump (they're bulky JSONB; visible on
+        # /signals/:id for anyone who follows the link).
         parts.append("\n<b>Trigger data:</b>")
         if trigger_data:
             # Filter BEFORE slicing so the cap applies to rendered keys, not
@@ -686,10 +570,6 @@ def format_signal_message(
             visible = [(k, v) for k, v in trigger_data.items() if k not in _TRIGGER_DUMP_SKIP_KEYS]
             for k, v in visible[:_TRIGGER_DUMP_LIMIT]:
                 parts.append(f"• <i>{html.escape(str(k))}:</i> {html.escape(str(v))}")
-
-        news_block = _format_news_block(trigger_data)
-        if news_block:
-            parts.append(news_block)
 
         parts.append("\n<i>AI analysis unavailable — raw detector output only.</i>")
 

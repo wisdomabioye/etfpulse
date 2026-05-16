@@ -86,6 +86,22 @@ def check_config_health() -> ConfigHealth:
     if not settings.sosovalue_api_key:
         errors.append("sosovalue_api_key is empty — every signal cycle will 401")
 
+    # `frontend_url` empty in prod was a warning pre-H.2. Post-H.2 the
+    # Telegram alert was trimmed to skim-only and depends on the "View on
+    # web" inline keyboard for reasoning / regime / news / risks. Without
+    # `frontend_url` the keyboard is omitted entirely (`build_signal_keyboard`
+    # returns None) and recipients lose all access to the full analysis —
+    # the alert becomes 6 lines of "trust us, click... nothing." Promoting
+    # to a hard error so deploys fail readiness until ops sets it.
+    # `localhost` in prod stays a warning below (the button works for the
+    # operator but breaks for every other recipient — distinct failure mode).
+    if not settings.frontend_url:
+        errors.append(
+            "frontend_url is empty — Telegram alerts depend on the 'View on "
+            "web' inline keyboard for full analysis access (PR H.2). Set "
+            "FRONTEND_URL to the public SPA origin."
+        )
+
     # --- Warnings (200 readiness, but ops should fix) -------------------------
 
     if not settings.openrouter_api_key:
@@ -100,18 +116,15 @@ def check_config_health() -> ConfigHealth:
             "intentionally disabled but cannot be operated"
         )
 
-    # `frontend_url` empty in prod = signal alerts ship without the
-    # "View on web" button (issue #38). Not fatal — the alert text still
-    # delivers — but operators almost certainly want the deep link.
-    # `localhost` in prod is the worse failure: users get a button that
-    # tries to open their own machine. Warn loudly on both.
-    if not settings.frontend_url:
-        warnings.append(
-            "frontend_url is empty — signal alerts will ship without the "
-            "'View on web' inline keyboard button (#38). Set FRONTEND_URL "
-            "to the public SPA origin."
-        )
-    elif "localhost" in settings.frontend_url or "127.0.0.1" in settings.frontend_url:
+    # `frontend_url` pointing at localhost in prod: button works for the
+    # operator running it locally but breaks for every other recipient.
+    # Distinct from "empty" (which is now a hard error above) — here a
+    # button DOES render, it just resolves to the recipient's own machine.
+    # Warning, not error: a misconfigured deploy still ships partly-useful
+    # alerts to anyone on the same local network as the operator.
+    if settings.frontend_url and (
+        "localhost" in settings.frontend_url or "127.0.0.1" in settings.frontend_url
+    ):
         warnings.append(
             f"frontend_url points at a local address ({settings.frontend_url!r}) — "
             "signal alert buttons will be broken for every recipient. Set "

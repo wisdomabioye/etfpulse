@@ -6,6 +6,7 @@ import type { MarketRegime } from '../../api/types';
 import { RegimeBadge } from '../regime/RegimeBadge';
 import { LivePulse } from './LivePulse';
 import { Logo } from './Logo';
+import { PriceStrip } from './PriceStrip';
 
 interface NavItem {
   label: string;
@@ -86,11 +87,19 @@ export function TopNav() {
             ))}
           </div>
           <span className="inline-block w-px h-4 bg-border-2" aria-hidden />
+          <PriceStrip />
+          <span className="inline-block w-px h-4 bg-border-2" aria-hidden />
           <LivePulse />
         </div>
 
-        {/* Mobile — LivePulse stays visible, plus hamburger toggle. */}
+        {/* Mobile — PriceStrip + LivePulse stay visible, plus hamburger toggle.
+            Strip sits before LivePulse so prices read left-to-right with the
+            same priority order as desktop. Hidden on very narrow viewports
+            (< sm) where the hamburger and brand already crowd the row. */}
         <div className="flex md:hidden items-center gap-3">
+          <span className="hidden sm:inline-flex">
+            <PriceStrip />
+          </span>
           <LivePulse />
           <button
             type="button"
