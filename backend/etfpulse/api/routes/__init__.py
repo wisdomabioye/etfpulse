@@ -20,6 +20,7 @@ from etfpulse.api.routes.analytics import router as analytics_router
 from etfpulse.api.routes.calibration import router as calibration_router
 from etfpulse.api.routes.dashboard import router as dashboard_router
 from etfpulse.api.routes.health import router as health_router
+from etfpulse.api.routes.per_detector import router as per_detector_router
 from etfpulse.api.routes.prices import router as prices_router
 from etfpulse.api.routes.regime import router as regime_router
 from etfpulse.api.routes.signals import router as signals_router
@@ -35,6 +36,7 @@ ALL_ROUTERS: list[APIRouter] = [
     regime_router,
     track_record_router,
     calibration_router,
+    per_detector_router,
     analytics_router,
     prices_router,
 ]

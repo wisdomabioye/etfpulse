@@ -392,6 +392,58 @@ export interface CalibrationResponse {
   buckets: CalibrationBucket[];
 }
 
+/** PR I.3 — one cell of the per-detector precision grid (a detector ×
+ *  horizon intersection, OR the across-horizons total cell). Mirrors
+ *  `DetectorHorizonCellOut` on the backend.
+ *
+ *  `hit_rate`, `ci_low`, `ci_high` are 0..1 fractions and null when the
+ *  cell is empty OR below `min_samples` — FE renders "—" in both cases.
+ *  `wins`/`losses`/`n_samples` are populated regardless so the card can
+ *  show "n=8 (need 3 more)" hover text on insufficient cells. */
+export interface DetectorHorizonCell {
+  n_samples: number;
+  wins: number;
+  losses: number;
+  hit_rate: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+}
+
+/** PR I.3 — one detector's slice: per-horizon cells + the across-horizons
+ *  total. Mirrors `DetectorRowOut` on the backend.
+ *
+ *  `signal_type` is intentionally a free string (not the `SignalType`
+ *  union): the backend includes legacy/removed detectors with historical
+ *  data, and a new detector lands without an API contract change. The FE
+ *  can narrow to `SignalType` for label/colour lookups via a runtime
+ *  check (`signal_type in KNOWN_SIGNAL_TYPES`) when needed.
+ *
+ *  Option C rendering (the v1 layout): the card displays `total` per
+ *  detector and uses `horizons` for hover/drill-down. Backend emits both
+ *  in every response so a future "show horizon breakdown" toggle is a
+ *  pure FE change. */
+export interface DetectorRow {
+  signal_type: string;
+  horizons: Record<HorizonLabel, DetectorHorizonCell>;
+  total: DetectorHorizonCell;
+}
+
+/** PR I.3 — full per-detector precision report for one (prompt_version,
+ *  lookback) cohort.
+ *
+ *  `detectors` is ordered: registered detectors in `ALL_DETECTORS`
+ *  precedence first (regime_shift excluded by design — pending PR I.3b
+ *  MARKET-signal composite scoring), then any legacy signal_types found
+ *  in historical data, sorted alphabetically. Even on cold start (zero
+ *  evaluated outcomes) the registered detectors are present with all-zero
+ *  cells, so the FE renders stable rows. */
+export interface PerDetectorResponse {
+  ai_prompt_version: string;
+  lookback_days: number;
+  min_samples: number;
+  detectors: DetectorRow[];
+}
+
 /** Query params for `GET /api/track-record`. Subset of `SignalFilters`
  *  (no `sort` / `include_expired`) — the track-record endpoint sorts
  *  fixed by `evaluated_at DESC` and only ever returns evaluated rows. */

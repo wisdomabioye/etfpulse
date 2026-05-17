@@ -24,7 +24,7 @@ from etfpulse.api.deps import get_db_session
 from etfpulse.api.schemas.dashboard import DashboardStats, HeroOutcome
 from etfpulse.models import Signal, SignalOutcome
 from etfpulse.pipeline.regime_monitor import get_latest_regime
-from etfpulse.pipeline.track_record import compute_hit_rate_pct
+from etfpulse.pipeline.track_record import compute_hit_rate_pct, evaluated_outcomes_predicate
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -76,14 +76,16 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
             func.count().filter(SignalOutcome.hit_target.is_not(None)).label("targeted_count"),
         )
         .select_from(SignalOutcome)
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
     )
 
     # PR E.1 — hero card queries. Two separate LIMIT-1 selects (one per
     # outcome bucket) rather than a CTE — clearer SQL, same plan at Phase 1
     # scale, and `asyncio.gather` already amortises the round-trip cost.
-    # `evaluated_at IS NOT NULL` is explicit so a NULL never sorts ahead of
-    # a real value regardless of Postgres default null-ordering.
+    # `evaluated_outcomes_predicate()` is explicit so a NULL never sorts
+    # ahead of a real value regardless of Postgres default null-ordering,
+    # AND the definition stays in lockstep with calibration / per-detector
+    # / track-record per D22.
     target_hit_stmt = (
         select(SignalOutcome, Signal)
         .join(Signal, Signal.id == SignalOutcome.signal_id)
@@ -91,7 +93,7 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
             SignalOutcome.hit_target.is_(True),
             SignalOutcome.entry_price.is_not(None),
             SignalOutcome.target_price.is_not(None),
-            SignalOutcome.evaluated_at.is_not(None),
+            evaluated_outcomes_predicate(),
         )
         .order_by(SignalOutcome.evaluated_at.desc())
         .limit(1)
@@ -108,7 +110,7 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
             SignalOutcome.stop_price.is_not(None),
             SignalOutcome.max_adverse.is_not(None),
             SignalOutcome.max_adverse > Decimal("0"),
-            SignalOutcome.evaluated_at.is_not(None),
+            evaluated_outcomes_predicate(),
         )
         .order_by(SignalOutcome.evaluated_at.desc())
         .limit(1)

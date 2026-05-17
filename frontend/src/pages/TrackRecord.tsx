@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
-import { useCalibration, useTrackRecord } from '../api/queries';
+import { useCalibration, usePerDetector, useTrackRecord } from '../api/queries';
 import type {
   AssetSymbol,
   HorizonLabel,
@@ -22,6 +22,10 @@ import {
   ReliabilityChart,
   ReliabilityChartSkeleton,
 } from '../components/track-record/ReliabilityChart';
+import {
+  DetectorPrecisionCard,
+  DetectorPrecisionCardSkeleton,
+} from '../components/track-record/DetectorPrecisionCard';
 import { formatAgo, formatSignalType } from '../lib/format';
 
 /**
@@ -74,6 +78,11 @@ export function TrackRecord() {
   // explore the list. Falls back to a skeleton on first paint; the
   // component handles empty/insufficient-cell rendering itself.
   const calibrationQuery = useCalibration();
+  // PR I.3 — per-detector precision card. Independent of the page's
+  // filters for the same reason as calibration: the leaderboard is a
+  // cohort-level view, not a slice. regime_shift is excluded by the
+  // backend pending PR I.3b (MARKET composite scoring).
+  const perDetectorQuery = usePerDetector();
 
   const items = query.data?.items ?? [];
   const totalPages = query.data?.total_pages ?? 0;
@@ -140,6 +149,18 @@ export function TrackRecord() {
             <ReliabilityChartSkeleton className="mt-8" />
           ) : calibrationQuery.data ? (
             <ReliabilityChart data={calibrationQuery.data} className="mt-8" />
+          ) : null}
+
+          {/* PR I.3 — per-detector precision leaderboard. Sits BELOW the
+              calibration chart (which asks "is confidence honest?") and
+              ABOVE the filter row (the "drill in" controls) because it
+              answers the natural follow-up: "which detector should I
+              trust?" Same cohort grouping as calibration — fixed at the
+              active prompt version, not sliced by list filters. */}
+          {perDetectorQuery.isLoading ? (
+            <DetectorPrecisionCardSkeleton className="mt-8" />
+          ) : perDetectorQuery.data ? (
+            <DetectorPrecisionCard data={perDetectorQuery.data} className="mt-8" />
           ) : null}
 
           <FilterRow

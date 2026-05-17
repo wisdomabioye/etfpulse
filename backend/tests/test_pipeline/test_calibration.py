@@ -28,8 +28,8 @@ from etfpulse.pipeline.calibration import (
     classify_outcome_as_win,
     compute_calibration,
     make_buckets,
-    wilson_ci,
 )
+from etfpulse.pipeline.stats import wilson_ci
 from etfpulse.pipeline.track_record import (
     HORIZON_LABELS,
     evaluated_outcomes_predicate,

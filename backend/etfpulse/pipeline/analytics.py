@@ -44,9 +44,11 @@ Diagnostic dimensions (4 breakdowns + 2 histograms):
 
 Implementation notes:
 
-    * Every query filters `evaluated_at IS NOT NULL` (same defensive filter
-      as `routes/track_record.py` + `routes/dashboard.py`) — pending-eval
-      rows must not pollute the breakdown.
+    * Every query filters via `evaluated_outcomes_predicate()` from
+      `pipeline.track_record` (D22 — single source of truth, shared with
+      calibration / per-detector / dashboard / track-record route) so
+      pending-eval rows can't pollute the breakdown and a future change
+      to "what counts as evaluated" propagates here automatically.
 
     * Five GROUP BY queries (one per breakdown, plus one for histograms via
       raw value fetch) + zero auxiliary COUNTs — `total_outcomes` is derived
@@ -76,7 +78,7 @@ from sqlalchemy import Numeric, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.models import SignalOutcome
-from etfpulse.pipeline.track_record import compute_hit_rate_pct
+from etfpulse.pipeline.track_record import compute_hit_rate_pct, evaluated_outcomes_predicate
 
 log = structlog.get_logger(__name__)
 
@@ -251,7 +253,7 @@ async def _by_detector(session: AsyncSession) -> list[BreakdownRow]:
             _TARGETED.label("targeted"),
             _HITS.label("hits"),
         )
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .group_by(SignalOutcome.signal_type)
         .order_by(SignalOutcome.signal_type)
     )
@@ -267,7 +269,7 @@ async def _by_asset(session: AsyncSession) -> list[BreakdownRow]:
             _TARGETED.label("targeted"),
             _HITS.label("hits"),
         )
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .group_by(SignalOutcome.asset)
         .order_by(SignalOutcome.asset)
     )
@@ -283,7 +285,7 @@ async def _by_direction(session: AsyncSession) -> list[BreakdownRow]:
             _TARGETED.label("targeted"),
             _HITS.label("hits"),
         )
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .group_by(SignalOutcome.direction)
         .order_by(SignalOutcome.direction)
     )
@@ -310,7 +312,7 @@ async def _by_confidence_bucket(session: AsyncSession) -> list[BreakdownRow]:
             _TARGETED.label("targeted"),
             _HITS.label("hits"),
         )
-        .where(SignalOutcome.evaluated_at.is_not(None))
+        .where(evaluated_outcomes_predicate())
         .group_by(bucket_expr)
     )
     rows = (await session.execute(stmt)).all()
@@ -325,7 +327,7 @@ async def _by_confidence_bucket(session: AsyncSession) -> list[BreakdownRow]:
 async def _histograms(session: AsyncSession) -> tuple[list[HistogramBucket], list[HistogramBucket]]:
     """Fetch MFE + MAE values in ONE query, bucket in Python.
 
-    Same `evaluated_at IS NOT NULL` filter as the categorical breakdowns.
+    Same `evaluated_outcomes_predicate()` filter as the categorical breakdowns.
     NULL max_favorable / max_adverse (price fetch failed) are skipped per
     column — we don't drop the entire row if only one of the two is NULL.
 
@@ -336,7 +338,7 @@ async def _histograms(session: AsyncSession) -> tuple[list[HistogramBucket], lis
     stmt = select(
         cast(SignalOutcome.max_favorable, Numeric).label("mfe"),
         cast(SignalOutcome.max_adverse, Numeric).label("mae"),
-    ).where(SignalOutcome.evaluated_at.is_not(None))
+    ).where(evaluated_outcomes_predicate())
     rows = (await session.execute(stmt)).all()
 
     mfe_values: list[Decimal] = [r.mfe for r in rows if r.mfe is not None]

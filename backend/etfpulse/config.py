@@ -343,6 +343,28 @@ class Settings(BaseSettings):
     # test misconfigurations from accidentally bypassing the cache.
     calibration_cache_ttl_seconds: int = Field(default=300, ge=60, le=3600)
 
+    # PR I.3 — per-detector precision view. Reuses the calibration knobs
+    # for SHARED concepts (lookback default, cache TTL — same on-read
+    # pattern, same FE surface) to avoid env-var sprawl. Note the
+    # lookback DEFAULT comes from `calibration_lookback_days` (30..365)
+    # but the per-detector ROUTE accepts the broader 1..730 range on its
+    # query param, matching calibration's route — so an operator-side
+    # query string can go wider than the env default permits. The
+    # min-samples gate is DIFFERENT from calibration's because the two
+    # views have different sample-density curves:
+    #   - Calibration: 5 buckets × 4 horizons = 20 cells; aggregate slices
+    #     by AI-rated confidence. With 100 signals, each cell averages 5
+    #     samples — min=20 is appropriately strict.
+    #   - Per-detector: 4 detectors × 4 horizons = 16 cells; one detector
+    #     usually fires far more than the others (acceleration vs the
+    #     long-tail). With 100 signals, the dominant detector's cells
+    #     have 30+ samples while the others stay sparse — min=3 reveals
+    #     the standout detector early instead of waiting for the trailing
+    #     ones to fill in.
+    # Tighten (raise) to be more conservative; loosen (lower to 1) to
+    # surface preliminary numbers with very wide CIs.
+    per_detector_min_samples: int = Field(default=3, ge=1, le=100)
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 

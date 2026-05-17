@@ -15,6 +15,7 @@ import { ApiError, apiGet, apiPost } from './client';
 import type {
   AdminMetrics,
   CalibrationResponse,
+  PerDetectorResponse,
   DashboardStats,
   PaginatedSignals,
   PaginatedTrackRecord,
@@ -214,6 +215,40 @@ export function useCalibration(params?: {
     ],
     queryFn: () =>
       apiGet<CalibrationResponse>('/api/track-record/calibration', params ?? {}),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** PR I.3 — per-detector precision grid.
+ *
+ *  Defaults to the active `AI_PROMPT_VERSION` server-side, same convention
+ *  as `useCalibration`. Pass `ai_prompt_version` explicitly when comparing
+ *  cohorts.
+ *
+ *  Backend caches per (version, lookback, min_samples) for 5 min (shares
+ *  `calibration_cache_ttl_seconds`); FE staleTime mirrors at 60s so a tab
+ *  session doesn't refetch while a deliberate page revisit still gets a
+ *  near-fresh number. retry off — cold-boot returns 200 with all-zero
+ *  cells (not 503), so any error is config / network and won't self-fix.
+ *
+ *  The card on `/track-record` filters out regime_shift by design — the
+ *  backend already excludes it (PR I.3b will fold it in once MARKET
+ *  composite scoring lands). The hook stays detector-agnostic so a future
+ *  per-detector drill-down page can reuse it. */
+export function usePerDetector(params?: {
+  ai_prompt_version?: string;
+  lookback_days?: number;
+}) {
+  return useQuery({
+    queryKey: [
+      'track-record',
+      'per-detector',
+      params?.ai_prompt_version,
+      params?.lookback_days,
+    ],
+    queryFn: () =>
+      apiGet<PerDetectorResponse>('/api/track-record/per-detector', params ?? {}),
     staleTime: 60_000,
     retry: false,
   });

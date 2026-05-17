@@ -13,8 +13,10 @@ Public surface:
 
 Pure helpers (testable without a DB):
     `make_buckets(*, bucket_size)`        — confidence 1..10 → bucket ranges
-    `wilson_ci(wins, n, *, z)`            — score interval for proportions
     `classify_outcome_as_win(outcome)`    — single source of truth for win/loss
+
+Wilson 95% CI lives in `pipeline.stats` (shared with `pipeline.per_detector`
+so neither aggregator depends on the other).
 
 What counts (filters):
     - `evaluated_outcomes_predicate()` from `pipeline.track_record`
@@ -42,7 +44,6 @@ Why Wilson (not normal-approximation):
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -51,6 +52,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.models import Signal, SignalOutcome
+from etfpulse.pipeline.stats import wilson_ci
 from etfpulse.pipeline.track_record import (
     HORIZON_LABELS,
     HorizonLabel,
@@ -64,9 +66,6 @@ log = structlog.get_logger()
 # Only divisors of 10 — anything else can't partition the 1..10 confidence
 # range into equal buckets without a remainder.
 _VALID_BUCKET_SIZES: frozenset[int] = frozenset({1, 2, 5, 10})
-
-# Wilson 95% CI critical value (two-sided). Mathematical constant; not a tunable.
-_Z_95 = 1.96
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,41 +121,6 @@ def make_buckets(*, bucket_size: int = 2) -> list[tuple[int, int]]:
             f"bucket_size must be one of {sorted(_VALID_BUCKET_SIZES)}, got {bucket_size}"
         )
     return [(lo, lo + bucket_size - 1) for lo in range(1, 11, bucket_size)]
-
-
-def wilson_ci(wins: int, n: int, *, z: float = _Z_95) -> tuple[float | None, float | None]:
-    """Wilson score interval for a binomial proportion.
-
-    Args:
-        wins: successes (>= 0).
-        n: trials (>= 0).
-        z: critical value; default 1.96 ≈ 95% two-sided.
-
-    Returns:
-        `(ci_low, ci_high)` clamped to [0, 1]. Returns `(None, None)` when
-        `n == 0` — the proportion is undefined with no trials.
-
-    The Wilson interval is the standard "small-N safe" CI. Unlike the
-    normal-approximation interval, it doesn't collapse to [1.0, 1.0] when
-    wins == n (saturation) or [0.0, 0.0] when wins == 0. Hand-rolled here
-    (scipy isn't a dependency — checked pyproject.toml). Tested against
-    table-of-known-values.
-
-    Edge cases:
-        wins=0, n=10 → (0.0, ~0.31)        — non-trivial upper bound
-        wins=10, n=10 → (~0.72, 1.0)       — non-trivial lower bound
-        wins=5, n=10 → (~0.24, ~0.76)      — centred around 0.5
-    """
-    if n <= 0:
-        return (None, None)
-    p = wins / n
-    z2_over_n = (z * z) / n
-    denom = 1 + z2_over_n
-    center = (p + z2_over_n / 2) / denom
-    margin = (z * math.sqrt((p * (1 - p) + z2_over_n / 4) / n)) / denom
-    lo = max(0.0, center - margin)
-    hi = min(1.0, center + margin)
-    return (lo, hi)
 
 
 def classify_outcome_as_win(outcome: SignalOutcome) -> bool | None:
@@ -318,5 +282,4 @@ __all__ = [
     "classify_outcome_as_win",
     "compute_calibration",
     "make_buckets",
-    "wilson_ci",
 ]
