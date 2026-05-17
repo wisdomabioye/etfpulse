@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.api.deps import get_db_session
 from etfpulse.api.schemas.dashboard import DashboardStats, HeroOutcome
+from etfpulse.constants import MARKET_ASSET
 from etfpulse.models import Signal, SignalOutcome
 from etfpulse.pipeline.regime_monitor import get_latest_regime
 from etfpulse.pipeline.track_record import compute_hit_rate_pct, evaluated_outcomes_predicate
@@ -93,6 +94,13 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
             SignalOutcome.hit_target.is_(True),
             SignalOutcome.entry_price.is_not(None),
             SignalOutcome.target_price.is_not(None),
+            # PR I.3b — exclude MARKET (regime_shift) signals explicitly:
+            # they have no single-asset entry/target so they can't be heroes
+            # under HeroOutcome's schema. The entry_price IS NOT NULL filter
+            # above incidentally excludes them today but documenting the
+            # intent prevents future drift (e.g. if a future writer ever
+            # populated entry_price on a MARKET outcome).
+            Signal.asset != MARKET_ASSET,
             evaluated_outcomes_predicate(),
         )
         .order_by(SignalOutcome.evaluated_at.desc())
@@ -110,6 +118,8 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
             SignalOutcome.stop_price.is_not(None),
             SignalOutcome.max_adverse.is_not(None),
             SignalOutcome.max_adverse > Decimal("0"),
+            # PR I.3b — see target_hit_stmt comment.
+            Signal.asset != MARKET_ASSET,
             evaluated_outcomes_predicate(),
         )
         .order_by(SignalOutcome.evaluated_at.desc())

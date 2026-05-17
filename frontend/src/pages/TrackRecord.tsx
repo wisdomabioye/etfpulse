@@ -443,13 +443,19 @@ function OutcomeRow({ item }: { item: TrackRecordItem }) {
   // For position signals (168h window), `price_at_validity_end` is the
   // 7-day close — the correct outcome price; pre-PR-B the row would
   // show the 72h close instead (a misleading mid-trade reading).
+  // PR I.3b — MARKET (regime_shift) rows carry the return in
+  // `composite_return_pct` (signed fraction) and have NULL baseline /
+  // close fields by design. Short-circuit to the composite when present
+  // so MARKET rows render a meaningful percent instead of "—".
   const baseline = item.entry_price ?? item.price_at_signal;
   const closeAtEnd =
     item.price_at_validity_end ?? item.price_after_72h;
   const pctReturn =
-    closeAtEnd !== null && baseline > 0
-      ? ((closeAtEnd - baseline) / baseline) * 100
-      : null;
+    item.composite_return_pct !== null
+      ? item.composite_return_pct * 100
+      : closeAtEnd !== null && baseline !== null && baseline > 0
+        ? ((closeAtEnd - baseline) / baseline) * 100
+        : null;
   const pctText =
     pctReturn !== null ? `${pctReturn >= 0 ? '+' : ''}${pctReturn.toFixed(2)}%` : '—';
   const pctClass =

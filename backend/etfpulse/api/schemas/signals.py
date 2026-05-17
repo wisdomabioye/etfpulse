@@ -81,7 +81,10 @@ class SignalOutcomeOut(BaseModel):
     entry_price: float | None = None
     stop_price: float | None = None
     target_price: float | None = None
-    price_at_signal: float
+    # PR I.3b — nullable for MARKET (regime_shift) outcomes. Single-asset
+    # signals always populate this; MARKET signals leave it NULL and carry
+    # the composite story in `composite_return_pct` instead.
+    price_at_signal: float | None = None
     price_after_24h: float | None = None
     price_after_72h: float | None = None
     # PR B (#60) — v2 horizon-aware fields. NULL on rows scored under the
@@ -98,6 +101,11 @@ class SignalOutcomeOut(BaseModel):
     hit_stop: bool | None = None
     max_favorable: float | None = None
     max_adverse: float | None = None
+    # PR I.3b — signed composite BTC+ETH return (fraction; 0.024 = +2.4%)
+    # for MARKET (regime_shift) outcomes scored under the composite rubric.
+    # NULL on single-asset rows. Mutually exclusive with the price/level
+    # columns: when this is set, those are NULL by design.
+    composite_return_pct: float | None = None
     evaluated_at: datetime | None = None
 
 

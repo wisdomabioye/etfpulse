@@ -72,8 +72,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ColumnElement
 
+from etfpulse.config import settings
 from etfpulse.constants import MARKET_ASSET
 from etfpulse.models import Signal, SignalDirection, SignalOutcome
+from etfpulse.pipeline.composite_scoring import (
+    classify_composite_outcome,
+    weighted_composite_return,
+)
+from etfpulse.pipeline.factors import direction_sign_from_action
 from etfpulse.pipeline.prices import PriceBar, PriceSource, get_daily_klines_from_source
 
 
@@ -113,6 +119,13 @@ _MIN_SCORABLE_WINDOW_HOURS = 24
 # carry NULL `scoring_version` — the reader treats NULL as v1 / legacy
 # (scored against the fixed 72h window the constants used to encode).
 _SCORING_VERSION = "v2"
+
+# PR I.3b — version stamp for MARKET (regime_shift) outcomes scored under
+# the composite BTC+ETH rubric. Distinct from v1/v2 so calibration cohorts
+# and the reader can tell apart single-asset vs composite rubrics without
+# inspecting null patterns. The column was widened from VARCHAR(8) to
+# VARCHAR(16) in the I.3b migration so this string fits.
+_MARKET_SCORING_VERSION = "market-v1"
 
 # The kline fetch range. Padded on both ends so a daily bar that opens
 # just after t0+window still falls in the response — picking the close
@@ -611,15 +624,16 @@ async def evaluate_pending_outcomes(
     # `confidence IS NOT NULL` proxy — AI-failed signals lack both.
     # LEFT JOIN filters out signals that already have an outcome row,
     # rather than a NOT IN subquery — cheaper plan + clearer.
-    # PR F.3 — `asset != MARKET_ASSET` excludes regime_shift MARKET signals
-    # from outcome scoring. They carry no asset to price against (no BTC/ETH
-    # klines apply to "the market as a whole"), so any score would be
-    # arbitrary. The `price_at_creation.is_not(None)` filter incidentally
-    # excludes them today (no spot price fetched for MARKET), but making it
-    # explicit keeps the intent decoupled from that coincidence.
+    # PR I.3b — MARKET (regime_shift) signals are now scored under the
+    # composite BTC+ETH rubric (`_evaluate_market_one`); the per-signal
+    # `price_at_creation` requirement only applies to single-asset signals
+    # (MARKET rows have NULL `price_at_creation` by design — there's no
+    # single-asset baseline to capture). The OR below admits both:
+    #   - single-asset signals with a valid baseline, OR
+    #   - MARKET signals (composite rubric supplies its own baselines from
+    #     BTC + ETH klines fetched at evaluation time).
     base_filters = (
-        Signal.asset != MARKET_ASSET,
-        Signal.price_at_creation.is_not(None),
+        (Signal.asset == MARKET_ASSET) | Signal.price_at_creation.is_not(None),
         Signal.expires_at.is_not(None),
         Signal.expires_at <= now,
     )
@@ -674,7 +688,14 @@ async def evaluate_pending_outcomes(
 async def _evaluate_one(session: AsyncSession, signal: Signal, summary: dict[str, int]) -> None:
     """Score one candidate signal. Mutates `summary` in place + adds an
     outcome row to `session` on success. Raises on unexpected failures —
-    the caller's per-signal try/except absorbs them so the loop continues."""
+    the caller's per-signal try/except absorbs them so the loop continues.
+
+    PR I.3b — MARKET signals dispatch to `_evaluate_market_one` (composite
+    BTC+ETH rubric). Single-asset signals stay on the path below."""
+    if signal.asset == MARKET_ASSET:
+        await _evaluate_market_one(session, signal, summary)
+        return
+
     direction = _direction_from_signal(signal)
     if direction is None:
         summary["skipped_no_direction"] += 1
@@ -821,3 +842,214 @@ async def _evaluate_one(session: AsyncSession, signal: Signal, summary: dict[str
         hit_target=metrics.hit_target,
         hit_stop=metrics.hit_stop,
     )
+
+
+async def _evaluate_market_one(
+    session: AsyncSession, signal: Signal, summary: dict[str, int]
+) -> None:
+    """Score one MARKET (regime_shift) candidate under the composite rubric.
+
+    PR I.3b. MARKET signals have no single-asset baseline (`asset == MARKET`,
+    `price_at_creation IS NULL`, no entry/stop/target). Their "did the call
+    work?" question is asked against a weighted BTC + ETH return over the
+    signal's stated validity window:
+
+      1. Resolve direction from `suggested_action` (LONG=+1, SHORT=-1).
+         `wait` / unknown short-circuits with `skipped_no_direction`.
+      2. Derive `window_hours` from `(expires_at - created_at)` — same
+         per-signal contract as `_evaluate_one`. scalp (<24h) is skipped
+         pending #62 just like single-asset scalps.
+      3. Fetch BTC + ETH daily klines around the window (single price
+         source — currently always SoSoValue primary; MARKET signals carry
+         no per-asset `price_source` because they never went through
+         `signal_builder.get_spot_price_with_source`).
+      4. Compute per-asset return = (close_at_validity_end - close_at_t0)
+         / close_at_t0. `_pick_close_at` semantics mirror the single-asset
+         path so the rubric agrees on "close at the bar containing this
+         timestamp."
+      5. Combine via `weighted_composite_return` (weights from settings,
+         pre-validated to sum to 1.0 at config load).
+      6. Classify via `classify_composite_outcome` against
+         `settings.market_composite_hit_pct`. Result becomes
+         `hit_target` on the row — MARKET signals don't have a stop level
+         so `hit_stop` stays NULL.
+      7. Persist with `scoring_version='market-v1'`,
+         `composite_return_pct=composite`, ALL single-asset level/price
+         fields NULL by design.
+
+    `max_favorable` / `max_adverse` stay NULL for MARKET v1 — running
+    intra-window composite excursions require day-by-day kline alignment
+    across both assets and add no signal beyond the start/end snapshot the
+    rubric uses. A future MARKET v2 can fill them.
+
+    **Daily-resolution caveat (inherited from the single-asset path):**
+    `_pick_close_at(t0_ms)` returns the close of the bar *containing* t0
+    — i.e. the daily close ~hours AFTER the signal actually fired. The
+    end-of-window pick has the same symmetric forward shift. The two
+    cancel: the composite reduces to a close-to-close N-day return,
+    which is the standard daily-resolution market metric. It is NOT a
+    live-spot-to-validity-end return (no live MARKET spot exists to
+    capture at build time, by design). Under intraday kline support
+    (#62) we can re-anchor baseline to t0's intraday bar; until then
+    daily resolution is the honest ceiling.
+    """
+    suggested_raw = signal.ai_analysis.get("suggested_action") if signal.ai_analysis else None
+    suggested = suggested_raw if isinstance(suggested_raw, str) else None
+    direction = direction_sign_from_action(suggested)
+    if direction == 0:
+        summary["skipped_no_direction"] += 1
+        log.info(
+            "outcome_eval_skip_no_direction",
+            signal_id=signal.id,
+            asset=signal.asset,
+            suggested=suggested,
+        )
+        return
+
+    window_hours = _window_hours_for(signal)
+    if window_hours is None:
+        summary["skipped_invalid_window"] += 1
+        log.warning(
+            "outcome_eval_skip_invalid_window",
+            signal_id=signal.id,
+            asset=signal.asset,
+            created_at=str(signal.created_at),
+            expires_at=str(signal.expires_at),
+        )
+        return
+
+    if window_hours < _MIN_SCORABLE_WINDOW_HOURS:
+        # Pending intraday klines (#62) the same sub-day floor applies to
+        # MARKET as to single-asset scalp. regime_shift today fires at
+        # ≥24h horizons so this branch is mostly defensive.
+        summary["skipped_scalp_intraday_unsupported"] += 1
+        log.info(
+            "outcome_eval_skip_scalp_intraday_unsupported",
+            signal_id=signal.id,
+            asset=signal.asset,
+            window_hours=window_hours,
+        )
+        return
+
+    # MARKET signals don't go through the single-asset spot fetch at
+    # build time, so `signal.price_source` is always NULL. Default to
+    # 'sosovalue' (the daily-cycle primary) — same fallback the
+    # single-asset path uses when `price_source` is NULL.
+    source: PriceSource = "sosovalue"
+
+    t0_ms = int(signal.created_at.timestamp() * 1000)
+    pad_ms = _KLINE_FETCH_PAD_HOURS * 3600 * 1000
+    horizon_ms = window_hours * 3600 * 1000
+    fetch_start = t0_ms - pad_ms
+    fetch_end = t0_ms + horizon_ms + pad_ms
+
+    btc_bars = await get_daily_klines_from_source(
+        "BTC", source, start_time_ms=fetch_start, end_time_ms=fetch_end
+    )
+    eth_bars = await get_daily_klines_from_source(
+        "ETH", source, start_time_ms=fetch_start, end_time_ms=fetch_end
+    )
+    if btc_bars is None or eth_bars is None:
+        summary["skipped_no_klines"] += 1
+        log.warning(
+            "outcome_eval_skip_no_klines",
+            signal_id=signal.id,
+            asset=signal.asset,
+            btc_bars_missing=btc_bars is None,
+            eth_bars_missing=eth_bars is None,
+        )
+        return
+
+    btc_baseline, btc_end = _composite_endpoints(btc_bars, t0_ms, horizon_ms)
+    eth_baseline, eth_end = _composite_endpoints(eth_bars, t0_ms, horizon_ms)
+    if (
+        btc_baseline is None
+        or btc_end is None
+        or eth_baseline is None
+        or eth_end is None
+        or btc_baseline <= 0
+        or eth_baseline <= 0
+    ):
+        summary["skipped_no_bars_in_window"] += 1
+        log.warning(
+            "outcome_eval_skip_no_bars_in_window",
+            signal_id=signal.id,
+            asset=signal.asset,
+            btc_bars_returned=len(btc_bars),
+            eth_bars_returned=len(eth_bars),
+        )
+        return
+
+    btc_return = (btc_end - btc_baseline) / btc_baseline
+    eth_return = (eth_end - eth_baseline) / eth_baseline
+    composite = weighted_composite_return(
+        btc_return_pct=btc_return,
+        eth_return_pct=eth_return,
+        btc_weight=settings.market_composite_weight_btc,
+        eth_weight=settings.market_composite_weight_eth,
+    )
+
+    hit = classify_composite_outcome(
+        composite_return_pct=composite,
+        direction=direction,
+        hit_pct=settings.market_composite_hit_pct,
+    )
+    # `direction == 0` was already rejected above, so `classify_composite_outcome`
+    # never returns None here — assert narrows the type for mypy.
+    assert hit is not None  # noqa: S101 — guarded by `direction == 0` check above
+
+    direction_enum = SignalDirection.LONG if direction == 1 else SignalDirection.SHORT
+    outcome = SignalOutcome(
+        signal_id=signal.id,
+        asset=signal.asset,
+        signal_type=signal.signal_type,
+        direction=direction_enum.value,
+        confidence=signal.confidence,
+        # MARKET signals carry no single-asset baseline — all level/price
+        # columns stay NULL. `composite_return_pct` is the canonical return.
+        entry_price=None,
+        stop_price=None,
+        target_price=None,
+        price_at_signal=None,
+        price_after_24h=None,
+        price_after_72h=None,
+        price_at_validity_end=None,
+        window_hours=window_hours,
+        scoring_version=_MARKET_SCORING_VERSION,
+        hit_target=hit,
+        hit_stop=None,
+        max_favorable=None,
+        max_adverse=None,
+        composite_return_pct=composite,
+        evaluated_at=datetime.now(UTC),
+    )
+    session.add(outcome)
+    summary["evaluated"] += 1
+    log.info(
+        "outcome_eval_market_inserted",
+        signal_id=signal.id,
+        asset=signal.asset,
+        direction=direction_enum.value,
+        window_hours=window_hours,
+        composite_return_pct=str(composite),
+        hit=hit,
+    )
+
+
+def _composite_endpoints(
+    bars: list[PriceBar], t0_ms: int, horizon_ms: int
+) -> tuple[Decimal | None, Decimal | None]:
+    """Pick (baseline, end) closes for one asset under the composite rubric.
+
+    Baseline = close of the bar whose open is the latest ≤ t0 — same
+    semantics as the single-asset path's `_pick_close_at(..., t0_ms)`. End =
+    close of the bar whose open is the latest ≤ t0 + horizon. The pair is
+    returned together so the caller can short-circuit on a single None
+    rather than threading two `_pick_close_at` calls inline.
+    """
+    if not bars:
+        return None, None
+    sorted_bars = sorted(bars, key=lambda b: b.timestamp_ms)
+    baseline = _pick_close_at(sorted_bars, t0_ms)
+    end = _pick_close_at(sorted_bars, t0_ms + horizon_ms)
+    return baseline, end

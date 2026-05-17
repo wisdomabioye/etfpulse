@@ -91,7 +91,10 @@ export interface SignalOutcome {
   entry_price: number | null;
   stop_price: number | null;
   target_price: number | null;
-  price_at_signal: number;
+  /** PR I.3b — nullable for MARKET (regime_shift) outcomes, which carry
+   *  the composite story in `composite_return_pct` instead. Single-asset
+   *  outcomes always populate this. */
+  price_at_signal: number | null;
   price_after_24h: number | null;
   price_after_72h: number | null;
   /** PR B (#60) — close at t0 + window_hours (the AI-stated validity end).
@@ -118,6 +121,11 @@ export interface SignalOutcome {
   max_favorable: number | null;
   max_adverse: number | null;
   evaluated_at: string | null;
+  /** PR I.3b — composite BTC+ETH weighted return for MARKET (regime_shift)
+   *  outcomes. Signed fraction (0.024 = +2.4%). NULL on single-asset rows.
+   *  Mutually exclusive with `price_at_signal` / `entry_price` etc. — when
+   *  this is set, those baseline fields are NULL by design. */
+  composite_return_pct: number | null;
 }
 
 export interface SignalDetail {
@@ -332,7 +340,8 @@ export interface TrackRecordItem {
   entry_price: number | null;
   stop_price: number | null;
   target_price: number | null;
-  price_at_signal: number;
+  /** PR I.3b — nullable for MARKET outcomes (see `SignalOutcome`). */
+  price_at_signal: number | null;
   price_after_24h: number | null;
   price_after_72h: number | null;
   /** PR B (#60) — see `SignalOutcome` for field semantics; same three
@@ -348,6 +357,9 @@ export interface TrackRecordItem {
   /** Unsigned fractions of entry (0.032 = 3.2%). */
   max_favorable: number | null;
   max_adverse: number | null;
+
+  /** PR I.3b — see `SignalOutcome.composite_return_pct`. NULL on single-asset rows. */
+  composite_return_pct: number | null;
 
   evaluated_at: string;
 }

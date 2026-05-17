@@ -145,6 +145,8 @@ def _format_outcome_line(o: SignalOutcome) -> str:
         ❌ #41 ETH short → stop hit (-1.8%)
         ⏳ #38 BTC long → no target set
         — #37 ETH long → neither hit (-0.4%)
+        ✅ #36 MARKET long → composite hit (+3.0%)
+        — #35 MARKET short → composite miss (+0.5%)
 
     Icon priority: ✅ target wins over ❌ stop (intra-day wick where both
     triggered → user-favorable read, same convention as the frontend
@@ -152,6 +154,13 @@ def _format_outcome_line(o: SignalOutcome) -> str:
     no-target signals, em-dash for "neither hit" — distinct because the
     second case had a target and missed it (informational), the first
     case had no target at all (the AI declined).
+
+    PR I.3b — MARKET (regime_shift) outcomes carry a composite-return
+    verdict, not a single-asset target/stop one. They route to a
+    dedicated "composite hit" / "composite miss" wording so the line
+    doesn't borrow single-asset framing ("target hit" / "neither hit")
+    that doesn't apply when there's no target. Recognised by
+    `composite_return_pct IS NOT NULL`.
 
     Dynamic fields (`asset`, `direction`) are `html.escape`d defensively —
     they're internal-only today (asset from a Literal, direction from
@@ -168,6 +177,15 @@ def _format_outcome_line(o: SignalOutcome) -> str:
 
 
 def _outcome_icon_and_verdict(o: SignalOutcome) -> tuple[str, str]:
+    # PR I.3b — MARKET composite outcomes branch first. The composite
+    # rubric writes hit_target=True/False (never None — a wait-action
+    # signal would have been filtered upstream) and hit_stop=None
+    # always (no stop level on MARKET signals). Dedicated wording
+    # avoids "neither hit" sounding like an unmet target.
+    if o.composite_return_pct is not None:
+        if o.hit_target is True:
+            return ("✅", "composite hit")
+        return ("—", "composite miss")
     if o.hit_target is True:
         return ("✅", "target hit")
     if o.hit_stop is True:
@@ -190,13 +208,28 @@ def _percent_return_text(o: SignalOutcome) -> str | None:
     (168h validity): pre-PR-B the bot would show the 72h close even
     though the trade's stated outcome point is at 168h. Now it shows the
     actual validity-end close for v2 rows."""
+    # PR I.3b — for MARKET (regime_shift) outcomes scored under the
+    # composite rubric, the canonical return is `composite_return_pct`
+    # (a delta, not a level). entry_price / price_at_signal / price_after_*
+    # are all NULL on those rows by design. Render the composite directly
+    # so MARKET signals show a meaningful percent in the bot's recent-list,
+    # not "—".
+    if o.composite_return_pct is not None:
+        pct = float(o.composite_return_pct) * 100
+        sign = "+" if pct >= 0 else ""
+        return f"{sign}{pct:.1f}%"
+
     close_at_end = (
         o.price_at_validity_end if o.price_at_validity_end is not None else o.price_after_72h
     )
     if close_at_end is None:
         return None
+    # PR I.3b — `price_at_signal` is nullable; for non-MARKET signals it's
+    # always populated, but the explicit `is not None` chain protects
+    # against the (unreachable today) case where a single-asset signal
+    # somehow lacks a baseline.
     baseline = o.entry_price if o.entry_price is not None else o.price_at_signal
-    if baseline <= 0:
+    if baseline is None or baseline <= 0:
         return None
     pct = (float(close_at_end - baseline) / float(baseline)) * 100
     sign = "+" if pct >= 0 else ""

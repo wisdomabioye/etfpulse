@@ -20,11 +20,11 @@ import { Kicker, Skeleton } from '../ui';
  *     evaluated outcomes per detector across all horizons combined) for
  *     a per-horizon split to be more informative than the aggregate.
  *
- * regime_shift exclusion: the backend filters it out by design — MARKET
- * signals aren't scoreable under the single-asset entry/stop/target
- * rubric. The footnote tells the user where to find that story (PR I.3b,
- * once composite scoring lands). Don't render an empty row for it; that
- * would be the quiet-pretense version of hiding the gap.
+ * regime_shift: post-PR-I.3b, MARKET signals are scored under a composite
+ * BTC+ETH return rubric (weighted by `market_composite_weight_*`,
+ * thresholded by `market_composite_hit_pct`). regime_shift now appears
+ * as a regular row in the leaderboard on the same footing as single-asset
+ * detectors — the per-detector aggregator's exclusion set is empty.
  *
  * Numbers from the backend are 0..1 fractions; *100 on render. CI bounds
  * are also fractions; rendered as "[40% – 89%]" with the same scaling.
@@ -74,9 +74,10 @@ export function DetectorPrecisionCard({ data, className }: DetectorPrecisionCard
       </div>
 
       <p className="mt-3 text-[11px] text-text-4 italic">
-        regime_shift is scored separately — pending PR I.3b (MARKET-asset
-        composite scoring). Until it lands, regime-shift signals don't have
-        comparable hit-rate data on this leaderboard.
+        regime_shift is scored under a composite BTC+ETH return rubric
+        (weighted average vs. a directional threshold) rather than against
+        a single-asset target. Hit rates are directly comparable across
+        all detectors.
       </p>
     </section>
   );

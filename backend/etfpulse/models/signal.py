@@ -173,7 +173,13 @@ class SignalOutcome(Base):
     entry_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     stop_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     target_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
-    price_at_signal: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    # PR I.3b relaxed to nullable. MARKET (regime_shift, PR F.3) signals have
+    # no single-asset baseline — their composite return is the truth (see
+    # `composite_return_pct` below). Single-asset outcomes still write a real
+    # price here (NOT NULL via the evaluator's contract, even though the
+    # column itself permits NULL). Readers MUST treat this as nullable and
+    # gate `(close - baseline) / baseline` math on `is not None`.
+    price_at_signal: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     price_after_24h: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     price_after_72h: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     hit_target: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -190,8 +196,19 @@ class SignalOutcome(Base):
     # horizon-aware analogue of `price_after_72h`. All three are NULL until
     # PR B's writer lands; PR A only declares the columns.
     window_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    scoring_version: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # PR I.3b widened from String(8) → String(16) to fit "market-v1" and
+    # future versioned rubrics. Existing "v2" values pass through untouched.
+    # No CHECK constraint — the column's value is just an audit tag the FE
+    # and aggregators read; format is conventional ("v[N]" for single-asset
+    # rubric versions, "market-v[N]" for composite-scoring rubric versions).
+    scoring_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
     price_at_validity_end: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    # PR I.3b — composite return for MARKET signals only (regime_shift,
+    # `asset == 'MARKET'`). NULL for single-asset rows (the entry/stop/
+    # target columns above carry their price story). Decimal(8, 5)
+    # holds fractional returns to 0.001% precision (e.g. 0.02345 = 2.345%).
+    # When non-NULL, `scoring_version` is the "market-v[N]" rubric used.
+    composite_return_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 5), nullable=True)
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

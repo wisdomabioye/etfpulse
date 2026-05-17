@@ -95,7 +95,10 @@ class TrackRecordItemOut(BaseModel):
     entry_price: float | None = None
     stop_price: float | None = None
     target_price: float | None = None
-    price_at_signal: float
+    # PR I.3b — nullable for MARKET (regime_shift) outcomes; single-asset
+    # outcomes always populate it. FE treats null as "composite-scored,
+    # no single-asset baseline."
+    price_at_signal: float | None = None
     price_after_24h: float | None = None
     price_after_72h: float | None = None
     # PR B (#60) — see `SignalOutcomeOut` for the field semantics; same
@@ -112,6 +115,10 @@ class TrackRecordItemOut(BaseModel):
     # Unsigned fractions of entry (e.g. 0.032 = 3.2%). Asset-agnostic.
     max_favorable: float | None = None
     max_adverse: float | None = None
+
+    # PR I.3b — see SignalOutcomeOut.composite_return_pct. NULL on
+    # single-asset rows; populated on MARKET (regime_shift) outcomes.
+    composite_return_pct: float | None = None
 
     evaluated_at: datetime
 

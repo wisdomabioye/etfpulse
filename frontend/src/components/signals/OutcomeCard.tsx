@@ -33,6 +33,17 @@ export function OutcomeCard({ outcome, expiresAt }: OutcomeCardProps) {
     );
   }
 
+  // PR I.3b — MARKET (regime_shift) outcomes carry the composite story
+  // in `composite_return_pct` (signed fraction); single-asset baseline
+  // fields are all NULL by design. Render the dedicated composite block
+  // BEFORE running `pickVerdict` — the single-asset verdict picker would
+  // emit "Target hit" / "Neither hit" framing that doesn't apply to a
+  // MARKET row (no target was ever set). MarketCompositeCard computes
+  // its own composite-specific verdict.
+  if (outcome.composite_return_pct !== null) {
+    return <MarketCompositeCard outcome={outcome} />;
+  }
+
   // Verdict tone — `hit_target` wins over `hit_stop` (same convention as
   // TrackRecord page). `null` hit_target means AI didn't volunteer a
   // target, so "neither hit" doesn't apply — we render a muted "—".
@@ -119,7 +130,7 @@ export function OutcomeCard({ outcome, expiresAt }: OutcomeCardProps) {
         <Section title="Realised (vs entry)">
           <Row
             label="At signal"
-            value={formatUsdPrice(outcome.price_at_signal)}
+            value={fmtPriceOrDash(outcome.price_at_signal)}
             secondary={null}
           />
           {showLegacyRows && (
@@ -209,16 +220,20 @@ function Row({
   label,
   value,
   secondary,
+  toneClass,
 }: {
   label: string;
   value: string;
   /** Optional appended pct-return tag, e.g. "+2.4%" with tone color. */
   secondary?: ReturnPct | null;
+  /** Optional tone class applied to `value` itself (used by the MARKET
+   *  composite path to colour the signed return inline). */
+  toneClass?: string;
 }) {
   return (
     <>
       <dt className="text-text-3">{label}</dt>
-      <dd className="m-0 text-text-1 tabular-nums break-words">
+      <dd className={`m-0 tabular-nums break-words ${toneClass ?? 'text-text-1'}`}>
         {value}
         {secondary && (
           <span
@@ -268,8 +283,8 @@ interface ReturnPct {
 /** Computes `(price - baseline) / baseline * 100`, formatted with sign +
  *  tone class. Null when either input is null OR baseline is non-positive
  *  (would divide by zero — same defensive guard as TrackRecord page row). */
-function pctReturn(price: number | null, baseline: number): ReturnPct | null {
-  if (price === null || baseline <= 0) return null;
+function pctReturn(price: number | null, baseline: number | null): ReturnPct | null {
+  if (price === null || baseline === null || baseline <= 0) return null;
   const pct = ((price - baseline) / baseline) * 100;
   return {
     text: `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
@@ -282,6 +297,74 @@ function fmtPriceOrDash(n: number | null): string {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// MARKET (regime_shift) composite outcome — PR I.3b
+// ---------------------------------------------------------------------------
+//
+// MARKET signals are scored as a weighted BTC+ETH composite return (delta)
+// rather than against a single-asset entry/stop/target. All single-asset
+// baseline fields are NULL by design (PR I.3b migration relaxed
+// `price_at_signal` to nullable). Render the composite story directly:
+// a verdict band + the signed return + the max_favorable/max_adverse
+// excursions (which the evaluator still computes on the same composite
+// series). No "Levels" or "+24h/+72h" rows — they don't apply.
+function MarketCompositeCard({ outcome }: { outcome: SignalOutcome }) {
+  // composite_return_pct is a signed fraction (0.024 = +2.4%). Format with
+  // sign and one decimal, same precision as the bot's recent-outcome line.
+  const pct = (outcome.composite_return_pct ?? 0) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  const compositeText = `${sign}${pct.toFixed(2)}%`;
+  const toneClass = pct >= 0 ? 'text-pos' : 'text-neg';
+  // Composite-specific verdict — mirrors the bot's `_outcome_icon_and_verdict`
+  // MARKET branch. "composite hit" / "composite miss" wording rather than
+  // the single-asset "Target hit" / "Neither hit" framing (no target ever
+  // existed on a MARKET row).
+  const verdict: Verdict =
+    outcome.hit_target === true
+      ? { label: '✓ Composite hit', color: 'var(--color-pos)' }
+      : { label: '— Composite miss', color: 'var(--color-text-3)' };
+  return (
+    <div
+      className="rounded-lg bg-bg-2"
+      style={{
+        border: '1px solid var(--color-border-2)',
+        borderLeft: `3px solid ${verdict.color}`,
+      }}
+    >
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border-2 font-mono text-[10px] uppercase tracking-[0.1em] text-text-3">
+        <span className="inline-flex items-center gap-2">
+          Outcome
+          <span
+            className="font-mono text-[9px] tracking-normal normal-case text-text-3 px-1.5 py-0.5 rounded"
+            style={{ border: '1px solid var(--color-border-3)' }}
+            title="Scored as a weighted BTC+ETH composite return (not against a single-asset target)"
+          >
+            market composite
+          </span>
+        </span>
+        <span style={{ color: verdict.color }}>{verdict.label}</span>
+      </div>
+      <div className="px-5 py-4 grid gap-5 grid-cols-1 md:grid-cols-2">
+        <Section title="Composite return">
+          <Row label="BTC+ETH" value={compositeText} secondary={null} toneClass={toneClass} />
+        </Section>
+        <Section title="Excursion">
+          <Row
+            label="Max favorable"
+            value={outcome.max_favorable === null ? '—' : `${(outcome.max_favorable * 100).toFixed(1)}%`}
+            secondary={null}
+          />
+          <Row
+            label="Max adverse"
+            value={outcome.max_adverse === null ? '—' : `${(outcome.max_adverse * 100).toFixed(1)}%`}
+            secondary={null}
+          />
+        </Section>
+      </div>
+    </div>
+  );
+}
 
 function formatCountdown(iso: string): string | null {
   const target = new Date(iso).getTime();

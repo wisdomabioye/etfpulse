@@ -538,35 +538,37 @@ class TestEvaluatePendingOutcomes:
         summary = await evaluate_pending_outcomes(db_session)
         assert summary["candidates"] == 0  # filtered at the SQL level
 
-    async def test_skips_market_signal_even_with_price(self, db_session, stub_klines):
-        """PR F.3 — MARKET regime_shift signals must be filtered at the SQL
-        level (`Signal.asset != MARKET_ASSET` in `base_filters`).
+    async def test_market_signal_is_candidate_under_composite_rubric(self, db_session, stub_klines):
+        """PR I.3b — MARKET (regime_shift) signals are now SCORED, not skipped.
 
-        Defensive: even if a future change populates `price_at_creation`
-        for MARKET signals (e.g. weighted BTC+ETH average), they should
-        still be skipped because there's no single asset price series to
-        score against. The explicit asset filter decouples the skip
-        behavior from the price-null coincidence today.
+        Pre-I.3b the SQL `base_filters` excluded `asset == MARKET_ASSET`.
+        I.3b replaced that with `(asset == MARKET) OR price_at_creation IS
+        NOT NULL` so MARKET signals (which carry NULL `price_at_creation`
+        by design) enter the candidate set and dispatch to
+        `_evaluate_market_one`. This test pins the candidate-set
+        admission; the dedicated composite-eval test suite covers scoring.
         """
         signal = _make_signal(
             created_at=datetime.now(UTC) - timedelta(hours=80),
             asset="MARKET",
             signal_type="regime_shift",
-            # Force a non-null price so this test pins the asset filter
-            # specifically, not the price-null filter.
-            price_at_creation=Decimal("84200"),
-            fingerprint_extra="market-skip",
+            # NULL price_at_creation is the production shape for MARKET.
+            price_at_creation=None,
+            fingerprint_extra="market-candidate",
         )
         signal.created_at = datetime.now(UTC) - timedelta(hours=80)
         db_session.add(signal)
         await db_session.flush()
 
         summary = await evaluate_pending_outcomes(db_session)
-        assert summary["candidates"] == 0
+        # MARKET is now in the candidate set under I.3b.
+        assert summary["candidates"] == 1
+        # The stub_klines fixture returns no bars, so the composite path
+        # short-circuits on `skipped_no_bars_in_window` — that's the
+        # signal we want for "MARKET admitted, scoring attempted." The
+        # successful-scoring path is covered in the composite-specific
+        # test class.
         assert summary["evaluated"] == 0
-        # No klines fetched — the SQL filter rejected the signal before
-        # the per-signal loop ran.
-        assert stub_klines["calls"] == []
 
     async def test_idempotent_skips_signal_with_existing_outcome(self, db_session, stub_klines):
         t0 = datetime.now(UTC) - timedelta(hours=80)
@@ -1125,3 +1127,279 @@ class TestEvaluatePendingOutcomesV2:
         # price_at_validity_end is populated (= price_after_72h for swing).
         assert outcome.price_at_validity_end is not None
         assert outcome.price_at_validity_end == outcome.price_after_72h
+
+
+# ---------------------------------------------------------------------------
+# PR I.3b — MARKET (regime_shift) composite-scoring integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stub_klines_by_asset(monkeypatch):
+    """Per-asset variant of `stub_klines`. Lets a single test return DIFFERENT
+    bar sequences for BTC vs ETH — required for the MARKET (regime_shift)
+    composite path, which fetches both legs and combines them by weight.
+
+    Usage:
+        stub_klines_by_asset["bars"]["BTC"] = [...]
+        stub_klines_by_asset["bars"]["ETH"] = [...]
+
+    `raise_for` is a set of assets whose fetch should return None (simulating
+    kline-fetch failure for one leg)."""
+    state: dict = {
+        "calls": [],
+        "bars": {"BTC": [], "ETH": []},
+        "raise_for": set(),
+    }
+
+    async def _fake(asset, source, *, start_time_ms=None, end_time_ms=None, limit=100):
+        state["calls"].append(
+            {"asset": asset, "source": source, "start_ms": start_time_ms, "end_ms": end_time_ms}
+        )
+        if asset in state["raise_for"]:
+            return None
+        return list(state["bars"].get(asset, []))
+
+    monkeypatch.setattr("etfpulse.pipeline.track_record.get_daily_klines_from_source", _fake)
+    return state
+
+
+def _make_market_signal(
+    *,
+    created_at: datetime,
+    horizon_hours: int = 72,
+    suggested_action: str = "consider long",
+    confidence: int | None = 7,
+    fingerprint_extra: str = "market",
+) -> Signal:
+    """MARKET (regime_shift) signal helper.
+
+    Mirrors `_make_signal` but pins the production-shape constraints:
+      - `asset == "MARKET"` sentinel (PR F.3).
+      - `price_at_creation` / `price_source` / entry / stop / target all NULL
+        (regime_shift signals have no single-asset baseline; the composite
+        rubric reconstructs both legs at evaluation time).
+      - `signal_type == "regime_shift"`.
+
+    Without this helper every MARKET test would re-list the same six NULL
+    overrides — keeping it explicit prevents accidental drift back to a
+    single-asset shape.
+    """
+    signal = Signal(
+        signal_type="regime_shift",
+        asset="MARKET",
+        trigger_data={"regime_transition": "neutral_to_markup"},
+        ai_analysis={"suggested_action": suggested_action, "headline": "x"}
+        if suggested_action
+        else None,
+        confidence=confidence,
+        status="alerted",
+        price_at_creation=None,
+        price_source=None,
+        ai_prompt_version="v3",
+        fingerprint=compute_fingerprint("track-record-market-test", fingerprint_extra),
+        signal_date=created_at.date(),
+        entry_price=None,
+        stop_price=None,
+        target_price=None,
+    )
+    signal.created_at = created_at
+    signal.expires_at = created_at + timedelta(hours=horizon_hours)
+    return signal
+
+
+def _flat_bars_around(
+    t0: datetime, *, baseline: Decimal, end_close: Decimal, window_hours: int
+) -> list[PriceBar]:
+    """Build a 4-bar daily series where:
+      - The bar containing t0 closes at `baseline` (the t0 close that
+        `_pick_close_at` returns for the baseline pick).
+      - The bar containing t0 + window_hours closes at `end_close` (the
+        validity-end close).
+    Intermediate bars carry the baseline close so max_favorable/adverse
+    don't accidentally diverge from the start/end picks.
+
+    Useful for pinning composite-return math without juggling raw timestamps."""
+    t0_ms = int(t0.timestamp() * 1000)
+    end_ms = t0_ms + window_hours * 3600 * 1000
+    day_ms = 24 * 3600 * 1000
+    return [
+        PriceBar(
+            timestamp_ms=t0_ms,
+            open=baseline,
+            high=baseline,
+            low=baseline,
+            close=baseline,
+        ),
+        PriceBar(
+            timestamp_ms=t0_ms + day_ms,
+            open=baseline,
+            high=baseline,
+            low=baseline,
+            close=baseline,
+        ),
+        PriceBar(
+            timestamp_ms=t0_ms + 2 * day_ms,
+            open=baseline,
+            high=baseline,
+            low=baseline,
+            close=baseline,
+        ),
+        PriceBar(
+            timestamp_ms=end_ms,
+            open=end_close,
+            high=end_close,
+            low=end_close,
+            close=end_close,
+        ),
+    ]
+
+
+class TestEvaluatePendingOutcomesMarket:
+    """PR I.3b — composite scoring for MARKET (regime_shift) signals."""
+
+    async def test_long_market_signal_with_winning_composite_inserts_hit(
+        self, db_session, stub_klines_by_asset
+    ):
+        """Default config (0.5/0.5 weights, 2% hit threshold).
+        BTC +4%, ETH +2% → composite +3% → long direction → hit_target=True."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        signal = _make_market_signal(created_at=t0, fingerprint_extra="long-hit")
+        db_session.add(signal)
+        await db_session.flush()
+
+        stub_klines_by_asset["bars"]["BTC"] = _flat_bars_around(
+            t0, baseline=Decimal("80000"), end_close=Decimal("83200"), window_hours=72
+        )
+        stub_klines_by_asset["bars"]["ETH"] = _flat_bars_around(
+            t0, baseline=Decimal("3000"), end_close=Decimal("3060"), window_hours=72
+        )
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 1
+        assert summary["evaluated"] == 1
+
+        outcome = (await db_session.execute(select(SignalOutcome))).scalar_one()
+        assert outcome.scoring_version == "market-v1"
+        assert outcome.window_hours == 72
+        assert outcome.hit_target is True
+        assert outcome.hit_stop is None
+        # All single-asset baseline columns stay NULL by design.
+        assert outcome.entry_price is None
+        assert outcome.price_at_signal is None
+        assert outcome.price_at_validity_end is None
+        # Composite ≈ 0.5 * 0.04 + 0.5 * 0.02 = 0.03.
+        assert outcome.composite_return_pct is not None
+        assert abs(float(outcome.composite_return_pct) - 0.03) < 1e-9
+        # Direction stamped LONG.
+        assert outcome.direction == SignalDirection.LONG.value
+        # Both legs fetched.
+        fetched_assets = {c["asset"] for c in stub_klines_by_asset["calls"]}
+        assert fetched_assets == {"BTC", "ETH"}
+
+    async def test_long_market_signal_with_losing_composite_inserts_miss(
+        self, db_session, stub_klines_by_asset
+    ):
+        """BTC -1%, ETH +1% → composite 0% → long direction → below 2% threshold → miss."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        signal = _make_market_signal(created_at=t0, fingerprint_extra="long-miss")
+        db_session.add(signal)
+        await db_session.flush()
+
+        stub_klines_by_asset["bars"]["BTC"] = _flat_bars_around(
+            t0, baseline=Decimal("80000"), end_close=Decimal("79200"), window_hours=72
+        )
+        stub_klines_by_asset["bars"]["ETH"] = _flat_bars_around(
+            t0, baseline=Decimal("3000"), end_close=Decimal("3030"), window_hours=72
+        )
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["evaluated"] == 1
+
+        outcome = (await db_session.execute(select(SignalOutcome))).scalar_one()
+        assert outcome.hit_target is False
+        assert outcome.composite_return_pct is not None
+        assert abs(float(outcome.composite_return_pct) - 0.0) < 1e-9
+
+    async def test_short_market_signal_with_winning_composite_inserts_hit(
+        self, db_session, stub_klines_by_asset
+    ):
+        """BTC -4%, ETH -2% → composite -3% → short direction →
+        signed_progress = -0.03 × -1 = +0.03 ≥ 0.02 → hit_target=True."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        signal = _make_market_signal(
+            created_at=t0,
+            suggested_action="consider short",
+            fingerprint_extra="short-hit",
+        )
+        db_session.add(signal)
+        await db_session.flush()
+
+        stub_klines_by_asset["bars"]["BTC"] = _flat_bars_around(
+            t0, baseline=Decimal("80000"), end_close=Decimal("76800"), window_hours=72
+        )
+        stub_klines_by_asset["bars"]["ETH"] = _flat_bars_around(
+            t0, baseline=Decimal("3000"), end_close=Decimal("2940"), window_hours=72
+        )
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["evaluated"] == 1
+
+        outcome = (await db_session.execute(select(SignalOutcome))).scalar_one()
+        assert outcome.hit_target is True
+        assert outcome.direction == SignalDirection.SHORT.value
+        assert outcome.composite_return_pct is not None
+        assert abs(float(outcome.composite_return_pct) - (-0.03)) < 1e-9
+
+    async def test_wait_market_signal_skipped_no_direction(self, db_session, stub_klines_by_asset):
+        """`suggested_action == 'wait'` → direction 0 → skip without
+        writing an outcome row. Counters: candidates=1, skipped_no_direction=1."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        signal = _make_market_signal(
+            created_at=t0,
+            suggested_action="wait",
+            fingerprint_extra="wait",
+        )
+        db_session.add(signal)
+        await db_session.flush()
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 1
+        assert summary["skipped_no_direction"] == 1
+        assert summary["evaluated"] == 0
+        outcomes = (await db_session.execute(select(SignalOutcome))).all()
+        assert outcomes == []
+
+    async def test_one_leg_kline_fetch_failure_skips_signal(self, db_session, stub_klines_by_asset):
+        """If either leg's kline fetch returns None, the composite path
+        short-circuits with `skipped_no_klines` — same defensive contract
+        as the single-asset path."""
+        t0 = datetime.now(UTC) - timedelta(hours=80)
+        signal = _make_market_signal(created_at=t0, fingerprint_extra="eth-fail")
+        db_session.add(signal)
+        await db_session.flush()
+
+        stub_klines_by_asset["bars"]["BTC"] = _flat_bars_around(
+            t0, baseline=Decimal("80000"), end_close=Decimal("82000"), window_hours=72
+        )
+        stub_klines_by_asset["raise_for"] = {"ETH"}
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 1
+        assert summary["evaluated"] == 0
+        assert summary["skipped_no_klines"] == 1
+
+    async def test_scalp_window_market_signal_skipped_intraday_unsupported(
+        self, db_session, stub_klines_by_asset
+    ):
+        """Sub-24h window MARKET signal hits the same intraday-unsupported
+        gate as a single-asset scalp — daily klines can't honestly score it."""
+        t0 = datetime.now(UTC) - timedelta(hours=10)
+        signal = _make_market_signal(created_at=t0, horizon_hours=6, fingerprint_extra="scalp")
+        db_session.add(signal)
+        await db_session.flush()
+
+        summary = await evaluate_pending_outcomes(db_session)
+        assert summary["candidates"] == 1
+        assert summary["skipped_scalp_intraday_unsupported"] == 1
+        assert summary["evaluated"] == 0

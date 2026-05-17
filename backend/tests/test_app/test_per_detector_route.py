@@ -59,10 +59,17 @@ class TestPerDetectorHappyPath:
         assert r.status_code == 200
         body = r.json()
         assert body["ai_prompt_version"] == AI_PROMPT_VERSION
-        # 4 registered non-excluded detectors must always appear, in
-        # ALL_DETECTORS order.
+        # Post-I.3b: all 5 registered detectors appear, in ALL_DETECTORS
+        # order (regime_shift now scored via composite rubric, no longer
+        # structurally excluded).
         types = [d["signal_type"] for d in body["detectors"]]
-        assert types == ["flow_anomaly", "magnitude", "acceleration", "divergence"]
+        assert types == [
+            "flow_anomaly",
+            "magnitude",
+            "acceleration",
+            "divergence",
+            "regime_shift",
+        ]
         # Every cell n=0, hit_rate null on cold start.
         for detector in body["detectors"]:
             assert detector["total"]["n_samples"] == 0
@@ -185,17 +192,27 @@ class TestPerDetectorShape:
             for cell in detector["horizons"].values():
                 assert set(cell.keys()) == expected_cell_keys
 
-    async def test_regime_shift_never_in_response(self, db_session, client):
-        # Even if regime_shift signals were scored (they shouldn't be), the
-        # route's exclusion set keeps them out of the response until I.3b.
+    async def test_regime_shift_appears_post_i3b(self, db_session, client):
+        # PR I.3b folded regime_shift into the per-detector report. A
+        # composite-scored MARKET outcome (`hit_target=True`) now surfaces
+        # under the `regime_shift` signal_type row, on the same footing as
+        # single-asset detectors. asset="MARKET" mirrors production shape
+        # (regime_shift signals carry the sentinel per PR F.3); the
+        # aggregator groups by signal_type only, but seeding the realistic
+        # asset prevents the test from quietly accepting a bug that
+        # leaked MARKET vs. BTC handling.
         await _seed_outcome(
             db_session,
             signal_type="regime_shift",
+            asset="MARKET",
             hit_target=True,
-            key="shouldnt-appear",
+            key="market-appears",
         )
         body = (await client.get("/api/track-record/per-detector")).json()
-        assert all(d["signal_type"] != "regime_shift" for d in body["detectors"])
+        regime = next((d for d in body["detectors"] if d["signal_type"] == "regime_shift"), None)
+        assert regime is not None
+        assert regime["total"]["n_samples"] == 1
+        assert regime["total"]["wins"] == 1
 
 
 class TestPerDetectorCache:

@@ -2,7 +2,7 @@
 
 Four layers, ordered cheap → expensive:
 
-1. Empty-state contracts (full grid present, regime_shift excluded).
+1. Empty-state contracts (full grid present, regime_shift included post-I.3b).
 2. Aggregation correctness (grouping, horizon bucketing, totals).
 3. Filter behaviour (cohort version, lookback window, hit_target nullability).
 4. Threshold behaviour + report-shape canary (min_samples gate, params echo,
@@ -53,12 +53,14 @@ class TestEmptyDB:
     async def test_returns_full_grid_with_zero_samples(self, db_session):
         report = await compute_per_detector(db_session, **_DEFAULT_CALL_KWARGS)
 
-        # 4 registered non-excluded detectors must always appear.
+        # Post-I.3b: all 5 registered detectors appear (regime_shift now
+        # scored under the composite rubric, no longer structurally excluded).
         assert {r.signal_type for r in report.detectors} == {
             "flow_anomaly",
             "magnitude",
             "acceleration",
             "divergence",
+            "regime_shift",
         }
         for row in report.detectors:
             assert row.total.n_samples == 0
@@ -70,18 +72,28 @@ class TestEmptyDB:
                 assert cell.ci_low is None
                 assert cell.ci_high is None
 
-    async def test_regime_shift_never_appears(self, db_session):
-        # PR I.3b will fold this in. Until then it's structurally excluded.
+    async def test_regime_shift_appears_post_i3b(self, db_session):
+        # PR I.3b folded regime_shift into the report (MARKET signals now
+        # produce composite-scored outcomes; `_EXCLUDED_FROM_PER_DETECTOR`
+        # is empty). Pinning the inverse of the pre-I.3b contract so a
+        # future regression that re-excludes regime_shift fails loudly.
         report = await compute_per_detector(db_session, **_DEFAULT_CALL_KWARGS)
-        assert all(r.signal_type != "regime_shift" for r in report.detectors)
+        assert any(r.signal_type == "regime_shift" for r in report.detectors)
 
     async def test_detector_order_matches_registry(self, db_session):
-        # Order is ALL_DETECTORS precedence (excluding regime_shift), then
-        # any legacy types alphabetically. With empty DB only the registered
-        # 4 appear, in the same order as pipeline/detectors/__init__.py.
+        # Order is ALL_DETECTORS precedence (post-I.3b: no exclusions),
+        # then any legacy types alphabetically. With empty DB only the
+        # registered 5 appear, in the same order as
+        # pipeline/detectors/__init__.py.
         report = await compute_per_detector(db_session, **_DEFAULT_CALL_KWARGS)
         types = [r.signal_type for r in report.detectors]
-        assert types == ["flow_anomaly", "magnitude", "acceleration", "divergence"]
+        assert types == [
+            "flow_anomaly",
+            "magnitude",
+            "acceleration",
+            "divergence",
+            "regime_shift",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +200,7 @@ class TestAggregation:
             "magnitude",
             "acceleration",
             "divergence",
+            "regime_shift",
             "old_detector_a",
             "old_detector_b",
         ]

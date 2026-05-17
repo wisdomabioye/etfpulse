@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -364,6 +364,55 @@ class Settings(BaseSettings):
     # Tighten (raise) to be more conservative; loosen (lower to 1) to
     # surface preliminary numbers with very wide CIs.
     per_detector_min_samples: int = Field(default=3, ge=1, le=100)
+
+    # PR I.3b — MARKET (regime_shift) signals score against a weighted
+    # BTC + ETH composite. Weights are configurable (no hardcoded "equal
+    # weighted" decision); the boot-time `model_validator` below pins
+    # them to sum to exactly 1.0. The hit threshold is the absolute %
+    # composite move required (in the AI's claimed direction) for the
+    # signal to count as hit_target=True. Asset set itself is fixed to
+    # {BTC, ETH} because those are the only assets in the ingestion
+    # pipeline today — extending requires both new env vars and an
+    # updated validator (single point of change, not silent drift).
+    market_composite_weight_btc: Decimal = Field(
+        default=Decimal("0.5"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
+    market_composite_weight_eth: Decimal = Field(
+        default=Decimal("0.5"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
+    # Default 2% over the signal's validity window (typically 72h for swing
+    # signals, 168h for position). Threshold semantics: |composite_return|
+    # >= hit_pct AND sign matches AI direction → hit_target=True. Strictly
+    # > 0 so a misconfigured 0 doesn't make every signal trivially hit.
+    market_composite_hit_pct: Decimal = Field(
+        default=Decimal("0.02"),
+        gt=Decimal("0"),
+        le=Decimal("1"),
+    )
+
+    @model_validator(mode="after")
+    def _validate_market_composite_weights_sum_to_one(self) -> "Settings":
+        """Pin the BTC + ETH composite weights to sum to 1.0.
+
+        Run as a boot-time validator so a misconfigured deploy (e.g.
+        `WEIGHT_BTC=0.7` left over from a tuning experiment without a
+        matching ETH update) fails LOUDLY at app startup rather than
+        silently shipping a weighted composite that doesn't conserve
+        magnitude. Tolerance of 1e-9 absorbs decimal-representation
+        round-trips through env vars without softening the contract.
+        """
+        total = self.market_composite_weight_btc + self.market_composite_weight_eth
+        if abs(total - Decimal("1.0")) > Decimal("1e-9"):
+            raise ValueError(
+                "market_composite_weight_btc + market_composite_weight_eth must sum "
+                f"to 1.0 (got {total}). Adjust the env vars MARKET_COMPOSITE_WEIGHT_BTC "
+                "and MARKET_COMPOSITE_WEIGHT_ETH to land on the unit sum."
+            )
+        return self
 
     # CORS
     cors_origins: str = "http://localhost:5173"

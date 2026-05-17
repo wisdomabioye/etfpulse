@@ -67,15 +67,17 @@ from etfpulse.pipeline.track_record import (
 log = structlog.get_logger()
 
 
-# Detectors whose outcomes are NOT scored under the single-asset
-# entry/stop/target rubric. regime_shift signals carry `asset == MARKET`
-# (per PR F.3) and are therefore filtered out by the outcome evaluator
-# upstream — they would never appear in the GROUP BY result anyway. The
-# constant is the documented PLACEHOLDER for that exclusion at the
-# aggregator's API surface: when PR I.3b lands and MARKET signals start
-# producing composite-scored outcomes, this set empties and regime_shift
-# folds into the report automatically.
-_EXCLUDED_FROM_PER_DETECTOR: frozenset[str] = frozenset({"regime_shift"})
+# Detectors whose outcomes are NOT scored under any rubric this report
+# covers. Historically (pre-PR-I.3b) regime_shift lived here because MARKET
+# signals were unscored — they had no single-asset entry/stop/target so the
+# outcome evaluator skipped them. PR I.3b added composite BTC+ETH scoring
+# for MARKET (`scoring_version='market-v1'`, hit_target derived from a
+# weighted composite return), which means regime_shift outcomes NOW have
+# valid `hit_target` bits and fold into the per-detector report on the
+# same footing as single-asset detectors. The set is empty today but kept
+# as the documented seam — a future "unscorable" detector category lands
+# here without touching the aggregation loop.
+_EXCLUDED_FROM_PER_DETECTOR: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------

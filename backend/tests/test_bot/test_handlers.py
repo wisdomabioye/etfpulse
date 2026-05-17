@@ -774,6 +774,70 @@ class TestCmdTrackRecord:
         # Sanity — the cold-boot caption MUST NOT fire here.
         assert "No outcomes evaluated yet" not in reply_text
 
+    async def test_market_composite_outcomes_render_with_dedicated_verdict(
+        self, db_session, patch_session
+    ):
+        """PR I.3b — MARKET (regime_shift) composite outcomes get
+        "composite hit" / "composite miss" wording, NOT the single-asset
+        "target hit" / "neither hit" framing (which would be a category
+        error: MARKET signals have no target). Pin both verdicts and the
+        composite percent rendering."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from etfpulse.models import Signal, SignalOutcome
+        from etfpulse.pipeline.detectors import compute_fingerprint
+
+        now = datetime.now(UTC)
+        for i, (hit, composite) in enumerate([(True, Decimal("0.03")), (False, Decimal("0.005"))]):
+            signal = Signal(
+                signal_type="regime_shift",
+                asset="MARKET",
+                trigger_data={},
+                ai_analysis={"suggested_action": "consider long", "headline": "x"},
+                confidence=7,
+                status="alerted",
+                price_at_creation=None,
+                price_source=None,
+                ai_prompt_version="v3",
+                fingerprint=compute_fingerprint("market-bot", str(i)),
+                signal_date=date(2026, 5, 17),
+            )
+            db_session.add(signal)
+            await db_session.flush()
+            db_session.add(
+                SignalOutcome(
+                    signal_id=signal.id,
+                    asset="MARKET",
+                    signal_type="regime_shift",
+                    direction="long",
+                    confidence=7,
+                    # Single-asset baseline columns all NULL by I.3b design.
+                    price_at_signal=None,
+                    hit_target=hit,
+                    hit_stop=None,
+                    composite_return_pct=composite,
+                    scoring_version="market-v1",
+                    window_hours=72,
+                    evaluated_at=now,
+                )
+            )
+        await db_session.flush()
+
+        update = _dm_update()
+        await cmd_track_record(update, _ctx())
+
+        reply_text = update.effective_message.reply_html.await_args.args[0]
+        # Composite hit gets ✅ + "composite hit"; composite miss gets — +
+        # "composite miss". Critically, the single-asset wording must NOT
+        # leak into the MARKET row.
+        assert "composite hit" in reply_text
+        assert "composite miss" in reply_text
+        assert "neither hit" not in reply_text
+        # Composite return rendered from `composite_return_pct` directly.
+        assert "+3.0%" in reply_text
+        assert "+0.5%" in reply_text
+
 
 # ---- my_chat_member (issue #35) -------------------------------------------
 
