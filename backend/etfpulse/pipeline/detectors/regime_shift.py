@@ -44,7 +44,7 @@ Edge cases:
 
 from __future__ import annotations
 
-from datetime import UTC, date
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,8 +58,10 @@ class RegimeShiftDetector:
     name = "regime_shift"
     signal_type = SignalType.REGIME_SHIFT.value
 
-    async def detect(self, session: AsyncSession) -> list[DetectorHit]:
-        latest, previous = await self._load_two_latest(session)
+    async def detect(
+        self, session: AsyncSession, *, as_of: date | None = None
+    ) -> list[DetectorHit]:
+        latest, previous = await self._load_two_latest(session, as_of=as_of)
         if latest is None or previous is None:
             return []  # not enough history to detect a transition
         if latest.regime is None or previous.regime is None:
@@ -78,14 +80,24 @@ class RegimeShiftDetector:
         return [self._build_hit(latest, previous, latest_date)]
 
     async def _load_two_latest(
-        self, session: AsyncSession
+        self, session: AsyncSession, *, as_of: date | None = None
     ) -> tuple[RegimeSnapshot | None, RegimeSnapshot | None]:
         """`(latest, previous)` or `(latest_or_None, None)` if <2 rows exist.
 
         The detector only emits hits when both are present, so the asymmetric
         return saves the caller from indexing into a possibly-empty list.
+
+        `as_of` (PR I.5) clamps to snapshots captured on or before end-of-day
+        UTC of that calendar date. RegimeSnapshot.captured_at is a tz-aware
+        datetime; we compare against the strict UTC-midnight of as_of+1 so the
+        boundary is "any snapshot whose calendar date <= as_of".
         """
         stmt = select(RegimeSnapshot).order_by(desc(RegimeSnapshot.captured_at)).limit(2)
+        if as_of is not None:
+            stmt = stmt.where(
+                RegimeSnapshot.captured_at
+                < datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=UTC)
+            )
         rows = (await session.execute(stmt)).scalars().all()
         latest = rows[0] if len(rows) >= 1 else None
         previous = rows[1] if len(rows) >= 2 else None

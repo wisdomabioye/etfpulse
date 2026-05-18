@@ -41,15 +41,17 @@ class FlowAnomalyDetector:
         self.lookback_days = lookback_days
         self.min_streak_length = min_streak_length
 
-    async def detect(self, session: AsyncSession) -> list[DetectorHit]:
+    async def detect(
+        self, session: AsyncSession, *, as_of: date | None = None
+    ) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
         for asset in SUPPORTED_ASSETS:
-            stmt = (
-                select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd)
-                .where(ETFFlow.asset == asset)
-                .order_by(ETFFlow.captured_at.desc())
-                .limit(self.lookback_days)
+            stmt = select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd).where(
+                ETFFlow.asset == asset
             )
+            if as_of is not None:
+                stmt = stmt.where(ETFFlow.captured_at <= as_of)
+            stmt = stmt.order_by(ETFFlow.captured_at.desc()).limit(self.lookback_days)
             result = await session.execute(stmt)
             # `desc().limit()` gives newest-first; reverse for chronological scan.
             rows = [(row.captured_at, row.total_net_flow_usd) for row in reversed(result.all())]

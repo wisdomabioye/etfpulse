@@ -18,6 +18,7 @@ data/
 .coverage
 .coverage.*
 htmlcov/
+.backtest_cache/
 
 # Node
 node_modules/

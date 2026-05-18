@@ -85,15 +85,17 @@ class AccelerationDetector:
         self.change_threshold = change_threshold
         self.min_slope_old_usd = min_slope_old_usd
 
-    async def detect(self, session: AsyncSession) -> list[DetectorHit]:
+    async def detect(
+        self, session: AsyncSession, *, as_of: date | None = None
+    ) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
         for asset in SUPPORTED_ASSETS:
-            stmt = (
-                select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd)
-                .where(ETFFlow.asset == asset)
-                .order_by(ETFFlow.captured_at.desc())
-                .limit(self.window * 3)
+            stmt = select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd).where(
+                ETFFlow.asset == asset
             )
+            if as_of is not None:
+                stmt = stmt.where(ETFFlow.captured_at <= as_of)
+            stmt = stmt.order_by(ETFFlow.captured_at.desc()).limit(self.window * 3)
             result = await session.execute(stmt)
             rows = [(row.captured_at, row.total_net_flow_usd) for row in reversed(result.all())]
             hit = self._detect_acceleration(asset, rows)

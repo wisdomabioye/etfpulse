@@ -19,6 +19,7 @@ log + continue). The Protocol intentionally allows exceptions.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,12 +35,21 @@ class Detector(Protocol):
               Must be unique across `ALL_DETECTORS`.
         signal_type: One of `models.signal.SignalType` values. Determines
                      which `Signal.signal_type` value the resulting rows get.
+
+    The `as_of` parameter (PR I.5, rule D25) is the backtest seam. When set,
+    detectors MUST ignore any source row dated strictly after `as_of` (UTC
+    calendar day for date-typed columns, end-of-day UTC for datetime columns).
+    Production callers (`signal_builder.run_daily_cycle`) pass `None`, which
+    preserves pre-I.5 behaviour. Look-ahead defense is the detector's
+    responsibility — the backtest orchestrator does NOT pre-filter the session.
     """
 
     name: str
     signal_type: str
 
-    async def detect(self, session: AsyncSession) -> list[DetectorHit]: ...
+    async def detect(
+        self, session: AsyncSession, *, as_of: date | None = None
+    ) -> list[DetectorHit]: ...
 
 
 ALL_DETECTORS: list[Detector] = []

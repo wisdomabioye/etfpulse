@@ -72,16 +72,20 @@ class DivergenceDetector:
         self.min_price_change_pct = min_price_change_pct
         self.min_flow_sum_usd = min_flow_sum_usd
 
-    async def detect(self, session: AsyncSession) -> list[DetectorHit]:
+    async def detect(
+        self, session: AsyncSession, *, as_of: date | None = None
+    ) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
         for asset in _TRACKED_ASSETS:
-            hit = await self._detect_for_asset(session, asset)
+            hit = await self._detect_for_asset(session, asset, as_of=as_of)
             if hit is not None:
                 hits.append(hit)
         return hits
 
-    async def _detect_for_asset(self, session: AsyncSession, asset: Asset) -> DetectorHit | None:
-        flow_rows = await self._load_flow_rows(session, asset)
+    async def _detect_for_asset(
+        self, session: AsyncSession, asset: Asset, *, as_of: date | None = None
+    ) -> DetectorHit | None:
+        flow_rows = await self._load_flow_rows(session, asset, as_of=as_of)
         if len(flow_rows) < self.lookback_days:
             return None
 
@@ -150,15 +154,20 @@ class DivergenceDetector:
         )
 
     async def _load_flow_rows(
-        self, session: AsyncSession, asset: Asset
+        self, session: AsyncSession, asset: Asset, *, as_of: date | None = None
     ) -> list[tuple[date, Decimal]]:
-        """Newest `lookback_days` rows ordered ASCENDING by date."""
-        stmt = (
-            select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd)
-            .where(ETFFlow.asset == asset)
-            .order_by(ETFFlow.captured_at.desc())
-            .limit(self.lookback_days)
-        )
+        """Newest `lookback_days` rows ordered ASCENDING by date.
+
+        `as_of` (PR I.5) clamps to rows on or before that calendar date so the
+        kline window derived from these flows (`_load_price_bars`) is also
+        as_of-safe — `_closest_close_on_or_before` walks backward only, so a
+        +1-day pad in the kline fetch never surfaces a future close into
+        `trigger_data`.
+        """
+        stmt = select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd).where(ETFFlow.asset == asset)
+        if as_of is not None:
+            stmt = stmt.where(ETFFlow.captured_at <= as_of)
+        stmt = stmt.order_by(ETFFlow.captured_at.desc()).limit(self.lookback_days)
         result = await session.execute(stmt)
         return [(row.captured_at, row.total_net_flow_usd) for row in reversed(result.all())]
 
