@@ -1,0 +1,233 @@
+{
+  "cases": [
+    {
+      "name": "spot_limit_buy",
+      "description": "Spot LIMIT BUY GTC — price + quantity, no funds.",
+      "venue": "spot",
+      "domain_name": "spot",
+      "chain_id": 286623,
+      "action_type": "newOrder",
+      "nonce": 1700000000000,
+      "request": {
+        "accountID": 1001,
+        "orders": [
+          {
+            "symbolID": 1,
+            "clOrdID": "etfpulse-spot-1",
+            "side": 1,
+            "type": 1,
+            "timeInForce": 1,
+            "price": "65000",
+            "quantity": "0.01"
+          }
+        ]
+      },
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":1001,\"orders\":[{\"symbolID\":1,\"clOrdID\":\"etfpulse-spot-1\",\"side\":1,\"type\":1,\"timeInForce\":1,\"price\":\"65000\",\"quantity\":\"0.01\"}]}}",
+      "payload_hash": "0x6131b9967b1ae7c6418b19d6a8f8e0518adde662b54b15515d645d2748d36032",
+      "eip712_domain": {
+        "chainId": "0x45f9f",
+        "name": "spot",
+        "verifyingContract": "0x0000000000000000000000000000000000000000",
+        "version": "1"
+      },
+      "eip712_message": {
+        "nonce": "1700000000000",
+        "payloadHash": "0x6131b9967b1ae7c6418b19d6a8f8e0518adde662b54b15515d645d2748d36032"
+      },
+      "burner_address": "0x79F188874797bD806103651624322760868886e8",
+      "signature_raw": "0x1b7263f13174baa71a7c1849db65d62d6654251caff247a311d98d07adeae6057e914bae5966cff9477f392daaaba204f47d18e6a97fa9e5ba6ca24115b6eda01c",
+      "signature_typed": "0x011b7263f13174baa71a7c1849db65d62d6654251caff247a311d98d07adeae6057e914bae5966cff9477f392daaaba204f47d18e6a97fa9e5ba6ca24115b6eda01c"
+    },
+    {
+      "name": "spot_market_sell",
+      "description": "Spot MARKET SELL IOC — quantity only, no price, no funds.",
+      "venue": "spot",
+      "domain_name": "spot",
+      "chain_id": 286623,
+      "action_type": "newOrder",
+      "nonce": 1700000000001,
+      "request": {
+        "accountID": 1001,
+        "orders": [
+          {
+            "symbolID": 1,
+            "clOrdID": "etfpulse-spot-2",
+            "side": 2,
+            "type": 2,
+            "timeInForce": 3,
+            "quantity": "0.005"
+          }
+        ]
+      },
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":1001,\"orders\":[{\"symbolID\":1,\"clOrdID\":\"etfpulse-spot-2\",\"side\":2,\"type\":2,\"timeInForce\":3,\"quantity\":\"0.005\"}]}}",
+      "payload_hash": "0xd5ebfe3f0479f64eed712054ef51599c7d4218308e9e679918a1f101868695eb",
+      "eip712_domain": {
+        "chainId": "0x45f9f",
+        "name": "spot",
+        "verifyingContract": "0x0000000000000000000000000000000000000000",
+        "version": "1"
+      },
+      "eip712_message": {
+        "nonce": "1700000000001",
+        "payloadHash": "0xd5ebfe3f0479f64eed712054ef51599c7d4218308e9e679918a1f101868695eb"
+      },
+      "burner_address": "0x79F188874797bD806103651624322760868886e8",
+      "signature_raw": "0xaaf28c795d3178a4a0b0ec0b032af3bdf840dc657def1147fe70774322ce65770db9bbc8b9afe8c9bfa2ef2ba0c7c55da91fa6501d1a745575302baed7c5cce61b",
+      "signature_typed": "0x01aaf28c795d3178a4a0b0ec0b032af3bdf840dc657def1147fe70774322ce65770db9bbc8b9afe8c9bfa2ef2ba0c7c55da91fa6501d1a745575302baed7c5cce61b"
+    },
+    {
+      "name": "spot_market_buy_funds",
+      "description": "Spot MARKET BUY IOC — funds only (covers market-buy path that uses funds, not quantity).",
+      "venue": "spot",
+      "domain_name": "spot",
+      "chain_id": 286623,
+      "action_type": "newOrder",
+      "nonce": 1700000000002,
+      "request": {
+        "accountID": 1001,
+        "orders": [
+          {
+            "symbolID": 1,
+            "clOrdID": "etfpulse-spot-3",
+            "side": 1,
+            "type": 2,
+            "timeInForce": 3,
+            "funds": "100"
+          }
+        ]
+      },
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":1001,\"orders\":[{\"symbolID\":1,\"clOrdID\":\"etfpulse-spot-3\",\"side\":1,\"type\":2,\"timeInForce\":3,\"funds\":\"100\"}]}}",
+      "payload_hash": "0xa31aac1b8c38cf553c35c949ef3f6284d41b954a424c15fbb5cac7e4b8282ac8",
+      "eip712_domain": {
+        "chainId": "0x45f9f",
+        "name": "spot",
+        "verifyingContract": "0x0000000000000000000000000000000000000000",
+        "version": "1"
+      },
+      "eip712_message": {
+        "nonce": "1700000000002",
+        "payloadHash": "0xa31aac1b8c38cf553c35c949ef3f6284d41b954a424c15fbb5cac7e4b8282ac8"
+      },
+      "burner_address": "0x79F188874797bD806103651624322760868886e8",
+      "signature_raw": "0xb8a4b757bdd4480b4ab3952db4a0f6457a4b3a96168770e8efacc2b1c81c38700ff7328a33f14a67d67efc44e74dfcffd80603481264ca41fefc5a4dc0ad3d2c1c",
+      "signature_typed": "0x01b8a4b757bdd4480b4ab3952db4a0f6457a4b3a96168770e8efacc2b1c81c38700ff7328a33f14a67d67efc44e74dfcffd80603481264ca41fefc5a4dc0ad3d2c1c"
+    },
+    {
+      "name": "spot_cancel_by_clordid",
+      "description": "Spot batch cancel by origClOrdID (orderID omitted).",
+      "venue": "spot",
+      "domain_name": "spot",
+      "chain_id": 286623,
+      "action_type": "cancelOrder",
+      "nonce": 1700000000003,
+      "request": {
+        "accountID": 1001,
+        "cancels": [
+          {
+            "symbolID": 1,
+            "clOrdID": "etfpulse-cancel-1",
+            "origClOrdID": "etfpulse-spot-1"
+          }
+        ]
+      },
+      "payload_json": "{\"type\":\"cancelOrder\",\"params\":{\"accountID\":1001,\"cancels\":[{\"symbolID\":1,\"clOrdID\":\"etfpulse-cancel-1\",\"origClOrdID\":\"etfpulse-spot-1\"}]}}",
+      "payload_hash": "0x0a36d17aab1c8f421f22984be7db68a7bfe4fba234a772b573940d4c19329bcf",
+      "eip712_domain": {
+        "chainId": "0x45f9f",
+        "name": "spot",
+        "verifyingContract": "0x0000000000000000000000000000000000000000",
+        "version": "1"
+      },
+      "eip712_message": {
+        "nonce": "1700000000003",
+        "payloadHash": "0x0a36d17aab1c8f421f22984be7db68a7bfe4fba234a772b573940d4c19329bcf"
+      },
+      "burner_address": "0x79F188874797bD806103651624322760868886e8",
+      "signature_raw": "0x7fa7e839a3cd1fb6a13983f210c733841fcb83c8d01fda34a3d6bb4a2bf62bf57498e654ba8a900e4ce02ecee46c81c13a59e82d6afb87559b2444e8c93d004d1c",
+      "signature_typed": "0x017fa7e839a3cd1fb6a13983f210c733841fcb83c8d01fda34a3d6bb4a2bf62bf57498e654ba8a900e4ce02ecee46c81c13a59e82d6afb87559b2444e8c93d004d1c"
+    },
+    {
+      "name": "perps_limit_buy",
+      "description": "Perps LIMIT BUY GTC NORMAL — price + quantity, reduceOnly=false, positionSide=BOTH.",
+      "venue": "perps",
+      "domain_name": "futures",
+      "chain_id": 138565,
+      "action_type": "newOrder",
+      "nonce": 1700000000004,
+      "request": {
+        "accountID": 1001,
+        "symbolID": 1,
+        "orders": [
+          {
+            "clOrdID": "etfpulse-perps-1",
+            "modifier": 1,
+            "side": 1,
+            "type": 1,
+            "timeInForce": 1,
+            "price": "65000",
+            "quantity": "0.01",
+            "reduceOnly": false,
+            "positionSide": 1
+          }
+        ]
+      },
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":1001,\"symbolID\":1,\"orders\":[{\"clOrdID\":\"etfpulse-perps-1\",\"modifier\":1,\"side\":1,\"type\":1,\"timeInForce\":1,\"price\":\"65000\",\"quantity\":\"0.01\",\"reduceOnly\":false,\"positionSide\":1}]}}",
+      "payload_hash": "0xccefefc0e3de2043d868ca911c7634e7f559aa1b14b696e901aff96384c67c97",
+      "eip712_domain": {
+        "chainId": "0x21d45",
+        "name": "futures",
+        "verifyingContract": "0x0000000000000000000000000000000000000000",
+        "version": "1"
+      },
+      "eip712_message": {
+        "nonce": "1700000000004",
+        "payloadHash": "0xccefefc0e3de2043d868ca911c7634e7f559aa1b14b696e901aff96384c67c97"
+      },
+      "burner_address": "0x79F188874797bD806103651624322760868886e8",
+      "signature_raw": "0xfb03a8170e76bb9dc4d9a00852d33c8b8426c542846ee091c8368b132e7b74c74f221f85af7bdee2ea99f9fe7294816dc95f01b873ba3dd530046498b8bd23321b",
+      "signature_typed": "0x01fb03a8170e76bb9dc4d9a00852d33c8b8426c542846ee091c8368b132e7b74c74f221f85af7bdee2ea99f9fe7294816dc95f01b873ba3dd530046498b8bd23321b"
+    },
+    {
+      "name": "perps_market_sell_reduce_only",
+      "description": "Perps MARKET SELL IOC NORMAL reduceOnly=true — closes a long.",
+      "venue": "perps",
+      "domain_name": "futures",
+      "chain_id": 138565,
+      "action_type": "newOrder",
+      "nonce": 1700000000005,
+      "request": {
+        "accountID": 1001,
+        "symbolID": 1,
+        "orders": [
+          {
+            "clOrdID": "etfpulse-perps-2",
+            "modifier": 1,
+            "side": 2,
+            "type": 2,
+            "timeInForce": 3,
+            "quantity": "0.01",
+            "reduceOnly": true,
+            "positionSide": 1
+          }
+        ]
+      },
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":1001,\"symbolID\":1,\"orders\":[{\"clOrdID\":\"etfpulse-perps-2\",\"modifier\":1,\"side\":2,\"type\":2,\"timeInForce\":3,\"quantity\":\"0.01\",\"reduceOnly\":true,\"positionSide\":1}]}}",
+      "payload_hash": "0x484e252756edafd20cc651702fd8f76d6c3d313ebd4cf7f7337eb098665535a3",
+      "eip712_domain": {
+        "chainId": "0x21d45",
+        "name": "futures",
+        "verifyingContract": "0x0000000000000000000000000000000000000000",
+        "version": "1"
+      },
+      "eip712_message": {
+        "nonce": "1700000000005",
+        "payloadHash": "0x484e252756edafd20cc651702fd8f76d6c3d313ebd4cf7f7337eb098665535a3"
+      },
+      "burner_address": "0x79F188874797bD806103651624322760868886e8",
+      "signature_raw": "0x753f8146f44852248cc782697895280bd222886edc6039672bde0c1a5e00fbc12ae13988fee744c639daa5f6f620f858b8e249b1bea8fde7425c4bf8282ff3a81b",
+      "signature_typed": "0x01753f8146f44852248cc782697895280bd222886edc6039672bde0c1a5e00fbc12ae13988fee744c639daa5f6f620f858b8e249b1bea8fde7425c4bf8282ff3a81b"
+    }
+  ],
+  "generated_by": "scripts/sodex_verify/eip712_capture/main.go",
+  "schema_version": "v1"
+}

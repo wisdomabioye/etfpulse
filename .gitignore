@@ -41,3 +41,7 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# SoDEX verify (operator-only — see backend/scripts/sodex_verify/README.md)
+backend/scripts/sodex_verify/.address
+backend/scripts/sodex_verify/eip712_capture/go.sum
