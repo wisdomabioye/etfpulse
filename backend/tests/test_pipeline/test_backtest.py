@@ -229,9 +229,15 @@ class TestResolverChain:
             ai_resolver=resolver,
         )
         # The cache should now contain the resolved analysis under the
-        # production AI_PROMPT_VERSION subdir.
-        cached_file = tmp_path / AI_PROMPT_VERSION / f"{fp}.json"
-        assert cached_file.is_file()
+        # production AI_PROMPT_VERSION subdir. PR I.4 — cache key includes a
+        # trigger_hash component; we don't pin the specific hash value (it
+        # depends on the detector's exact trigger_data output) but we do
+        # assert that EXACTLY ONE file lands in the version subdir with the
+        # right fingerprint prefix.
+        version_dir = tmp_path / AI_PROMPT_VERSION
+        assert version_dir.is_dir()
+        matches = list(version_dir.glob(f"{fp}_*.json"))
+        assert len(matches) == 1
 
     async def test_missing_signal_results_in_no_direction_skip(self, db_session):
         # Seed a hit but NO matching prod signal — resolver returns None.
@@ -506,6 +512,67 @@ class TestResolverRobustness:
         assert wait_rows[0].skip_reason == "no_direction"
         assert wait_rows[0].confidence is not None
         assert report.counters["skipped_no_direction"] >= 1
+
+
+class TestRegimeThreadingFromBacktest:
+    """PR I.4 — `run_backtest` fetches the latest `RegimeSnapshot ≤ as_of` per
+    date and threads it through each detector's `current_regime` kwarg. With
+    default multipliers (all 1.0), threading has zero behavioural effect.
+    Here we pin the THREADING contract (not the multiplier math, which lives
+    in `test_regime_thresholds.py`)."""
+
+    async def test_no_snapshot_passes_none_regime(self, db_session, monkeypatch):
+        """With no `RegimeSnapshot` rows, `_latest_regime_on_or_before`
+        returns None and detectors must receive `current_regime=None`."""
+        captured: list[object] = []
+
+        class _SpyDetector:
+            name = "spy_no_snapshot"
+            signal_type = "flow_anomaly"
+
+            async def detect(self, session, **kwargs):
+                captured.append(kwargs.get("current_regime"))
+                return []
+
+        from etfpulse.pipeline import backtest as _backtest
+
+        # Inject the spy via monkeypatch so it auto-reverts after teardown
+        # — cleaner than manual try/finally restore (pytest handles weird
+        # exit paths like fixture-cleanup-time exceptions correctly).
+        monkeypatch.setattr(_backtest, "_default_detectors", lambda: [_SpyDetector()])
+        await run_backtest(db_session, start=date(2026, 4, 6), end=date(2026, 4, 6))
+
+        assert captured == [None]
+
+    async def test_latest_snapshot_threaded_to_detectors(self, db_session, monkeypatch):
+        """Seed a `RegimeSnapshot` on the day-of, verify the orchestrator
+        passes the right enum value to detectors."""
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=datetime(2026, 4, 5, 12, 0, tzinfo=UTC),
+                regime=MarketRegime.MARKDOWN.value,
+                signal_posture=SignalPosture.NORMAL.value,
+                confidence=7,
+            )
+        )
+        await db_session.flush()
+
+        captured: list[object] = []
+
+        class _SpyDetector:
+            name = "spy_with_snapshot"
+            signal_type = "flow_anomaly"
+
+            async def detect(self, session, **kwargs):
+                captured.append(kwargs.get("current_regime"))
+                return []
+
+        from etfpulse.pipeline import backtest as _backtest
+
+        monkeypatch.setattr(_backtest, "_default_detectors", lambda: [_SpyDetector()])
+        await run_backtest(db_session, start=date(2026, 4, 6), end=date(2026, 4, 6))
+
+        assert captured == [MarketRegime.MARKDOWN]
 
 
 class TestHorizonConstantsParity:

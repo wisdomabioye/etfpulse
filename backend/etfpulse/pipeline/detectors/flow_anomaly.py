@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.constants import SUPPORTED_ASSETS
-from etfpulse.models import ETFFlow, SignalType
+from etfpulse.models import ETFFlow, MarketRegime, SignalType
 from etfpulse.pipeline.detectors.base import DetectorHit, compute_fingerprint
 
 
@@ -42,7 +42,11 @@ class FlowAnomalyDetector:
         self.min_streak_length = min_streak_length
 
     async def detect(
-        self, session: AsyncSession, *, as_of: date | None = None
+        self,
+        session: AsyncSession,
+        *,
+        as_of: date | None = None,
+        current_regime: MarketRegime | None = None,  # noqa: ARG002 — accepted for Protocol parity; flow_anomaly has no regime-conditional knobs (PR I.4)
     ) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
         for asset in SUPPORTED_ASSETS:

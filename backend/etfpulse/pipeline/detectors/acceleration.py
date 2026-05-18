@@ -62,7 +62,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.constants import SUPPORTED_ASSETS
-from etfpulse.models import ETFFlow, SignalType
+from etfpulse.models import ETFFlow, MarketRegime, SignalType
 from etfpulse.pipeline.detectors.base import DetectorHit, compute_fingerprint
 
 
@@ -86,7 +86,11 @@ class AccelerationDetector:
         self.min_slope_old_usd = min_slope_old_usd
 
     async def detect(
-        self, session: AsyncSession, *, as_of: date | None = None
+        self,
+        session: AsyncSession,
+        *,
+        as_of: date | None = None,
+        current_regime: MarketRegime | None = None,  # noqa: ARG002 — Protocol parity; no regime-conditional knobs yet (PR I.4)
     ) -> list[DetectorHit]:
         hits: list[DetectorHit] = []
         for asset in SUPPORTED_ASSETS:

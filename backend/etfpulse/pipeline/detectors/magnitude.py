@@ -26,8 +26,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.constants import SUPPORTED_ASSETS
-from etfpulse.models import ETFFlow, SignalType
+from etfpulse.models import ETFFlow, MarketRegime, SignalType
 from etfpulse.pipeline.detectors.base import DetectorHit, compute_fingerprint
+from etfpulse.pipeline.regime_thresholds import apply_magnitude_pctile_multiplier
 
 
 def _percentile(values: list[Decimal], p: float) -> Decimal:
@@ -52,8 +53,22 @@ class MagnitudeDetector:
         self.min_history_days = min_history_days
 
     async def detect(
-        self, session: AsyncSession, *, as_of: date | None = None
+        self,
+        session: AsyncSession,
+        *,
+        as_of: date | None = None,
+        current_regime: MarketRegime | None = None,
     ) -> list[DetectorHit]:
+        # PR I.4 — compute the effective percentile ONCE per detect() call.
+        # The regime is constant across all (asset) iterations in this call,
+        # so applying the multiplier here keeps `_detect_magnitude` a pure
+        # function of (asset, rows, effective_percentile). At default
+        # multipliers (all 1.0), `apply_magnitude_pctile_multiplier` returns
+        # `(base, False)` — same code path, no behavioural change.
+        effective_pct, _was_clamped = apply_magnitude_pctile_multiplier(
+            self.percentile_threshold, current_regime
+        )
+
         hits: list[DetectorHit] = []
         for asset in SUPPORTED_ASSETS:
             stmt = select(ETFFlow.captured_at, ETFFlow.total_net_flow_usd).where(
@@ -64,7 +79,7 @@ class MagnitudeDetector:
             stmt = stmt.order_by(ETFFlow.captured_at.desc()).limit(self.lookback_days)
             result = await session.execute(stmt)
             rows = [(row.captured_at, row.total_net_flow_usd) for row in reversed(result.all())]
-            hit = self._detect_magnitude(asset, rows)
+            hit = self._detect_magnitude(asset, rows, effective_percentile=effective_pct)
             if hit is not None:
                 hits.append(hit)
         return hits
@@ -73,8 +88,17 @@ class MagnitudeDetector:
         self,
         asset: str,
         rows: list[tuple[date, Decimal]],
+        *,
+        effective_percentile: float | None = None,
     ) -> DetectorHit | None:
-        """Pure function — accepts (date, flow) tuples ascending by date."""
+        """Pure function — accepts (date, flow) tuples ascending by date.
+
+        `effective_percentile` is the PR I.4 regime-conditional threshold.
+        When None (legacy callers / tests calling the pure function directly),
+        falls back to `self.percentile_threshold` so the function stays
+        backward-compatible. `detect()` always passes the resolved value so
+        regime-conditioning is the production path.
+        """
         if len(rows) < self.min_history_days:
             return None
 
@@ -82,8 +106,11 @@ class MagnitudeDetector:
         if latest_flow == 0:
             return None
 
+        applied_pct = (
+            effective_percentile if effective_percentile is not None else self.percentile_threshold
+        )
         abs_flows = [abs(f) for _d, f in rows]
-        threshold = _percentile(abs_flows, self.percentile_threshold)
+        threshold = _percentile(abs_flows, applied_pct)
 
         if abs(latest_flow) <= threshold:
             return None
@@ -99,7 +126,12 @@ class MagnitudeDetector:
                 "latest_flow_usd": str(latest_flow),
                 "abs_flow_usd": str(abs(latest_flow)),
                 "threshold_usd": str(threshold),
-                "percentile": self.percentile_threshold,
+                # `percentile` records the EFFECTIVE percentile (post-regime
+                # multiplier) so the AI prompt + UI see what was actually
+                # applied. With default mults (=1.0), `applied_pct ==
+                # self.percentile_threshold` so legacy behaviour is bit-for-
+                # bit preserved.
+                "percentile": applied_pct,
                 "lookback_days": self.lookback_days,
                 "sample_size": len(rows),
                 "direction": direction,

@@ -49,7 +49,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.constants import MARKET_ASSET
-from etfpulse.models import Signal, SignalDirection
+from etfpulse.models import MarketRegime, RegimeSnapshot, Signal, SignalDirection
 from etfpulse.pipeline import ai_cache
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION, AISignalAnalysis
 from etfpulse.pipeline.composite_scoring import (
@@ -232,16 +232,46 @@ def _detector_kwargs(d: object) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _try_cache_put(fingerprint: str, analysis: AISignalAnalysis) -> None:
+async def _latest_regime_on_or_before(session: AsyncSession, as_of: date) -> MarketRegime | None:
+    """PR I.4 — single source of truth for "what was the regime AT the
+    end of this calendar day?" Used by `run_backtest` once per date so all
+    detectors at that date see the same regime (D26).
+
+    Returns `None` when no snapshot exists yet OR the latest snapshot has
+    NULL regime (legacy pre-classifier rows). The orchestrator passes
+    `current_regime=None` in that case, which each detector's threshold
+    helper treats as "use base" — same as `UNCERTAIN`.
+    """
+    boundary = datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=UTC)
+    stmt = (
+        select(RegimeSnapshot.regime)
+        .where(RegimeSnapshot.captured_at < boundary)
+        .order_by(RegimeSnapshot.captured_at.desc())
+        .limit(1)
+    )
+    raw = (await session.execute(stmt)).scalar_one_or_none()
+    if raw is None:
+        return None
+    try:
+        return MarketRegime(raw)
+    except ValueError:
+        # Unknown enum value — log and pass through as None so detectors
+        # don't crash on a corrupt snapshot.
+        log.warning("backtest_regime_unknown_value", value=str(raw), as_of=as_of.isoformat())
+        return None
+
+
+def _try_cache_put(fingerprint: str, trigger_hash: str, analysis: AISignalAnalysis) -> None:
     """Cache write that is non-fatal on disk error. Cache is an optimization,
     not correctness — a read-only / full filesystem must not crash a backtest
     mid-sweep after a hit was successfully resolved from the DB."""
     try:
-        ai_cache.put(fingerprint=fingerprint, analysis=analysis)
+        ai_cache.put(fingerprint=fingerprint, trigger_hash=trigger_hash, analysis=analysis)
     except OSError as e:
         log.warning(
             "backtest_cache_write_failed",
             fingerprint=fingerprint,
+            trigger_hash=trigger_hash,
             error=str(e),
         )
 
@@ -255,14 +285,29 @@ def make_resolver(
     """Default 3-tier resolver: cache → existing prod Signal → optional live AI.
 
     * **Cache hit** is the cheap fast path — keyed by `(fingerprint,
-      AI_PROMPT_VERSION)`, so a sweep over the same window after the first
-      run pays zero AI cost.
+      AI_PROMPT_VERSION, trigger_hash)` post-PR-I.4 (was `(fingerprint,
+      AI_PROMPT_VERSION)` pre-I.4 — trigger_hash was added because regime
+      multipliers can shift `trigger_data["percentile"]` for the same
+      fingerprint, and the cached AI direction should be specific to the
+      exact trigger_data the AI saw). Same `(fingerprint, trigger_hash)`
+      across a sweep pays zero AI cost.
     * **Existing prod Signal lookup** is a fallback when cache is cold but
       this fingerprint already fired in production. We read
       `Signal.ai_analysis` and re-validate through `AISignalAnalysis.model_validate`
       so a stored-JSON shape mismatch fails fast rather than producing a
       half-typed analysis. On hit we ALSO write into cache so the next
       sweep skips the DB query.
+
+      **Tier-2 approximation caveat (PR I.4):** the prod Signal's analysis
+      was derived from prod's `trigger_data` at the time of fire — under
+      different regime multipliers, the backtest's hit may have
+      slightly-different `trigger_data["percentile"]` than what the AI
+      actually saw. We accept this approximation because the AI's
+      `suggested_action` is overwhelmingly driven by `latest_flow` sign +
+      magnitude, not by the percentile-threshold context field, so the
+      direction-level answer is stable across small percentile drifts.
+      Operators chasing strict per-config AI directions should use tier 3
+      (live AI with cache-by-trigger_hash) instead.
     * **Live AI** is opt-in via `allow_live_ai`. Disabled by default so a
       misconfigured run doesn't accidentally burn the daily OpenRouter cap.
       Set `live_ai_caller` to provide the actual OpenRouter shim; backtest
@@ -274,8 +319,15 @@ def make_resolver(
     """
 
     async def _resolve(hit: DetectorHit) -> AISignalAnalysis | None:
+        # PR I.4 — cache key includes a hash of `trigger_data` so any input
+        # drift (regime-driven percentile shifts, future per-detector knobs)
+        # invalidates the cache automatically. Pre-I.4 entries keyed by
+        # fingerprint alone are now unreachable — equivalent to clearing the
+        # cache when upgrading past I.4.
+        trigger_hash = ai_cache.hash_trigger_data(hit.trigger_data)
+
         # Tier 1: cache.
-        cached = ai_cache.get(fingerprint=hit.fingerprint)
+        cached = ai_cache.get(fingerprint=hit.fingerprint, trigger_hash=trigger_hash)
         if cached is not None:
             return cached
 
@@ -300,14 +352,14 @@ def make_resolver(
                     error=str(e),
                 )
             else:
-                _try_cache_put(hit.fingerprint, analysis)
+                _try_cache_put(hit.fingerprint, trigger_hash, analysis)
                 return analysis
 
         # Tier 3: live AI (opt-in).
         if allow_live_ai and live_ai_caller is not None:
             live_result = await live_ai_caller(hit)
             if live_result is not None:
-                _try_cache_put(hit.fingerprint, live_result)
+                _try_cache_put(hit.fingerprint, trigger_hash, live_result)
                 return live_result
 
         return None
@@ -390,9 +442,18 @@ async def run_backtest(
     cur = start
     while cur <= end:
         counters["dates_walked"] += 1
+        # PR I.4 — fetch the regime AS-OF this date so regime-conditional
+        # thresholds (MagnitudeDetector today) score the way production
+        # would have at the same instant. One query per date, not per
+        # detector (D26). None when no snapshot exists at-or-before this
+        # date, which the detectors treat as "use base thresholds" (same
+        # as UNCERTAIN).
+        regime_as_of = await _latest_regime_on_or_before(session, cur)
         for det in detectors:
             try:
-                hits = await det.detect(session, as_of=cur)  # type: ignore[attr-defined]
+                hits = await det.detect(  # type: ignore[attr-defined]
+                    session, as_of=cur, current_regime=regime_as_of
+                )
             except Exception as e:  # noqa: BLE001 — D13: one detector cannot kill the cycle.
                 counters["detector_errors"] += 1
                 log.warning(

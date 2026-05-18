@@ -50,7 +50,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.constants import MARKET_ASSET
-from etfpulse.models import RegimeSnapshot, SignalType
+from etfpulse.models import MarketRegime, RegimeSnapshot, SignalType
 from etfpulse.pipeline.detectors.base import DetectorHit, compute_fingerprint
 
 
@@ -59,7 +59,11 @@ class RegimeShiftDetector:
     signal_type = SignalType.REGIME_SHIFT.value
 
     async def detect(
-        self, session: AsyncSession, *, as_of: date | None = None
+        self,
+        session: AsyncSession,
+        *,
+        as_of: date | None = None,
+        current_regime: MarketRegime | None = None,  # noqa: ARG002 — Protocol parity; regime_shift IS the regime signal, self-confirmation excluded (PR I.4)
     ) -> list[DetectorHit]:
         latest, previous = await self._load_two_latest(session, as_of=as_of)
         if latest is None or previous is None:

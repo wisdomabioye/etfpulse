@@ -65,7 +65,10 @@ class _StubDetector:
         self.signal_type = hits[0].signal_type if hits else "flow_anomaly"
         self._hits = hits
 
-    async def detect(self, session):  # type: ignore[no-untyped-def]
+    async def detect(self, session, **_kwargs):  # type: ignore[no-untyped-def]
+        # **_kwargs absorbs current Protocol kwargs (as_of, current_regime)
+        # so stub signature parity doesn't need updating every time a new
+        # optional kwarg is added.
         return list(self._hits)
 
 
@@ -73,7 +76,7 @@ class _BrokenDetector:
     name = "broken"
     signal_type = "flow_anomaly"
 
-    async def detect(self, session):  # type: ignore[no-untyped-def]
+    async def detect(self, session, **_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("boom")
 
 
@@ -832,7 +835,7 @@ class TestRunDailyCycle:
             name = "counter"
             signal_type = "flow_anomaly"
 
-            async def detect(self, session):
+            async def detect(self, session, **_kwargs):
                 call_count["n"] += 1
                 return []
 
@@ -866,7 +869,7 @@ class TestRunDailyCycle:
             name = "counter2"
             signal_type = "flow_anomaly"
 
-            async def detect(self, session):
+            async def detect(self, session, **_kwargs):
                 ran["n"] += 1
                 return []
 
@@ -889,7 +892,7 @@ class TestRunDailyCycle:
             name = "counter3"
             signal_type = "flow_anomaly"
 
-            async def detect(self, session):
+            async def detect(self, session, **_kwargs):
                 ran["n"] += 1
                 return []
 

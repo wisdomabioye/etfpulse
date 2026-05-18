@@ -134,12 +134,15 @@ class TestRegistry:
 
     def test_protocol_is_structurally_satisfiable(self):
         # Smoke-test that a minimal detector matches the Protocol shape —
-        # this is what `signal_builder` will rely on.
+        # this is what `signal_builder` will rely on. **_kwargs absorbs the
+        # Protocol's optional kwargs (`as_of` from I.5, `current_regime`
+        # from I.4) so the stub stays honest about Protocol parity even
+        # as new optional kwargs are added.
         class _StubDetector:
             name = "stub"
             signal_type = "flow_anomaly"
 
-            async def detect(self, session):  # type: ignore[no-untyped-def]
+            async def detect(self, session, **_kwargs):  # type: ignore[no-untyped-def]
                 return []
 
         detector: Detector = _StubDetector()

@@ -24,6 +24,7 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.models import MarketRegime
 from etfpulse.pipeline.detectors.base import DetectorHit, compute_fingerprint
 
 
@@ -42,13 +43,26 @@ class Detector(Protocol):
     Production callers (`signal_builder.run_daily_cycle`) pass `None`, which
     preserves pre-I.5 behaviour. Look-ahead defense is the detector's
     responsibility — the backtest orchestrator does NOT pre-filter the session.
+
+    The `current_regime` parameter (PR I.4, rule D26) is the regime-
+    conditional threshold seam. When set, detectors MAY scale their
+    thresholds based on the current `MarketRegime` (today only
+    `MagnitudeDetector` does — see `pipeline/regime_thresholds.py`). When
+    `None`, detectors MUST use base thresholds. The orchestrator
+    (`signal_builder.run_daily_cycle` / backtest) owns the regime fetch and
+    threads it through — detectors MUST NOT query `RegimeSnapshot`
+    themselves (single source of truth, no redundant queries).
     """
 
     name: str
     signal_type: str
 
     async def detect(
-        self, session: AsyncSession, *, as_of: date | None = None
+        self,
+        session: AsyncSession,
+        *,
+        as_of: date | None = None,
+        current_regime: MarketRegime | None = None,
     ) -> list[DetectorHit]: ...
 
 

@@ -397,10 +397,18 @@ async def run_daily_cycle(
             news_cache[asset] = await gather_news_context(session, asset)
         return news_cache[asset]
 
+    # PR I.4 — thread the just-classified regime through each detector so
+    # regime-conditional thresholds (today: only `MagnitudeDetector`) can
+    # apply their multipliers. None when classification failed above; the
+    # multiplier helper treats None as "use base thresholds" (same as
+    # UNCERTAIN), so a regime-classification failure cleanly degrades
+    # detectors to pre-I.4 behaviour.
+    current_regime = classification.regime if classification is not None else None
+
     for detector in ALL_DETECTORS:
         summary["detectors_run"] += 1
         try:
-            hits = await detector.detect(session)
+            hits = await detector.detect(session, current_regime=current_regime)
         except Exception as exc:
             # D13: catch any exception, log, continue. We do NOT re-raise
             # because the cycle's job is to do as much work as possible.

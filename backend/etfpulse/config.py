@@ -394,6 +394,48 @@ class Settings(BaseSettings):
         le=Decimal("1"),
     )
 
+    # ---------------------------------------------------------------------
+    # Regime-conditional detector thresholds (PR I.4)
+    # ---------------------------------------------------------------------
+    # Multiplier applied to `magnitude_percentile_threshold` based on the
+    # current `MarketRegime`. Defaults are 1.0 → identical to pre-I.4
+    # behaviour. Range chosen to allow ±3× excursions without admitting
+    # a configuration that would silently neutralise the detector (e.g.
+    # mult=0 would always fire; mult=10 would never fire — both are
+    # operator footguns but explicitly bounded).
+    #
+    # UNCERTAIN regime has NO env var — it's the "we don't know" case
+    # and uses base thresholds always (multiplier == 1.0 implicit). When
+    # `current_regime is None` (no snapshot yet, or threading explicitly
+    # disabled), the detector also uses base — same as UNCERTAIN.
+    #
+    # The `apply_magnitude_pctile_multiplier` helper in
+    # `pipeline/regime_thresholds.py` reads these fields and clamps the
+    # effective threshold to (0, 1) since `_percentile` rejects out-of-range
+    # values. A mult that would produce an out-of-range effective threshold
+    # is clamped and logged so an operator catches the misconfiguration
+    # without the detector silently degrading.
+    regime_mult_magnitude_pctile_markup: Decimal = Field(
+        default=Decimal("1.0"),
+        ge=Decimal("0.1"),
+        le=Decimal("3.0"),
+    )
+    regime_mult_magnitude_pctile_markdown: Decimal = Field(
+        default=Decimal("1.0"),
+        ge=Decimal("0.1"),
+        le=Decimal("3.0"),
+    )
+    regime_mult_magnitude_pctile_accumulation: Decimal = Field(
+        default=Decimal("1.0"),
+        ge=Decimal("0.1"),
+        le=Decimal("3.0"),
+    )
+    regime_mult_magnitude_pctile_distribution: Decimal = Field(
+        default=Decimal("1.0"),
+        ge=Decimal("0.1"),
+        le=Decimal("3.0"),
+    )
+
     @model_validator(mode="after")
     def _validate_market_composite_weights_sum_to_one(self) -> "Settings":
         """Pin the BTC + ETH composite weights to sum to 1.0.
