@@ -77,6 +77,11 @@ class Position(Base):
             "status IN ('open','closed','cancelled')",
             name="ck_positions_status_enum",
         ),
+        # Mirror of Order.venue CHECK — see Venue enum docstring.
+        CheckConstraint(
+            "venue IN ('sodex_spot','sodex_perps')",
+            name="ck_positions_venue_enum",
+        ),
         Index("ix_positions_user", "user_id"),
         Index("ix_positions_status", "status"),
         Index("ix_positions_signal", "signal_id"),

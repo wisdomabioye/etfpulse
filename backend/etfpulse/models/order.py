@@ -20,11 +20,41 @@ from etfpulse.models.base import Base
 
 
 class OrderStatus(StrEnum):
+    """Lifecycle states for a SoDEX order, in chronological progression.
+
+    PENDING — row inserted, EIP-712 typed-data built, awaiting client signature
+              (wallet-side via wagmi/viem). Reaper auto-EXPIRES if nonce window
+              passes without a signature.
+    SUBMITTED — signature received, request POSTed to SoDEX gateway, awaiting
+                ack. If the gateway returns a synchronous error, transitions
+                straight to REJECTED.
+    ACKED — gateway returned a 2xx with `exchange_order_id`; order is live on
+            the SoDEX book. Awaiting fills via WebSocket / reconciliation.
+    PARTIALLY_FILLED, FILLED — fill states reported by the venue.
+    CANCELLED — user-initiated cancel succeeded (DELETE /trade/orders).
+    REJECTED — gateway refused (validation, insufficient balance, etc.).
+    EXPIRED — nonce window passed without ack, or order TTL hit via the
+              user-supplied `expires_at` deadline. Terminal.
+
+    Order matters: any state change MUST progress monotonically through this
+    enum. The reaper + reconciliation paths assume terminal states
+    (FILLED, CANCELLED, REJECTED, EXPIRED) are never re-opened.
+    """
+
     PENDING = "pending"
+    SUBMITTED = "submitted"
+    ACKED = "acked"
     PARTIALLY_FILLED = "partially_filled"
     FILLED = "filled"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+# Terminal states — used by reaper guards + reconciliation to short-circuit.
+TERMINAL_ORDER_STATUSES: frozenset[OrderStatus] = frozenset(
+    {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
+)
 
 
 class OrderSide(StrEnum):
@@ -44,9 +74,18 @@ class TimeInForce(StrEnum):
 
 
 class Venue(StrEnum):
-    """Execution venue. Shared with Position — orders and positions live on the same venue."""
+    """Execution venue. Shared with Position — orders and positions live on the same venue.
 
-    SODEX = "sodex"
+    SoDEX is split into two distinct gateways with different EIP-712 domain
+    names (`spot` / `futures`), different chainIds (286623 / 138565 testnet),
+    and different request schemas. Treating them as one venue obscured this
+    pre-Stage-09; the split was deferred from C.1 and lands here. The
+    pre-existing literal `"sodex"` is REMOVED — no production rows
+    referenced it (Stage 09 hasn't shipped).
+    """
+
+    SODEX_SPOT = "sodex_spot"
+    SODEX_PERPS = "sodex_perps"
 
 
 class Order(Base):
@@ -99,9 +138,17 @@ class Order(Base):
     )
 
     __table_args__ = (
+        # Keep this literal list in sync with `OrderStatus`. Test
+        # `test_order_status_enum.py` round-trips every value to catch drift.
         CheckConstraint(
-            "status IN ('pending','partially_filled','filled','cancelled','rejected')",
+            "status IN ('pending','submitted','acked','partially_filled',"
+            "'filled','cancelled','rejected','expired')",
             name="ck_orders_status_enum",
+        ),
+        # Venue is restricted to the two SoDEX gateways. Mirrors `Venue` enum.
+        CheckConstraint(
+            "venue IN ('sodex_spot','sodex_perps')",
+            name="ck_orders_venue_enum",
         ),
         Index("ix_orders_user", "user_id"),
         Index("ix_orders_status", "status"),

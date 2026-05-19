@@ -2,7 +2,15 @@ from etfpulse.models.base import Base
 from etfpulse.models.delivery import DeliveryStatus, SignalDelivery
 from etfpulse.models.etf import ETFFlow
 from etfpulse.models.news import NewsCategory, NewsItem
-from etfpulse.models.order import Order, OrderSide, OrderStatus, OrderType, TimeInForce, Venue
+from etfpulse.models.order import (
+    TERMINAL_ORDER_STATUSES,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TimeInForce,
+    Venue,
+)
 from etfpulse.models.position import Position, PositionSide, PositionStatus
 from etfpulse.models.regime import (
     REGIME_MACRO_EVENTS_KEY,
@@ -64,6 +72,7 @@ __all__ = [
     "PositionSide",
     "Order",
     "OrderStatus",
+    "TERMINAL_ORDER_STATUSES",
     "OrderSide",
     "OrderType",
     "TimeInForce",
