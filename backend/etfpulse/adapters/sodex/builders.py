@@ -27,12 +27,16 @@ The bundle stores BOTH the SoDEX protocol-side `domain.name` (implicit
 via `typed_data`) and our internal `venue` string so reconciliation
 queries can filter by venue without parsing the typed-data dict.
 
-Chain ID is a caller responsibility. Per api.md §"Endpoint", testnet
-spot uses chainId `286623` and testnet perps uses chainId `138565`
-(captured live in `tests/fixtures/sodex_eip712_golden.json`). Mainnet
-values are reserved per docs; verify against the live testnet probe in
-`tests/fixtures/sodex_endpoint_responses.json` before flipping
-production. D.4 will hardcode per-venue env-driven values.
+Chain ID is a caller responsibility. api.md §"Endpoint" states a single
+chainId per environment (mainnet `286623`, testnet `138565`). The V.1
+fixture captured `286623` for spot and `138565` for perps — whether
+that reflects a real per-venue split, an environment difference between
+the two captures, or a Go-capture quirk is **not yet verified against
+the live testnet** (the V.2 endpoint probe doesn't exercise signed
+writes). D.2 should confirm with a signed-write smoke before mainnet
+flip. Until then, D.4 will source per-venue chainIds from env vars so
+operators can override without code changes. The composers here are
+venue-agnostic — they pass through whatever chainId the caller resolved.
 
 Nonce is also a caller responsibility. Per api.md §"Sodex nonces",
 nonces are Unix milliseconds within `(T-2d, T+1d)`, tracked per API
@@ -85,13 +89,26 @@ class TypedDataBundle:
     discipline) treats it as immutable post-construction.
 
     Field mapping for D.4's INSERT path:
-      payload_json     → Order.eip712_payload  (stored as JSONB after json.loads)
-      payload_hash     → kept in memory; not persisted (derivable on demand)
-      typed_data       → returned to frontend, NOT persisted
-      action_type      → kept in memory; folded into Order.signal context
-      venue            → Order.venue
-      chain_id         → kept in memory; per-venue config (not persisted)
-      nonce            → Order.nonce
+      payload_json     → Order.eip712_payload — MUST be persisted as TEXT (or
+                         equivalent byte-preserving column), NOT round-tripped
+                         through `json.loads` into JSONB. JSONB normalizes
+                         whitespace, may reorder keys, and can re-quote
+                         numerics — any of which silently breaks the byte-
+                         exact reconciliation contract (the gateway re-hashes
+                         the body it received; we must store what the wallet
+                         signed verbatim). If JSONB-queryability is needed
+                         later, cast on read (`eip712_payload::jsonb`) or
+                         add a separate JSONB projection column.
+      payload_hash     → Order.eip712_payload_hash (persist alongside payload
+                         for O(1) reconciliation lookups; also derivable on
+                         demand from payload_json by re-hashing).
+      typed_data       → returned to frontend, NOT persisted (rebuildable
+                         from payload_hash + chain_id + venue mapping).
+      action_type      → Order.action_type (or folded into a status/intent
+                         field — D.4's call).
+      venue            → Order.venue.
+      chain_id         → kept in memory / env-driven per-venue; not persisted.
+      nonce            → Order.nonce.
     """
 
     payload_json: str  # the bytes the gateway re-hashes — store on Order row
@@ -119,8 +136,9 @@ def build_spot_new_order(
     Args:
         request: a validated `SpotBatchNewOrderRequest` carrying accountID
             + one or more `SpotNewOrderItem`s.
-        chain_id: SoDEX spot chainId (286623 for both mainnet and testnet
-            per api.md + V.1 capture). Caller resolves from env.
+        chain_id: SoDEX chainId for the spot environment. Caller resolves
+            from env. See module docstring — the per-venue split observed
+            in V.1 is not yet confirmed against the live testnet.
         nonce: Unix-millisecond nonce. Must be unique per (wallet, action)
             within the gateway's `(T-2d, T+1d)` window. D.4 owns generation.
     """
@@ -163,9 +181,9 @@ def build_perps_new_order(
     """Build a SoDEX perps `newOrder` typed-data bundle.
 
     Args:
-        chain_id: SoDEX perps chainId (138565 testnet — verify against
-            live probe before deploying to mainnet). Caller resolves
-            from env.
+        chain_id: SoDEX chainId for the perps environment. Caller resolves
+            from env. See module docstring — the per-venue split observed
+            in V.1 is not yet confirmed against the live testnet.
     """
     return _build(
         request=request,

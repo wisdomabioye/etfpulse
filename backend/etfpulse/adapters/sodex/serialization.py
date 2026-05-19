@@ -1,4 +1,4 @@
-"""Compact-JSON serializer that mirrors Go's `json.Marshal` byte-for-byte.
+r"""Compact-JSON serializer that mirrors Go's `json.Marshal` byte-for-byte.
 
 This is one of the two load-bearing modules for SoDEX EIP-712 signing.
 The gateway re-derives `payloadHash` from the request body via Go's
@@ -28,15 +28,36 @@ We return `str` (UTF-8 text), not `bytes`, because the V.1 fixture
 stores `payload_json` as a string. Step 3 (`payload.py`) calls
 `.encode("utf-8")` before keccak256.
 
-What Go's `json.Marshal` does that Python does NOT do, by default:
+Go-vs-Python byte-divergence on string content:
 
-- Go HTML-escapes `<`, `>`, `&` in JSON strings (the `EscapeHTML` option,
-  on by default). Our data domain — enum literals, ASCII decimal strings,
-  alphanumeric clOrdIDs — never contains these characters, so the two
-  outputs converge on every value we'd ever emit. Documented here so a
-  future case involving free-form strings (e.g. a user-supplied memo
-  field) is treated with care. Add an HTML-escape post-pass if the
-  schema ever admits such input.
+1. **HTML escape (`<`, `>`, `&`).** Go's `json.Marshal` escapes these
+   by default (the `EscapeHTML` option); Python's `json.dumps` does
+   not. Today's schema — enum literals, ASCII decimal strings, ASCII
+   alphanumeric clOrdIDs, hex blobs — contains none of these chars,
+   so the outputs converge. If a free-form string field is ever
+   added (memo, label, etc.), add an HTML-escape post-pass here.
+
+2. **Non-ASCII characters.** Go's `json.Marshal` emits raw UTF-8 bytes;
+   Python's `json.dumps` with `ensure_ascii=True` would escape them as
+   `\uXXXX`. Those are DIFFERENT byte sequences and would silently
+   break the byte-exact contract. We set `ensure_ascii=False` to match
+   Go. Today's schema can't admit non-ASCII anyway — every user-supplied
+   string (DecimalString, ClOrdID, payloadHash, verifyingContract,
+   domain.name) is regex- or enum-constrained to ASCII. The flag is
+   defense-in-depth against a future free-form field landing without
+   the author noticing the encoding divergence.
+
+3. **NaN / Infinity.** Go's `json.Marshal` returns an error when asked
+   to encode a NaN or Infinity float (the JSON spec disallows them);
+   Python's `json.dumps` defaults to `allow_nan=True` and silently
+   emits the non-spec literals `NaN`, `Infinity`, `-Infinity`. Those
+   bytes would never round-trip through Go's `json.Unmarshal` on the
+   gateway side. We set `allow_nan=False` so Python raises `ValueError`
+   instead of producing a body the gateway will reject silently
+   (failing loudly here is strictly better — the request never leaves
+   our process). Today's schema has no float fields (DecimalString is
+   `str`, integers are typed `int`, enums are `IntEnum`), so this is
+   unreachable; the flag pins the contract for any future float field.
 """
 
 from __future__ import annotations
@@ -63,5 +84,6 @@ def compact_json(value: BaseModel | dict[str, Any] | list[Any]) -> str:
         payload,
         separators=(",", ":"),
         sort_keys=False,
-        ensure_ascii=True,
+        ensure_ascii=False,
+        allow_nan=False,
     )

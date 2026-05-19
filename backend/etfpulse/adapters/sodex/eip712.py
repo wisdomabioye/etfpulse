@@ -95,8 +95,9 @@ def build_typed_data(
 
     Args:
         domain_name: `"spot"` for spot actions, `"futures"` for perps.
-        chain_id: SoDEX chain ID — 138565/286623 testnet, 286623 mainnet
-            (see api.md §"Endpoint"). Must be positive.
+        chain_id: SoDEX chain ID. Must be positive. Per-venue/per-env
+            mapping is a caller concern (see module docstring) — this
+            builder is venue-agnostic and hashes whatever value is passed.
         payload_hash: 32-byte hex from `payload.py`. Must start with `0x`
             and be 66 chars total.
         nonce: Unix-millisecond nonce within the gateway's `(T-2d, T+1d)`

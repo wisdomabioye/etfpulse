@@ -66,9 +66,12 @@ def build_payload(action_type: str, params: BaseModel | dict[str, Any]) -> Paylo
     silently re-order fields if Pydantic ever changes its dump order.
     """
     inner = compact_json(params)
-    # json.dumps(action_type) handles the edge case of an action_type
-    # containing characters that would need escaping (none today; defensive).
-    action_quoted = json.dumps(action_type, ensure_ascii=True)
+    # `ensure_ascii=False` + `allow_nan=False` mirror `compact_json`'s policy —
+    # both halves of `payload_json` must share the same encoding/spec
+    # discipline to stay byte-exact with Go's `json.Marshal` (raw UTF-8,
+    # error on NaN). Today's action_types are all ASCII string literals
+    # so both flags are functionally moot; pinned for consistency.
+    action_quoted = json.dumps(action_type, ensure_ascii=False, allow_nan=False)
     payload_json = f'{{"type":{action_quoted},"params":{inner}}}'
     payload_hash = "0x" + keccak(payload_json.encode("utf-8")).hex()
     return PayloadResult(payload_json=payload_json, payload_hash=payload_hash)

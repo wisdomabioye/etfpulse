@@ -169,6 +169,32 @@ class TestPerpsCancelComposer:
         assert payload["params"]["accountID"] == 1001
         assert payload["params"]["cancels"][0]["clOrdID"] == "test-cancel-1"
 
+    def test_order_id_only_cancel_omits_cl_ord_id(self):
+        """The dual-identifier optional pattern: PerpsCancelItem accepts EITHER
+        clOrdID OR orderID. When only orderID is supplied, the omitempty
+        contract must drop the absent clOrdID key from the JSON (per
+        api.md §"Important rules" and the Go SDK's `omitempty` tag).
+        Without this, the gateway would receive `"clOrdID":null` and the
+        payloadHash would diverge from what the wallet signed."""
+        from etfpulse.adapters.sodex import PerpsCancelItem, PerpsCancelOrderRequest
+
+        request = PerpsCancelOrderRequest(
+            accountID=2002,
+            cancels=[PerpsCancelItem(symbolID=5, orderID=42)],
+        )
+        bundle = build_perps_cancel_order(request=request, chain_id=138565, nonce=1700000000001)
+
+        # clOrdID absent in the bytes the gateway re-hashes.
+        assert "clOrdID" not in bundle.payload_json
+        assert "null" not in bundle.payload_json
+
+        # orderID present with correct value.
+        payload = json.loads(bundle.payload_json)
+        cancel = payload["params"]["cancels"][0]
+        assert cancel["orderID"] == 42
+        assert cancel["symbolID"] == 5
+        assert "clOrdID" not in cancel
+
 
 # ---------------------------------------------------------------------------
 # Serializer primitive invariants — independent of fixture content.
@@ -236,6 +262,19 @@ class TestCompactJsonInvariants:
         # Raw dict input shouldn't go through model_dump — caller owns shape.
         # Note: None stays as null (caller's choice to include it).
         assert compact_json({"a": 1, "b": None, "c": [1, 2]}) == '{"a":1,"b":null,"c":[1,2]}'
+
+    def test_nan_raises_rather_than_emitting_non_spec_json(self):
+        """`allow_nan=False` makes us fail loudly instead of silently emitting
+        the non-spec `NaN`/`Infinity` literals Go's `json.Marshal` rejects.
+        Today's schema can't produce NaN floats — this guards the contract
+        against a future float field being added without re-thinking
+        gateway compatibility."""
+        with pytest.raises(ValueError):
+            compact_json({"x": float("nan")})
+        with pytest.raises(ValueError):
+            compact_json({"x": float("inf")})
+        with pytest.raises(ValueError):
+            compact_json({"x": float("-inf")})
 
 
 # ---------------------------------------------------------------------------
