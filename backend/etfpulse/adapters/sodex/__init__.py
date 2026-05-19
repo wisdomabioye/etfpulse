@@ -1,25 +1,63 @@
 """SoDEX adapter package (Stage 09).
 
-This package owns the EIP-712 typed-data builders + (later) the HTTP
-clients that talk to the SoDEX spot and perps gateways. The production
-backend NEVER holds, generates, or signs with private keys — signing
-happens wallet-side via wagmi/viem; this package only builds the
-typed-data dict the wallet will sign, and submits the resulting signed
-payload.
+This package owns:
+  - **D.1** — EIP-712 typed-data builders (`builders.py`, `schemas.py`,
+    `payload.py`, `eip712.py`, `serialization.py`).
+  - **D.2** — HTTP clients for spot + perps venues (`spot_client.py`,
+    `perps_client.py`, `_http.py`, `responses.py`).
 
-PR D.1 ships the schemas + payload builders. D.2 adds the HTTP clients.
+The production backend NEVER holds, generates, or signs with private
+keys — signing happens wallet-side via wagmi/viem. D.1 builds the
+typed-data dict the wallet will sign; D.2 submits the resulting
+signed payload over HTTP. Together they form the production-side
+half of the SoDEX execution surface; D.3 (risk controller +
+execution pipeline) and D.4 (API routes + Execute page) consume this
+package.
 
 Anti-drift rule 27 (CLAUDE.md): nothing under this package may import
-`eth_account`, `web3.auto.signing`, or any other signing primitive. The
-package is build-only by design; the test suite enforces this.
+`eth_account`, `web3.auto.signing`, `sign_message`, `sign_typed_data`,
+or any other signing primitive. The package is build-only by design;
+the test suite enforces this via grep at
+`tests/test_adapters/test_sodex_typed_data.py::TestAntiDriftRule27`.
 """
 
+from etfpulse.adapters.sodex._http import (
+    SodexAuthError,
+    SodexEnvelopeError,
+    SodexError,
+    SodexHttpClient,
+    SodexHttpError,
+    SodexParseError,
+    SodexRateLimitError,
+    SodexValidationError,
+    estimate_request_weight,
+)
 from etfpulse.adapters.sodex.builders import (
     TypedDataBundle,
     build_perps_cancel_order,
     build_perps_new_order,
     build_spot_cancel_order,
     build_spot_new_order,
+)
+from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
+from etfpulse.adapters.sodex.responses import (
+    AccountBalances,
+    APIKey,
+    BalanceEntry,
+    BookTicker,
+    Coin,
+    FeeRate,
+    MiniTicker,
+    OpenOrdersResponse,
+    OpenPositionsResponse,
+    OrderResponseItem,
+    PerpsAccountState,
+    PerpsMarkPrice,
+    PerpsSymbol,
+    SpotAccountState,
+    SpotSymbol,
+    Ticker,
+    TransferResponse,
 )
 from etfpulse.adapters.sodex.schemas import (
     ClOrdID,
@@ -40,15 +78,16 @@ from etfpulse.adapters.sodex.schemas import (
     TimeInForce,
     TriggerType,
 )
+from etfpulse.adapters.sodex.spot_client import SodexSpotClient
 
 __all__ = [
-    # Composers (public API surface).
+    # D.1 — Composers (public API surface).
     "TypedDataBundle",
     "build_spot_new_order",
     "build_spot_cancel_order",
     "build_perps_new_order",
     "build_perps_cancel_order",
-    # Enums (int-valued — match SoDEX schema.md exactly).
+    # D.1 — Enums (int-valued — match SoDEX schema.md exactly).
     "OrderSide",
     "OrderType",
     "TimeInForce",
@@ -56,17 +95,53 @@ __all__ = [
     "PositionSide",
     "StopType",
     "TriggerType",
-    # Annotated string types with validation.
+    # D.1 — Annotated string types with validation.
     "DecimalString",
     "ClOrdID",
-    # Spot request schemas.
+    # D.1 — Spot request schemas.
     "SpotNewOrderItem",
     "SpotBatchNewOrderRequest",
     "SpotCancelItem",
     "SpotBatchCancelOrderRequest",
-    # Perps request schemas.
+    # D.1 — Perps request schemas.
     "PerpsOrderItem",
     "PerpsNewOrderRequest",
     "PerpsCancelItem",
     "PerpsCancelOrderRequest",
+    # D.2 — Venue clients.
+    "SodexSpotClient",
+    "SodexPerpsClient",
+    # D.2 — HTTP core + errors.
+    "SodexHttpClient",
+    "SodexError",
+    "SodexHttpError",
+    "SodexRateLimitError",
+    "SodexEnvelopeError",
+    "SodexAuthError",
+    "SodexValidationError",
+    "SodexParseError",
+    "estimate_request_weight",
+    # NOTE: `_helpers.py` symbols (lower_address, signed_write_headers,
+    # validate_order_response_items) are intentionally NOT re-exported.
+    # They're package-internal — only the two venue clients import them.
+    # D.3/D.4 interact via SodexSpotClient / SodexPerpsClient methods,
+    # never directly with the helpers.
+    # D.2 — Response DTOs (mirror gateway shape).
+    "SpotSymbol",
+    "PerpsSymbol",
+    "Coin",
+    "Ticker",
+    "MiniTicker",
+    "BookTicker",
+    "PerpsMarkPrice",
+    "BalanceEntry",
+    "AccountBalances",
+    "SpotAccountState",
+    "PerpsAccountState",
+    "OpenOrdersResponse",
+    "OpenPositionsResponse",
+    "FeeRate",
+    "APIKey",
+    "OrderResponseItem",
+    "TransferResponse",
 ]

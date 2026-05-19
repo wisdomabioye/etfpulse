@@ -73,12 +73,52 @@ class Settings(BaseSettings):
     binance_base_url: str = "https://data-api.binance.vision"
     binance_use_fixtures: bool = False
 
-    # SoDEX execution (Phase 3 / Stage 09): the production backend NEVER
-    # holds, generates, or signs with private keys. Signing happens
-    # wallet-side (wagmi/viem + WalletConnect); the backend only builds
-    # EIP-712 typed-data and submits already-signed payloads. There are
-    # no SoDEX-key settings here by design — see CLAUDE.md "Conventions
-    # to respect" + scripts/sodex_verify/README.md.
+    # ---------------------------------------------------------------------
+    # SoDEX execution (Phase 3 / Stage 09)
+    # ---------------------------------------------------------------------
+    # The production backend NEVER holds, generates, or signs with private
+    # keys. Signing happens wallet-side (wagmi/viem + WalletConnect); the
+    # backend only builds EIP-712 typed-data (D.1) and submits already-
+    # signed payloads (D.2). No SoDEX private-key settings exist here by
+    # design — anti-drift rule 27 (CLAUDE.md). See also scripts/sodex_verify/
+    # README.md for the verification-only carve-out.
+    #
+    # Wire-contract specifics, all confirmed against the live testnet via
+    # V.3 signed-write capture (see CLAUDE.md "SoDEX EIP-712 builders" §):
+    #   - chainId is **single per environment**, not per venue:
+    #       testnet = 138565 (both spot + futures domains)
+    #       mainnet = 286623 (per api.md §"Typed signature")
+    #   - X-API-Key header carries the registered key's NAME (e.g. "default"),
+    #     NOT the EVM address. Resolved per-wallet at request time by D.4 from
+    #     a binding on User.wallet_address; no global default key name here
+    #     since real users will have their own named keys.
+    #   - Signature `v` byte is raw secp256k1 recovery ID ∈ {0,1}, no +27
+    #     offset (the older Ethereum convention is rejected by SoDEX).
+    sodex_environment: str = Field(
+        default="testnet",
+        pattern=r"^(testnet|mainnet)$",
+    )
+    # Per-venue base URLs. Empty default → derived from `sodex_environment`
+    # via the resolved_* properties below. Override only if you're pointing
+    # at a self-hosted mock or a non-default gateway host.
+    sodex_spot_base_url: str = ""
+    sodex_perps_base_url: str = ""
+    # Per-environment chainIds. Hardcoded values match api.md §"Typed
+    # signature" + verified via V.3 (testnet=138565 works for both venues).
+    # Mainnet=286623 NOT yet verified against live mainnet — D.5 smoke
+    # confirms before mainnet flip.
+    sodex_testnet_chain_id: int = Field(default=138565, gt=0)
+    sodex_mainnet_chain_id: int = Field(default=286623, gt=0)
+    # HTTP client tunables — kept tight by default; reads are 10 RPS-ish
+    # at our expected volume, well below the 1200/min IP weight budget.
+    # 10s timeout covers 95%ile latencies observed in V.2 captures
+    # (`elapsed_ms` ranged 350-2050ms; 10s is comfortable headroom).
+    sodex_http_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
+    # 429+5xx retry. Linear backoff: attempt N waits `base * 2^(N-1)`s.
+    # Default 3 attempts × base 1s → max wait ~3s (1+2 added). At our
+    # volume we shouldn't hit 429s; this guards against transient 5xx.
+    sodex_http_retry_max_attempts: int = Field(default=3, ge=1, le=10)
+    sodex_http_retry_base_seconds: float = Field(default=1.0, gt=0.0, le=30.0)
 
     # OpenRouter (AI)
     openrouter_api_key: str = ""
@@ -492,6 +532,44 @@ class Settings(BaseSettings):
         """Same shape as `cors_origin_list` — comma-separated string in env,
         list in code. Used as default `User.preferences.assets` on /start."""
         return [a.strip().upper() for a in self.delivery_default_assets.split(",") if a.strip()]
+
+    # ---------------------------------------------------------------------
+    # SoDEX resolved-config properties
+    # ---------------------------------------------------------------------
+    # The base-URL + chainId fields above are deliberately raw env-var
+    # surfaces (empty defaults overridable per environment). These
+    # properties materialise the final values the adapters use, applying
+    # the env-derived defaults when the raw fields are empty. Tests can
+    # override either layer.
+
+    @property
+    def sodex_chain_id(self) -> int:
+        """ChainId for the current environment. Single value across spot+perps
+        per api.md §"Typed signature"."""
+        return (
+            self.sodex_mainnet_chain_id
+            if self.sodex_environment == "mainnet"
+            else self.sodex_testnet_chain_id
+        )
+
+    @property
+    def sodex_resolved_spot_base_url(self) -> str:
+        """Override (`sodex_spot_base_url`) wins; else derive from environment."""
+        if self.sodex_spot_base_url:
+            return self.sodex_spot_base_url
+        if self.sodex_environment == "mainnet":
+            return "https://mainnet-gw.sodex.dev/api/v1/spot"
+        return "https://testnet-gw.sodex.dev/api/v1/spot"
+
+    @property
+    def sodex_resolved_perps_base_url(self) -> str:
+        """Same as spot but for the perps venue. The two URLs share host;
+        the only difference is the trailing `/spot` vs `/perps` segment."""
+        if self.sodex_perps_base_url:
+            return self.sodex_perps_base_url
+        if self.sodex_environment == "mainnet":
+            return "https://mainnet-gw.sodex.dev/api/v1/perps"
+        return "https://testnet-gw.sodex.dev/api/v1/perps"
 
     @property
     def is_bot_enabled(self) -> bool:

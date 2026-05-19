@@ -103,3 +103,82 @@ class TestAccelerationMinPriorUsdDeprecatedAlias:
         monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "999999")
         s = Settings()
         assert s.acceleration_min_slope_old_usd == Decimal("111111")
+
+
+class TestSodexEnvironmentSettings:
+    """PR D.2 — SoDEX environment + per-venue base URL + chainId resolution.
+
+    The wire contract is confirmed via V.3 signed-write capture against
+    the live testnet — chainId is single per environment (not per venue),
+    base URLs differ only in the trailing `/spot` vs `/perps`. The
+    resolved-* properties bake the operator-friendly default while
+    leaving room for env overrides (mock servers, alternative gateways).
+    """
+
+    def test_default_environment_is_testnet(self):
+        """Safe-by-default: a deploy that forgets to set SODEX_ENVIRONMENT
+        does NOT accidentally point at mainnet."""
+        s = Settings()
+        assert s.sodex_environment == "testnet"
+
+    def test_invalid_environment_rejected(self, monkeypatch):
+        """The pattern matcher rejects anything that isn't exactly testnet
+        or mainnet — e.g. 'TESTNET', 'staging', '' all fail."""
+        monkeypatch.setenv("SODEX_ENVIRONMENT", "staging")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_testnet_chain_id_resolution(self):
+        s = Settings()
+        assert s.sodex_environment == "testnet"
+        assert s.sodex_chain_id == 138565
+
+    def test_mainnet_chain_id_resolution(self, monkeypatch):
+        monkeypatch.setenv("SODEX_ENVIRONMENT", "mainnet")
+        s = Settings()
+        assert s.sodex_chain_id == 286623
+
+    def test_chain_id_env_override(self, monkeypatch):
+        """Operator override path — useful for a mock gateway or a future
+        chainId bump."""
+        monkeypatch.setenv("SODEX_TESTNET_CHAIN_ID", "999999")
+        s = Settings()
+        assert s.sodex_chain_id == 999999
+
+    def test_default_testnet_base_urls(self):
+        """Testnet defaults pin the exact host + path V.2/V.3 captured
+        against. If SoDEX changes the gateway host, override via env."""
+        s = Settings()
+        assert s.sodex_resolved_spot_base_url == "https://testnet-gw.sodex.dev/api/v1/spot"
+        assert s.sodex_resolved_perps_base_url == "https://testnet-gw.sodex.dev/api/v1/perps"
+
+    def test_mainnet_base_urls(self, monkeypatch):
+        monkeypatch.setenv("SODEX_ENVIRONMENT", "mainnet")
+        s = Settings()
+        assert s.sodex_resolved_spot_base_url == "https://mainnet-gw.sodex.dev/api/v1/spot"
+        assert s.sodex_resolved_perps_base_url == "https://mainnet-gw.sodex.dev/api/v1/perps"
+
+    def test_base_url_override_wins(self, monkeypatch):
+        """An explicit override (e.g. for a mock gateway) takes priority
+        over the env-derived default. Other URLs are unaffected — each
+        venue is independent."""
+        monkeypatch.setenv("SODEX_SPOT_BASE_URL", "http://localhost:9000/spot")
+        s = Settings()
+        assert s.sodex_resolved_spot_base_url == "http://localhost:9000/spot"
+        # Perps still derived from environment.
+        assert s.sodex_resolved_perps_base_url == "https://testnet-gw.sodex.dev/api/v1/perps"
+
+    def test_http_timeout_default(self):
+        s = Settings()
+        assert s.sodex_http_timeout_seconds == pytest.approx(10.0)
+
+    def test_http_timeout_must_be_positive(self, monkeypatch):
+        monkeypatch.setenv("SODEX_HTTP_TIMEOUT_SECONDS", "0")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_retry_attempts_floor(self, monkeypatch):
+        """At least 1 attempt — 0 would mean "never call" which is nonsense."""
+        monkeypatch.setenv("SODEX_HTTP_RETRY_MAX_ATTEMPTS", "0")
+        with pytest.raises(ValidationError):
+            Settings()
