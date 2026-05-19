@@ -17,17 +17,21 @@ dict shape matches the spec exactly:
 Per api.md §"Typed signature":
   - `domain.name`         — `"spot"` for spot actions, `"futures"` for perps.
   - `domain.version`      — always `"1"`.
-  - `domain.chainId`      — api.md states a single value per environment
-                            (mainnet `286623`, testnet `138565`). The V.1
-                            fixture, however, captured `286623` for spot
-                            and `138565` for perps. Whether SoDEX uses
-                            per-venue chainIds OR our V.1 Go capture used
-                            the wrong spot chainId is **not yet verified
-                            against the live testnet** (V.2 endpoint probe
-                            doesn't exercise signed writes). D.2 should
-                            confirm with a signed-write smoke before
-                            mainnet flip. The builder is venue-agnostic —
-                            it hashes whatever chainId the caller passes.
+  - `domain.chainId`      — **single value per environment**
+                            (mainnet `286623`, testnet `138565`); same
+                            chainId across spot and perps. Verified
+                            against the live testnet via V.3 signed-write
+                            capture — the gateway accepted `138565` for
+                            both spot AND futures domains. The V.1 fixture
+                            captured `286623` for spot and `138565` for
+                            perps because those captures ran against
+                            different environments (spot fixture from a
+                            mainnet-aligned context, perps from testnet);
+                            the per-venue split was a capture artifact,
+                            not a real protocol distinction. The builder
+                            is venue-agnostic — it hashes whatever
+                            chainId the caller passes (D.4 sources per
+                            environment from env vars).
   - `domain.verifyingContract` — always the zero address.
 
 We emit `chainId` and `nonce` as Python `int`s (native EIP-712 spec

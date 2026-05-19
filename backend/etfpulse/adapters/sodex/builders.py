@@ -27,16 +27,16 @@ The bundle stores BOTH the SoDEX protocol-side `domain.name` (implicit
 via `typed_data`) and our internal `venue` string so reconciliation
 queries can filter by venue without parsing the typed-data dict.
 
-Chain ID is a caller responsibility. api.md §"Endpoint" states a single
-chainId per environment (mainnet `286623`, testnet `138565`). The V.1
-fixture captured `286623` for spot and `138565` for perps — whether
-that reflects a real per-venue split, an environment difference between
-the two captures, or a Go-capture quirk is **not yet verified against
-the live testnet** (the V.2 endpoint probe doesn't exercise signed
-writes). D.2 should confirm with a signed-write smoke before mainnet
-flip. Until then, D.4 will source per-venue chainIds from env vars so
-operators can override without code changes. The composers here are
-venue-agnostic — they pass through whatever chainId the caller resolved.
+Chain ID is a caller responsibility. **Single chainId per environment**
+(mainnet `286623`, testnet `138565`); same value across spot and perps.
+Verified via V.3 signed-write capture against the live testnet — the
+gateway accepted `138565` for both domain names (`spot` and `futures`).
+The V.1 fixture's per-venue split (`286623` spot / `138565` perps) was
+a capture artifact from running the two captures against different
+environments, not a real protocol distinction. D.4 will source chainId
+from a per-environment env var (one value, not two). The composers
+here are venue-agnostic — they pass through whatever chainId the caller
+resolved.
 
 Nonce is also a caller responsibility. Per api.md §"Sodex nonces",
 nonces are Unix milliseconds within `(T-2d, T+1d)`, tracked per API

@@ -1,0 +1,177 @@
+{
+  "burner_address_placeholder": "\u003cBURNER_ADDR\u003e",
+  "generated_by": "scripts/sodex_verify/signed_write_capture/main.go",
+  "probes": [
+    {
+      "name": "spot_account_state",
+      "description": "GET /accounts/{addr}/state — used to discover the burner's master accountID (aid).",
+      "method": "GET",
+      "url": "https://testnet-gw.sodex.dev/api/v1/spot/accounts/\u003cBURNER_ADDR\u003e/state",
+      "headers_sent": {},
+      "status": 200,
+      "elapsed_ms": 2568,
+      "response_content_type": "application/json; charset=utf-8",
+      "response": {
+        "code": 0,
+        "timestamp": 1779222795811,
+        "data": {
+          "user": "0xcaba55de67f421bddb0813961a20988885aa98d7",
+          "aid": 57436,
+          "uid": 57436,
+          "B": [
+            {
+              "i": 0,
+              "a": "vUSDC",
+              "t": "1000",
+              "l": "0"
+            }
+          ],
+          "O": null
+        }
+      }
+    },
+    {
+      "name": "spot_batch_new",
+      "description": "POST /spot/trade/orders/batch — single limit buy at $100 (below market). Won't fill; gets cancelled by the next probe.",
+      "method": "POST",
+      "url": "https://testnet-gw.sodex.dev/api/v1/spot/trade/orders/batch",
+      "headers_sent": {
+        "X-API-Key": "default",
+        "X-API-Nonce": "1779222795882",
+        "X-API-Sign": "0x01a3e08e380f049c99eb6d9477c3dab99d78ce1102ad6bbc56e176882a7c373dfc018cc72da0a7aa43bb9e56121f1e82226a3cb9d3071d63f9d4d84c0d3cdecc6501"
+      },
+      "request_body": "{\"accountID\":57436,\"orders\":[{\"symbolID\":2,\"clOrdID\":\"v3-spot-1779222795882\",\"side\":1,\"type\":1,\"timeInForce\":1,\"price\":\"100\",\"quantity\":\"0.1\"}]}",
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":57436,\"orders\":[{\"symbolID\":2,\"clOrdID\":\"v3-spot-1779222795882\",\"side\":1,\"type\":1,\"timeInForce\":1,\"price\":\"100\",\"quantity\":\"0.1\"}]}}",
+      "payload_hash": "0xe5c1c2fc2db8158d38c7c01077ff548f408f9d2023aab52d7af2ddf90f4e9867",
+      "nonce": 1779222795882,
+      "domain_name": "spot",
+      "chain_id": 138565,
+      "status": 200,
+      "elapsed_ms": 393,
+      "response_content_type": "application/json; charset=utf-8",
+      "response": {
+        "code": -1,
+        "timestamp": 1779222796209,
+        "error": "API key error: API key not found"
+      }
+    },
+    {
+      "name": "spot_batch_cancel",
+      "description": "DELETE /spot/trade/orders/batch — cancels the order placed in spot_batch_new by origClOrdID.",
+      "method": "DELETE",
+      "url": "https://testnet-gw.sodex.dev/api/v1/spot/trade/orders/batch",
+      "headers_sent": {
+        "X-API-Key": "default",
+        "X-API-Nonce": "1779222795883",
+        "X-API-Sign": "0x0183dd081e4e32c214868fd5e62c003d607c153f49eea085aa30a20788749e5e2d0d81540b53752c0ebff991fd2eec26056985bced979a8b4d8f0252b0976a976700"
+      },
+      "request_body": "{\"accountID\":57436,\"cancels\":[{\"symbolID\":2,\"clOrdID\":\"v3-spot-1779222795882\",\"origClOrdID\":\"v3-spot-1779222795882\"}]}",
+      "payload_json": "{\"type\":\"cancelOrder\",\"params\":{\"accountID\":57436,\"cancels\":[{\"symbolID\":2,\"clOrdID\":\"v3-spot-1779222795882\",\"origClOrdID\":\"v3-spot-1779222795882\"}]}}",
+      "payload_hash": "0x5dc346f330b1bbb201f64a38a070a5f05022e716e8379756359c76a7f1269bae",
+      "nonce": 1779222795883,
+      "domain_name": "spot",
+      "chain_id": 138565,
+      "status": 200,
+      "elapsed_ms": 478,
+      "response_content_type": "application/json; charset=utf-8",
+      "response": {
+        "code": -1,
+        "timestamp": 1779222796602,
+        "error": "API key error: API key not found"
+      }
+    },
+    {
+      "name": "perps_account_state",
+      "description": "GET /accounts/{addr}/state — used to discover the burner's master accountID (aid).",
+      "method": "GET",
+      "url": "https://testnet-gw.sodex.dev/api/v1/perps/accounts/\u003cBURNER_ADDR\u003e/state",
+      "headers_sent": {},
+      "status": 200,
+      "elapsed_ms": 410,
+      "response_content_type": "application/json; charset=utf-8",
+      "response": {
+        "code": 0,
+        "timestamp": 1779222797070,
+        "data": {
+          "user": "0xcaba55de67f421bddb0813961a20988885aa98d7",
+          "aid": 57436,
+          "uid": 57436,
+          "av": "0",
+          "am": "0",
+          "ami": "0",
+          "amw": "0",
+          "im": "0",
+          "cm": "0",
+          "oim": "0",
+          "ocm": "0",
+          "B": null,
+          "P": null,
+          "O": null,
+          "S": null
+        }
+      }
+    },
+    {
+      "name": "perps_batch_new",
+      "description": "POST /perps/trade/orders — single limit buy at $100 (below market). Won't fill; gets cancelled by the next probe.",
+      "method": "POST",
+      "url": "https://testnet-gw.sodex.dev/api/v1/perps/trade/orders",
+      "headers_sent": {
+        "X-API-Key": "default",
+        "X-API-Nonce": "1779222797167",
+        "X-API-Sign": "0x011f723ec4510f24e2a24a3caf742f50cf520ba42487b2520411495ad9058137946d115bd33e5d99bc7ecb995833a2555f6be535f83b0753aa9d842d6925fd162400"
+      },
+      "request_body": "{\"accountID\":57436,\"symbolID\":2,\"orders\":[{\"clOrdID\":\"v3-perps-1779222797167\",\"modifier\":1,\"side\":1,\"type\":1,\"timeInForce\":1,\"price\":\"100\",\"quantity\":\"0.1\",\"reduceOnly\":false,\"positionSide\":1}]}",
+      "payload_json": "{\"type\":\"newOrder\",\"params\":{\"accountID\":57436,\"symbolID\":2,\"orders\":[{\"clOrdID\":\"v3-perps-1779222797167\",\"modifier\":1,\"side\":1,\"type\":1,\"timeInForce\":1,\"price\":\"100\",\"quantity\":\"0.1\",\"reduceOnly\":false,\"positionSide\":1}]}}",
+      "payload_hash": "0x5d71852ee34f288665e0792b10f28441becc2577176213e83e3e870202f48a64",
+      "nonce": 1779222797167,
+      "domain_name": "futures",
+      "chain_id": 138565,
+      "status": 200,
+      "elapsed_ms": 407,
+      "response_content_type": "application/json; charset=utf-8",
+      "response": {
+        "code": 0,
+        "timestamp": 1779222797493,
+        "data": [
+          {
+            "code": -1,
+            "clOrdID": "v3-perps-1779222797167",
+            "error": "insufficient margin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perps_batch_cancel",
+      "description": "DELETE /perps/trade/orders — cancels the order placed in perps_batch_new by clOrdID.",
+      "method": "DELETE",
+      "url": "https://testnet-gw.sodex.dev/api/v1/perps/trade/orders",
+      "headers_sent": {
+        "X-API-Key": "default",
+        "X-API-Nonce": "1779222797168",
+        "X-API-Sign": "0x011e5832aef76571b7e630d40b2983dd367e66559ea2a8f3a708ecf8b9dfce3a6f1609106bde2197ec2f0171cf053b40859a5fe377051bdd273c5ac1cec76558ec00"
+      },
+      "request_body": "{\"accountID\":57436,\"cancels\":[{\"symbolID\":2,\"clOrdID\":\"v3-perps-1779222797167\"}]}",
+      "payload_json": "{\"type\":\"cancelOrder\",\"params\":{\"accountID\":57436,\"cancels\":[{\"symbolID\":2,\"clOrdID\":\"v3-perps-1779222797167\"}]}}",
+      "payload_hash": "0xb841f3dd3ec63b51ceed019dd0431b331724520b9370f75b542cfbace82c98a4",
+      "nonce": 1779222797168,
+      "domain_name": "futures",
+      "chain_id": 138565,
+      "status": 200,
+      "elapsed_ms": 409,
+      "response_content_type": "application/json; charset=utf-8",
+      "response": {
+        "code": 0,
+        "timestamp": 1779222797892,
+        "data": [
+          {
+            "code": -1,
+            "error": "order rejected: OrderNotFound"
+          }
+        ]
+      }
+    }
+  ],
+  "schema_version": "v1"
+}

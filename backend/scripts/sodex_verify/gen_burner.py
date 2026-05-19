@@ -1,72 +1,227 @@
-"""Generate a throwaway burner wallet for SoDEX testnet verification.
+"""Generate (or read) a persistent throwaway burner wallet for SoDEX testnet
+verification.
 
 Operator-only tool. **NOT production code.** See `scripts/sodex_verify/README.md`
-for the full boundary rationale.
+for the full boundary rationale and anti-drift rule.
 
-Prints address + private key to stdout, exits. Nothing is written to disk,
-logged, or persisted in any way. Operator copies the printed `export` lines
-into the shell session that will run V.1 (`eip712_capture/`) and V.2
-(`endpoint_probe.py`), then destroys the key by closing the terminal.
+Why persist (post-V.3 design):
+  V.0/V.1/V.2 used the print-and-export model (key lived only in shell
+  scrollback). V.3 needs to FUND the burner, REGISTER it as a SoDEX API
+  key, then submit real signed writes against it. That lifecycle can't
+  happen in a single terminal session, so the burner needs to survive
+  across runs.
 
-This script is the ONLY place in the repo that generates a private key.
-The production backend has no path to `eth_account.Account.create()` —
-that's the architectural invariant. After V.0/V.1/V.2 fixtures land, this
-script's continued existence is for future re-captures only (e.g., if SoDEX
-bumps the EIP-712 spec). It MUST NOT be imported.
+Storage:
+  Default path: `~/.sodex_verify/burner.json` — OUTSIDE the repo, so
+  there is no failure mode where a misconfigured `.gitignore` leaks
+  the key into git history. The file is `chmod 600` on creation
+  (owner read/write only). The directory is `chmod 700`.
 
-Run from `backend/`:
+  Override via `SODEX_BURNER_PATH` env var if the operator wants a
+  different location (e.g. a workspace-mounted secrets directory).
+  The override path is treated identically — same chmod + same refuse-
+  overwrite semantics.
 
-    uv run python scripts/sodex_verify/gen_burner.py
+File format (stable; the Go-based V.3 capture program reads the same
+shape):
+
+    {
+      "schema_version": 1,
+      "network": "testnet",
+      "address":     "0x...",
+      "private_key": "0x...",
+      "created_at":  "2026-05-19T..."
+    }
+
+CLI:
+  uv run python scripts/sodex_verify/gen_burner.py            # generate (errors if exists)
+  uv run python scripts/sodex_verify/gen_burner.py --print    # print existing burner
+  uv run python scripts/sodex_verify/gen_burner.py --force    # overwrite (CURRENT KEY IS LOST)
+
+The production backend never imports this module. The boundary is the
+whole point of the `scripts/sodex_verify/` carve-out.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import stat
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
 from eth_account import Account
 
+# File format constants — bumping `_SCHEMA_VERSION` forces consumers
+# (this script's `--print`, the V.3 Go capture program) to acknowledge
+# the change. Keep it 1 unless the JSON shape actually changes.
+_SCHEMA_VERSION = 1
 
-def _print_header(stream) -> None:
+# Default storage location — `~/.sodex_verify/burner.json`. The directory
+# matches the credential-file convention (`~/.aws/`, `~/.gnupg/`).
+# Operator can override via `SODEX_BURNER_PATH`.
+_DEFAULT_BURNER_PATH = Path.home() / ".sodex_verify" / "burner.json"
+
+# File / directory permissions — 600 (owner rw) for the burner file, 700
+# (owner rwx) for the parent directory. Anything more permissive would
+# let another local user on the same machine read the key. We DO enforce
+# these on every write; we do NOT correct existing permissions on read
+# (printing the warning is enough — silently chmoding the operator's
+# files would be presumptuous).
+_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR  # 0o600
+_DIR_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR  # 0o700
+
+
+def _resolve_burner_path() -> Path:
+    """`SODEX_BURNER_PATH` env override → expanduser; else default."""
+    override = os.environ.get("SODEX_BURNER_PATH")
+    if override:
+        return Path(override).expanduser().resolve()
+    return _DEFAULT_BURNER_PATH
+
+
+def _print_banner(stream, title: str) -> None:
     bar = "-" * 70
-    stream.write(f"{bar}\n")
-    stream.write("SODEX TESTNET BURNER WALLET\n")
-    stream.write(f"{bar}\n\n")
+    stream.write(f"{bar}\n{title}\n{bar}\n\n")
 
 
-def _print_warnings(stream) -> None:
+def _print_warnings(stream, path: Path) -> None:
     bar = "-" * 70
     stream.write("\n")
     stream.write("WARNINGS (read carefully):\n")
-    stream.write("  - For SoDEX testnet verification scripts ONLY (V.1 + V.2).\n")
-    stream.write("  - NEVER commit this key. NEVER share it. NEVER reuse on mainnet.\n")
-    stream.write("  - The key is in your terminal scrollback. Clear it after use:\n")
-    stream.write("      history -c   (bash/zsh)\n")
-    stream.write("  - When V.1/V.2 fixtures are committed, unset the env var and\n")
-    stream.write("    close the terminal. The key was never written to disk.\n")
+    stream.write("  - For SoDEX testnet verification (V.1, V.2, V.3) ONLY.\n")
+    stream.write("  - NEVER commit this file. NEVER share. NEVER reuse on mainnet.\n")
+    stream.write("  - File mode: chmod 600 (only you can read).\n")
+    stream.write(f"  - Path: {path}\n")
+    stream.write("  - When all fixtures are committed and stable, delete the file:\n")
+    stream.write(f"      rm {path}\n")
     stream.write(f"{bar}\n")
 
 
-def main() -> int:
-    # Use `eth_account` directly. `Account.create()` reads from os.urandom
-    # — cryptographically secure. We do NOT pass `extra_entropy`; the OS
-    # entropy is sufficient for a single-session throwaway key.
+def _generate_burner() -> dict:
+    """Generate a fresh burner key. Uses `eth_account.Account.create()`
+    which seeds from `os.urandom` — cryptographically secure.
+    """
     acct = Account.create()
-    address = acct.address  # checksummed EIP-55
-    # `HexBytes.hex()` returns the hex WITHOUT the 0x prefix in current
-    # eth_account; the rest of the SoDEX-side tooling expects 0x-prefixed
-    # values everywhere. Normalise explicitly so operator-pasted env vars
-    # are immediately usable.
     raw_hex = acct.key.hex()
     privkey = raw_hex if raw_hex.startswith("0x") else f"0x{raw_hex}"
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "network": "testnet",
+        "address": acct.address,  # EIP-55 checksummed
+        "private_key": privkey,
+        "created_at": datetime.now(UTC).isoformat(),
+    }
 
-    out = sys.stdout
-    _print_header(out)
-    out.write(f"Address:      {address}\n")
-    out.write(f"Private key:  {privkey}\n")
-    out.write("\nFor the next steps, run these in your shell:\n\n")
-    out.write(f"  export SODEX_VERIFY_ADDRESS={address}\n")
-    out.write(f"  export SODEX_VERIFY_PRIVKEY={privkey}\n")
-    _print_warnings(out)
+
+def _write_burner(path: Path, burner: dict) -> None:
+    """Write burner JSON with strict permissions. Creates parent dir if needed.
+
+    Atomic write: write to a tmp file in the same directory, chmod 600,
+    then rename. Prevents a half-written file being readable mid-write.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Tighten directory perms (best-effort; existing dir won't change owner).
+    try:
+        os.chmod(path.parent, _DIR_MODE)
+    except OSError:
+        pass  # Non-fatal — the file's own 0o600 is the real protection.
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    # `os.open` with `O_CREAT | O_EXCL | O_WRONLY` + mode bits creates
+    # the file with strict perms atomically (no `chmod` race between
+    # `open` and `chmod`).
+    fd = os.open(str(tmp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(burner, fh, indent=2, sort_keys=False)
+            fh.write("\n")
+    except Exception:
+        # Clean up the tmp file if write failed.
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    # Rename is atomic on POSIX. Old file (if any) is replaced.
+    os.replace(tmp_path, path)
+
+
+def _read_burner(path: Path) -> dict:
+    """Read + validate burner JSON. Raises ValueError on shape drift."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"Burner file at {path} is not a JSON object")
+    expected_keys = {"schema_version", "network", "address", "private_key", "created_at"}
+    missing = expected_keys - set(data)
+    if missing:
+        raise ValueError(f"Burner file at {path} missing keys: {sorted(missing)}")
+    if data["schema_version"] != _SCHEMA_VERSION:
+        raise ValueError(
+            f"Burner file schema mismatch at {path}: got {data['schema_version']!r}, "
+            f"expected {_SCHEMA_VERSION}. Regenerate with --force."
+        )
+    return data
+
+
+def _print_burner(stream, burner: dict, path: Path, *, freshly_generated: bool) -> None:
+    title = "SODEX TESTNET BURNER (NEW)" if freshly_generated else "SODEX TESTNET BURNER (EXISTING)"
+    _print_banner(stream, title)
+    stream.write(f"Address:      {burner['address']}\n")
+    stream.write(f"Private key:  {burner['private_key']}\n")
+    stream.write(f"Network:      {burner['network']}\n")
+    stream.write(f"Created at:   {burner['created_at']}\n")
+    stream.write("\nFor shells that need env vars (V.1 Go capture, manual flows):\n\n")
+    stream.write(f"  export SODEX_VERIFY_ADDRESS={burner['address']}\n")
+    stream.write(f"  export SODEX_VERIFY_PRIVKEY={burner['private_key']}\n")
+    _print_warnings(stream, path)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate or read the SoDEX testnet burner wallet."
+    )
+    parser.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="Print existing burner contents; do not generate.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the existing burner. CURRENT KEY IS LOST (and any funds on it).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.print_only and args.force:
+        sys.stderr.write("ERROR: --print and --force are mutually exclusive.\n")
+        return 2
+
+    path = _resolve_burner_path()
+
+    if args.print_only:
+        if not path.exists():
+            sys.stderr.write(f"ERROR: No burner file at {path}.\n")
+            sys.stderr.write("Run `gen_burner.py` (no flag) to generate one.\n")
+            return 1
+        burner = _read_burner(path)
+        _print_burner(sys.stdout, burner, path, freshly_generated=False)
+        return 0
+
+    if path.exists() and not args.force:
+        sys.stderr.write(f"ERROR: Burner already exists at {path}.\n")
+        sys.stderr.write(
+            "Use `--print` to read it, or `--force` to overwrite (CURRENT KEY IS LOST).\n"
+        )
+        return 1
+
+    burner = _generate_burner()
+    _write_burner(path, burner)
+    _print_burner(sys.stdout, burner, path, freshly_generated=True)
     return 0
 
 
