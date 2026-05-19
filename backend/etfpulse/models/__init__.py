@@ -21,11 +21,11 @@ from etfpulse.models.signal import (
 )
 from etfpulse.models.user import (
     ChannelType,
+    DeliveryPrefsMixin,
     NotificationChannel,
     TelegramGroup,
     User,
     UserRole,
-    UserTier,
 )
 
 __all__ = [
@@ -33,7 +33,7 @@ __all__ = [
     # User
     "User",
     "UserRole",
-    "UserTier",
+    "DeliveryPrefsMixin",
     "ChannelType",
     "NotificationChannel",
     "TelegramGroup",

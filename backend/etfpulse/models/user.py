@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,36 +24,61 @@ class UserRole(StrEnum):
     ADMIN = "admin"
 
 
-class UserTier(StrEnum):
-    FREE = "free"
-    PREMIUM = "premium"
-
-
 class ChannelType(StrEnum):
     TELEGRAM = "telegram"
     EMAIL = "email"
     DISCORD = "discord"
 
 
-class User(Base):
-    __tablename__ = "users"
+class DeliveryPrefsMixin:
+    """Delivery-preference columns shared between `User` and `TelegramGroup`.
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    role: Mapped[str] = mapped_column(String(20), default=UserRole.USER, nullable=False)
-    tier: Mapped[str] = mapped_column(String(20), default=UserTier.FREE, nullable=False)
-    tier_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    agreed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    Both surfaces are independent delivery targets — fan-out treats them
+    symmetrically — so the prefs schema MUST stay byte-identical across the
+    two tables. PR I.2's `delivery_min_confirmation` shipped User-only on
+    its first revision and had to be back-mirrored to groups; this mixin
+    closes that drift path.
+
+    The mixin owns *columns only*. Each subclass declares its own indexes
+    (delivery paths differ — user fan-out joins channels, group fan-out
+    joins chat_id) and its own `CheckConstraint` for `pref_min_confidence`
+    (constraint names must be unique per-table). Don't try to push
+    `__table_args__` into the mixin — composing it with the subclass's
+    own constraint tuple is messier than the one duplicate CHECK line.
+    """
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    # Delivery preferences — indexed
     pref_assets: Mapped[list[str]] = mapped_column(
         ARRAY(String(10)), default=lambda: ["BTC", "ETH"], nullable=False
     )
     pref_min_confidence: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     pref_paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    # Non-critical preferences (UI settings, display prefs)
+    # Non-critical preferences (UI settings, display prefs). JSONB has no
+    # write-side validation today — typos in keys propagate silently.
+    # Future: gate writes through a Pydantic schema at the API boundary.
     preferences: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class User(Base, DeliveryPrefsMixin):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    role: Mapped[str] = mapped_column(String(20), default=UserRole.USER, nullable=False)
+    agreed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # SoDEX wallet binding (Stage 09). NULL = user has not connected a wallet
+    # (Telegram-only users + dashboard-only users are valid). Stored
+    # lowercased (CHECK below enforces) so case-insensitive equality is the
+    # natural string equality. The trust binding (proof-of-ownership via
+    # signed challenge) is enforced at the route boundary in PR D.4 — this
+    # column is the persisted result, not the verification step.
+    #
+    # 1:1 user↔wallet by design (V1 scope: a user signs for their own
+    # positions). If we ever support multi-wallet users (Ledger + hot
+    # wallet, team multisig, etc.), the migration path is a separate
+    # `user_wallets` junction table — DO NOT silently extend this column
+    # into a JSONB array or comma-separated string.
+    wallet_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -66,13 +92,26 @@ class User(Base):
             "pref_min_confidence BETWEEN 1 AND 10",
             name="ck_users_pref_min_confidence_range",
         ),
+        # 0x + 40 lowercase hex chars. Forces normalization at write-time so
+        # every downstream comparison can use plain `==` without `.lower()`.
+        CheckConstraint(
+            "wallet_address IS NULL OR wallet_address ~ '^0x[0-9a-f]{40}$'",
+            name="ck_users_wallet_address_format",
+        ),
         Index("ix_users_delivery", "is_active", "pref_paused", "pref_min_confidence"),
-        Index("ix_users_tier", "tier", "tier_expires_at"),
         Index("ix_users_pref_assets", "pref_assets", postgresql_using="gin"),
+        # Partial unique: one wallet per user, but many users may have NULL.
+        # Drives wallet-based reverse lookup at the API boundary.
+        Index(
+            "ix_users_wallet_address",
+            "wallet_address",
+            unique=True,
+            postgresql_where=text("wallet_address IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:
-        return f"<User id={self.id} role={self.role} tier={self.tier} active={self.is_active}>"
+        return f"<User id={self.id} role={self.role} active={self.is_active}>"
 
 
 class NotificationChannel(Base):
@@ -111,7 +150,7 @@ class NotificationChannel(Base):
         )
 
 
-class TelegramGroup(Base):
+class TelegramGroup(Base, DeliveryPrefsMixin):
     __tablename__ = "telegram_groups"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -120,16 +159,6 @@ class TelegramGroup(Base):
     added_by_user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    tier: Mapped[str] = mapped_column(String(20), default=UserTier.FREE, nullable=False)
-    tier_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    pref_assets: Mapped[list[str]] = mapped_column(
-        ARRAY(String(10)), default=lambda: ["BTC", "ETH"], nullable=False
-    )
-    pref_min_confidence: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
-    pref_paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # Non-critical group preferences (display/UI — symmetric with User.preferences)
-    preferences: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -142,12 +171,9 @@ class TelegramGroup(Base):
             "pref_min_confidence BETWEEN 1 AND 10",
             name="ck_groups_pref_min_confidence_range",
         ),
-        Index("ix_groups_delivery", "is_active", "tier", "pref_paused"),
+        Index("ix_groups_delivery", "is_active", "pref_paused", "pref_min_confidence"),
         Index("ix_groups_pref_assets", "pref_assets", postgresql_using="gin"),
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<TelegramGroup id={self.id} chat={self.chat_id} "
-            f"tier={self.tier} active={self.is_active}>"
-        )
+        return f"<TelegramGroup id={self.id} chat={self.chat_id} active={self.is_active}>"
