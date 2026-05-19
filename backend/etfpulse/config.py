@@ -73,10 +73,12 @@ class Settings(BaseSettings):
     binance_base_url: str = "https://data-api.binance.vision"
     binance_use_fixtures: bool = False
 
-    # SoDEX (Phase 3 — demo wallet only)
-    sodex_demo_wallet_address: str = ""
-    sodex_demo_private_key: str = ""
-    sodex_demo_account_id: int = 0
+    # SoDEX execution (Phase 3 / Stage 09): the production backend NEVER
+    # holds, generates, or signs with private keys. Signing happens
+    # wallet-side (wagmi/viem + WalletConnect); the backend only builds
+    # EIP-712 typed-data and submits already-signed payloads. There are
+    # no SoDEX-key settings here by design — see CLAUDE.md "Conventions
+    # to respect" + scripts/sodex_verify/README.md.
 
     # OpenRouter (AI)
     openrouter_api_key: str = ""
