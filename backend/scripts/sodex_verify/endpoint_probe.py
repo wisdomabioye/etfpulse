@@ -129,8 +129,12 @@ async def _probe_one(
         resp = await client.request(method, url, params=query, headers=headers)
     except httpx.RequestError as exc:
         return ProbeResult(
-            name=name, method=method, url=url.replace(address.lower(), "<BURNER_ADDR>"),
-            status=None, elapsed_ms=None, error=f"{type(exc).__name__}: {exc}",
+            name=name,
+            method=method,
+            url=url.replace(address.lower(), "<BURNER_ADDR>"),
+            status=None,
+            elapsed_ms=None,
+            error=f"{type(exc).__name__}: {exc}",
             headers_sent=headers,
         )
 
@@ -154,7 +158,10 @@ async def _probe_one(
 
 async def main_async(out_path: str, address: str, timeout_s: float) -> int:
     if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
-        print(f"ERROR: SODEX_VERIFY_ADDRESS={address!r} is not a 20-byte EVM address.", file=sys.stderr)
+        print(
+            f"ERROR: SODEX_VERIFY_ADDRESS={address!r} is not a 20-byte EVM address.",
+            file=sys.stderr,
+        )
         return 2
 
     targets = SPOT_TARGETS + PERPS_TARGETS
@@ -195,8 +202,7 @@ async def main_async(out_path: str, address: str, timeout_s: float) -> int:
 
     n_ok = sum(1 for r in results if r.status is not None and 200 <= r.status < 300)
     print(
-        f"\nDone. {n_ok}/{len(results)} probes returned 2xx. "
-        f"Wrote {out_path}.",
+        f"\nDone. {n_ok}/{len(results)} probes returned 2xx. Wrote {out_path}.",
         file=sys.stderr,
     )
     print(
