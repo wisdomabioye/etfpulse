@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from etfpulse.config import settings
 
@@ -36,6 +37,14 @@ _TELEGRAM_FIELD_NAMES: tuple[str, ...] = (
     "telegram_webhook_secret",
     "telegram_webhook_url_suffix",
 )
+
+# PR D.3 — execution-cap dev default. If prod still carries this value
+# the operator hasn't reviewed the cap; surface as a warning so a real
+# trading session doesn't start with $10k/day "I forgot to set this."
+_EXECUTION_DAILY_NOTIONAL_DEV_DEFAULT = Decimal("10000")
+# Above this leverage the cap is generous beyond retail-prudent norms;
+# warn but don't block (sophisticated operators may want it).
+_EXECUTION_LEVERAGE_PRUDENT_CEILING = 10
 
 
 @dataclass(frozen=True)
@@ -154,5 +163,23 @@ def check_config_health() -> ConfigHealth:
                 f"telegram config is partial — present: {sorted(present)}, "
                 f"missing: {sorted(missing)} (run_bot=True but is_bot_enabled=False)"
             )
+
+    # PR D.3 — execution-cap review surface. These don't gate the deploy
+    # (operators may legitimately ship with these values) but a "you
+    # haven't reviewed this" warning forces a conscious sign-off before
+    # live trading.
+    if settings.execution_daily_notional_usd_cap == _EXECUTION_DAILY_NOTIONAL_DEV_DEFAULT:
+        warnings.append(
+            f"execution_daily_notional_usd_cap is the dev default "
+            f"({_EXECUTION_DAILY_NOTIONAL_DEV_DEFAULT}) — review before live "
+            "trading. Set EXECUTION_DAILY_NOTIONAL_USD_CAP explicitly to "
+            "acknowledge the per-user 24h ceiling."
+        )
+    if settings.execution_max_leverage > _EXECUTION_LEVERAGE_PRUDENT_CEILING:
+        warnings.append(
+            f"execution_max_leverage={settings.execution_max_leverage} exceeds "
+            f"the retail-prudent ceiling ({_EXECUTION_LEVERAGE_PRUDENT_CEILING}). "
+            "Confirm this is intentional."
+        )
 
     return ConfigHealth(errors=errors, warnings=warnings)

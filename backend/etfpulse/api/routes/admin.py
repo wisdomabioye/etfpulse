@@ -30,10 +30,17 @@ from etfpulse.api.schemas.admin import (
     DeliveryTrace,
     DeliveryTraceRecipient,
     EvalOutcomesResponse,
+    HaltExecutionRequest,
+    HaltExecutionResponse,
+    ResumeExecutionRequest,
+    ResumeExecutionResponse,
     RetryAiErrorSample,
     RetryAiResponse,
     SchedulerJobInfo,
+    SetPaperTradeRequest,
+    SetPaperTradeResponse,
     SignalStatusCounts,
+    SymbolsRefreshResponse,
 )
 from etfpulse.api.schemas.telegram_admin import (
     RotateWebhookSecretRequest,
@@ -52,11 +59,13 @@ from etfpulse.models import (
     TelegramGroup,
     User,
 )
+from etfpulse.models.regime import CircuitBreakerTrigger
 from etfpulse.pipeline import circuit_breaker
 from etfpulse.pipeline.ai_backfill import backfill_null_ai
 from etfpulse.pipeline.analysis import AI_PROMPT_VERSION
 from etfpulse.pipeline.reapers import DELIVERY_REAPER_ERROR
 from etfpulse.pipeline.scheduler import _run_cycle_with_session
+from etfpulse.pipeline.symbols_refresh import refresh_sodex_symbols
 from etfpulse.pipeline.track_record import evaluate_pending_outcomes
 
 log = structlog.get_logger()
@@ -712,3 +721,211 @@ async def _do_rotate(
     log.info("webhook_rotate_complete")
 
     return RotateWebhookSecretResponse(secret=new_secret)
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — execution-surface admin routes
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/execution/halt",
+    response_model=HaltExecutionResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def halt_execution(
+    body: HaltExecutionRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> HaltExecutionResponse:
+    """Trip the `manual` circuit breaker, halting future order prepares.
+
+    `user_id=None` (default) → global halt. Non-None → per-user halt.
+    Idempotent via `circuit_breaker.record` — a second call with the
+    same scope returns `already_active=True` and no new row.
+
+    Existing in-flight orders are NOT cancelled — only NEW prepare_new
+    calls are blocked by the risk controller's breaker gates. To
+    actively cancel open orders, use `prepare_cancel` per-order.
+    """
+    row = await circuit_breaker.record(
+        session,
+        CircuitBreakerTrigger.MANUAL.value,
+        details={"reason": body.reason},
+        user_id=body.user_id,
+    )
+
+    scope = "global" if body.user_id is None else "user"
+    if row is None:
+        # PR D.3.1 — idempotent no-op path. Surface the EXISTING breaker's
+        # id + triggered_at + details so the operator can see who/when/why
+        # the scope is already halted (previously the response was just
+        # `breaker_id=None, already_active=True` with no actionable info).
+        existing = await circuit_breaker.find_active(
+            session,
+            CircuitBreakerTrigger.MANUAL.value,
+            user_id=body.user_id,
+        )
+        await session.commit()
+        if existing is None:
+            # PR D.3.2 — distinguish "system inconsistent" from
+            # "concurrent admin action." If `record()` said "already
+            # active" but `find_active()` finds none, the most likely
+            # cause is a parallel `resume_execution` resolving the
+            # breaker between the two calls. That's a legitimate race
+            # (operator halted + immediately resumed), not a service
+            # failure. Return 409 Conflict with an actionable message
+            # so the caller can re-issue the halt if needed.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "halt was active and has just been resolved by a "
+                    "concurrent admin action; re-issue the halt if "
+                    "still needed"
+                ),
+            )
+        log.info(
+            "admin_execution_halt_noop",
+            scope=scope,
+            user_id=body.user_id,
+            reason=body.reason,
+            existing_breaker_id=existing.id,
+        )
+        return HaltExecutionResponse(
+            breaker_id=existing.id,
+            scope=scope,
+            already_active=True,
+            existing_triggered_at=existing.triggered_at,
+            existing_details=existing.details,
+        )
+
+    await session.commit()
+    log.warning(
+        "admin_execution_halted",
+        scope=scope,
+        user_id=body.user_id,
+        breaker_id=row.id,
+        reason=body.reason,
+    )
+    return HaltExecutionResponse(breaker_id=row.id, scope=scope, already_active=False)
+
+
+@router.post(
+    "/execution/resume",
+    response_model=ResumeExecutionResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def resume_execution(
+    body: ResumeExecutionRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> ResumeExecutionResponse:
+    """Resolve the `manual` circuit breaker for the requested scope.
+
+    Global resume (`user_id=None`) does NOT implicitly clear per-user
+    breakers — the two scopes are independent (per
+    `pipeline.circuit_breaker.resolve` contract). To clear both,
+    operator must call resume twice.
+
+    `resolved_by` is hardcoded as `"admin"` — operator identity isn't
+    threaded through the admin auth layer today; if it ever is, this
+    is the call site.
+    """
+    # TODO(operator-identity): `resolved_by` is hardcoded "admin" — the
+    # admin auth layer (require_admin_key) authenticates a key, not an
+    # operator. When we add operator-identity (e.g., per-operator keys
+    # or SSO), thread the identity from the dependency into this call.
+    rowcount = await circuit_breaker.resolve(
+        session,
+        CircuitBreakerTrigger.MANUAL.value,
+        resolved_by="admin",
+        user_id=body.user_id,
+    )
+    await session.commit()
+    scope = "global" if body.user_id is None else "user"
+    log.info(
+        "admin_execution_resumed",
+        scope=scope,
+        user_id=body.user_id,
+        rowcount=rowcount,
+    )
+    return ResumeExecutionResponse(rowcount=rowcount, scope=scope)
+
+
+@router.post(
+    "/users/{user_id}/paper-trade",
+    response_model=SetPaperTradeResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def set_user_paper_trade(
+    user_id: int,
+    body: SetPaperTradeRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> SetPaperTradeResponse:
+    """Toggle a user's `paper_trade` flag.
+
+    Existing Order rows are NOT mutated — `Order.paper_trade` was
+    copied from User at prepare time. Only FUTURE prepare_new calls
+    see the new value.
+
+    **PR D.3.1**: acquires `SELECT ... FOR UPDATE` on the User row
+    BEFORE mutating + committing. This serialises against any
+    concurrent `prepare_new` (which holds the same lock via
+    `risk.check_order`). Without this, a prepare that started before
+    the admin commit could persist an Order with the OLD paper_trade
+    value AFTER the admin commit landed — silent drift between
+    intent and execution. Same primitive as anti-drift rule 30.
+    """
+    locked = await session.execute(select(User).where(User.id == user_id).with_for_update())
+    user = locked.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"user {user_id} not found",
+        )
+    user.paper_trade = body.paper_trade
+    await session.commit()
+    log.info(
+        "admin_set_paper_trade",
+        user_id=user_id,
+        paper_trade=body.paper_trade,
+    )
+    return SetPaperTradeResponse(user_id=user_id, paper_trade=body.paper_trade)
+
+
+@router.post(
+    "/sodex/symbols/refresh",
+    response_model=SymbolsRefreshResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def refresh_sodex_symbols_now(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> SymbolsRefreshResponse:
+    """Force a `sodex_symbols` refresh now instead of waiting for the
+    daily cron.
+
+    Borrows the long-lived spot + perps HTTP clients from
+    `app.state` (stashed by `start_scheduler`). If the scheduler is
+    disabled (no clients on state), returns 503.
+    """
+    # `app.state.sodex_*_client` is set during `start_scheduler` startup
+    # and EXPLICITLY cleared to None in the shutdown finally block (PR D.3.1).
+    # Either un-set OR explicitly None means the scheduler isn't currently
+    # owning live clients — return 503 in both cases.
+    spot_client = getattr(request.app.state, "sodex_spot_client", None)
+    perps_client = getattr(request.app.state, "sodex_perps_client", None)
+    if spot_client is None or perps_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="scheduler disabled or shutting down — SoDEX clients unavailable",
+        )
+
+    summary = await refresh_sodex_symbols(
+        session, spot_client=spot_client, perps_client=perps_client
+    )
+    await session.commit()
+    log.info("admin_symbols_refresh_done", **summary)
+    return SymbolsRefreshResponse(**summary)

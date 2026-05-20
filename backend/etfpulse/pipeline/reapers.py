@@ -30,7 +30,14 @@ from sqlalchemy import CursorResult, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.config import settings
-from etfpulse.models import DeliveryStatus, Signal, SignalDelivery, SignalStatus
+from etfpulse.models import (
+    DeliveryStatus,
+    Order,
+    OrderStatus,
+    Signal,
+    SignalDelivery,
+    SignalStatus,
+)
 
 log = structlog.get_logger()
 
@@ -119,4 +126,60 @@ async def fail_stuck_deliveries(session: AsyncSession) -> dict[str, int]:
             cutoff=cutoff.isoformat(),
             **summary,
         )
+    return summary
+
+
+# PR D.3 — order statuses that should be terminalised on nonce-window
+# expiry. PARTIALLY_FILLED is included: the filled portion's Position
+# is already in our DB; transitioning Order to EXPIRED doesn't unwind
+# the position. The audit trail (filled_size on Order, Position row) is
+# preserved.
+_OVERDUE_ORDER_STATUSES: frozenset[str] = frozenset(
+    {
+        OrderStatus.PENDING.value,
+        OrderStatus.SUBMITTED.value,
+        OrderStatus.ACKED.value,
+        OrderStatus.PARTIALLY_FILLED.value,
+    }
+)
+
+
+async def expire_overdue_orders(session: AsyncSession) -> dict[str, int]:
+    """Bulk-update orders past their EIP-712 nonce window.
+
+    The SoDEX gateway enforces a 1-day nonce window (api.md). Once
+    `nonce_expires_at < now`, the signed payload can no longer be
+    submitted — even retry is structurally impossible without
+    re-signing. This reaper terminalises orders that haven't reached
+    a real terminal state (filled/cancelled/rejected) by that point.
+
+    Targets only rows where:
+        - `status IN (pending, submitted, acked, partially_filled)`
+        - `nonce_expires_at IS NOT NULL`
+        - `nonce_expires_at < now()`
+
+    The partial index `ix_orders_expires` is predicate-aligned with
+    this exact WHERE clause for index-only scan performance.
+
+    Idempotent — re-runs are no-ops because once a row is EXPIRED it
+    no longer matches the predicate. PARTIALLY_FILLED rows' filled_size
+    is preserved (the Position row was opened on the original fill;
+    EXPIRED just closes the Order's lifecycle).
+
+    D14: does NOT commit. Returns `{expired: N}`.
+    """
+    now = datetime.now(UTC)
+    stmt = (
+        update(Order)
+        .where(
+            Order.status.in_(_OVERDUE_ORDER_STATUSES),
+            Order.nonce_expires_at.is_not(None),
+            Order.nonce_expires_at < now,
+        )
+        .values(status=OrderStatus.EXPIRED.value)
+    )
+    result = cast(CursorResult[Any], await session.execute(stmt))
+    summary = {"expired": result.rowcount or 0}
+    if summary["expired"] > 0:
+        log.info("orders_reaper_expired", **summary)
     return summary

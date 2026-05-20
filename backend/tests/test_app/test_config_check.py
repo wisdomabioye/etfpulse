@@ -33,6 +33,13 @@ def production(monkeypatch):
     # "clean prod" baseline. Drop it for every production test; the
     # deprecation-specific test re-sets it explicitly.
     monkeypatch.delenv("ACCELERATION_MIN_PRIOR_USD", raising=False)
+    # PR D.3 — production "clean" baseline must override the dev-default
+    # execution cap so the new "you haven't reviewed this" warning doesn't
+    # spuriously trip the clean-prod test. The leverage default (5) is
+    # already under the prudent ceiling so doesn't need overriding.
+    from decimal import Decimal  # local import — fixture scope
+
+    monkeypatch.setattr(settings, "execution_daily_notional_usd_cap", Decimal("50000"))
 
 
 def test_dev_returns_empty_report(monkeypatch):
@@ -173,4 +180,47 @@ def test_dev_does_not_emit_acceleration_min_prior_usd_warning(monkeypatch):
     monkeypatch.setattr(settings, "app_env", "development")
     monkeypatch.setenv("ACCELERATION_MIN_PRIOR_USD", "750000")
     report = check_config_health()
+    assert report.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — execution-cap preflight
+# ---------------------------------------------------------------------------
+
+
+def test_production_execution_daily_cap_at_dev_default_is_warning(production, monkeypatch):
+    """Dev default = 10000. Prod must override before live trading; warn
+    when it hasn't been touched."""
+    from decimal import Decimal
+
+    monkeypatch.setattr(settings, "execution_daily_notional_usd_cap", Decimal("10000"))
+    report = check_config_health()
+    assert any("execution_daily_notional_usd_cap is the dev default" in w for w in report.warnings)
+    # Not a hard error — operator may legitimately ship with 10k, just
+    # has to acknowledge it.
+    assert report.errors == []
+
+
+def test_production_execution_leverage_above_prudent_is_warning(production, monkeypatch):
+    """Above 10× is permitted but flagged for review."""
+    monkeypatch.setattr(settings, "execution_max_leverage", 15)
+    report = check_config_health()
+    assert any("execution_max_leverage=15" in w for w in report.warnings)
+    assert report.errors == []
+
+
+def test_production_execution_leverage_at_prudent_ceiling_is_clean(production, monkeypatch):
+    """Exactly 10 stays clean — only ABOVE the ceiling warns."""
+    monkeypatch.setattr(settings, "execution_max_leverage", 10)
+    report = check_config_health()
+    assert not any("execution_max_leverage" in w for w in report.warnings)
+
+
+def test_dev_does_not_emit_execution_warnings(monkeypatch):
+    """Execution-cap preflight is production-gated. Dev stays quiet
+    even with dev-default + high leverage."""
+    monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setattr(settings, "execution_max_leverage", 20)
+    report = check_config_health()
+    assert report.errors == []
     assert report.warnings == []

@@ -62,6 +62,12 @@ class Position(Base):
     paper_trade: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default="false"
     )
+    # PR D.3 — perps-only. NULL on spot positions (spot has no leverage
+    # concept). When set, carries the leverage the opening order requested;
+    # the executor copies it from the Order row at fill time. Numeric(8,2)
+    # admits values up to 999999.99 — well beyond any sane venue cap, but
+    # cheap to allocate.
+    leverage: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -81,6 +87,12 @@ class Position(Base):
         CheckConstraint(
             "venue IN ('sodex_spot','sodex_perps')",
             name="ck_positions_venue_enum",
+        ),
+        # PR D.3 — leverage must be positive when set. NULL admitted
+        # (spot positions never carry leverage).
+        CheckConstraint(
+            "leverage IS NULL OR leverage > 0",
+            name="ck_positions_leverage_positive",
         ),
         Index("ix_positions_user", "user_id"),
         Index("ix_positions_status", "status"),

@@ -112,3 +112,91 @@ class TestCheckConstraint:
             await db_session.execute(select(CircuitBreaker).where(CircuitBreaker.id == good.id))
         ).scalar_one()
         assert found.trigger_type == "manual"
+
+    async def test_daily_loss_limit_accepted(self, db_session):
+        """PR D.3 — new enum value `daily_loss_limit` admitted by CHECK."""
+        row = await circuit_breaker.record(
+            db_session,
+            CircuitBreakerTrigger.DAILY_LOSS_LIMIT.value,
+        )
+        assert row is not None
+        assert row.trigger_type == "daily_loss_limit"
+
+
+class TestPerUserScope:
+    """PR D.3 — `user_id` column scopes the breaker. NULL = global."""
+
+    async def _seed_user(self, db_session) -> int:
+        from etfpulse.models.user import User
+
+        u = User()
+        db_session.add(u)
+        await db_session.flush()
+        return u.id
+
+    async def test_per_user_breakers_independent(self, db_session):
+        """Two users hitting the same trigger get distinct breaker rows."""
+        u1 = await self._seed_user(db_session)
+        u2 = await self._seed_user(db_session)
+
+        a = await circuit_breaker.record(
+            db_session, CircuitBreakerTrigger.DAILY_LOSS_LIMIT.value, user_id=u1
+        )
+        b = await circuit_breaker.record(
+            db_session, CircuitBreakerTrigger.DAILY_LOSS_LIMIT.value, user_id=u2
+        )
+        assert a is not None and b is not None
+        assert a.id != b.id
+        assert a.user_id == u1
+        assert b.user_id == u2
+
+    async def test_per_user_idempotent_within_scope(self, db_session):
+        """Same user, same trigger, already-unresolved → no new row."""
+        u1 = await self._seed_user(db_session)
+        first = await circuit_breaker.record(
+            db_session, CircuitBreakerTrigger.MANUAL.value, user_id=u1
+        )
+        second = await circuit_breaker.record(
+            db_session, CircuitBreakerTrigger.MANUAL.value, user_id=u1
+        )
+        assert first is not None
+        assert second is None
+
+    async def test_global_and_per_user_independent(self, db_session):
+        """Global manual breaker + per-user manual breaker coexist."""
+        u1 = await self._seed_user(db_session)
+        g = await circuit_breaker.record(
+            db_session, CircuitBreakerTrigger.MANUAL.value, user_id=None
+        )
+        p = await circuit_breaker.record(db_session, CircuitBreakerTrigger.MANUAL.value, user_id=u1)
+        assert g is not None and p is not None
+        assert g.user_id is None
+        assert p.user_id == u1
+        assert g.id != p.id
+
+    async def test_resolve_scoped_per_user(self, db_session):
+        """Resolving user-scope must NOT touch global; and vice versa."""
+        u1 = await self._seed_user(db_session)
+        await circuit_breaker.record(db_session, CircuitBreakerTrigger.MANUAL.value, user_id=None)
+        await circuit_breaker.record(db_session, CircuitBreakerTrigger.MANUAL.value, user_id=u1)
+
+        # Resolve only user-scope.
+        n = await circuit_breaker.resolve(
+            db_session, CircuitBreakerTrigger.MANUAL.value, resolved_by="ops", user_id=u1
+        )
+        assert n == 1
+        # Global still active.
+        remaining = (
+            (
+                await db_session.execute(
+                    select(CircuitBreaker).where(
+                        CircuitBreaker.trigger_type == "manual",
+                        CircuitBreaker.resolved_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(remaining) == 1
+        assert remaining[0].user_id is None

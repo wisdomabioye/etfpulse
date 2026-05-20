@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     String,
+    Text,
     func,
     text,
 )
@@ -69,9 +70,20 @@ class OrderType(StrEnum):
 
 
 class TimeInForce(StrEnum):
+    """DB-stored TIF values for `Order.time_in_force` (VARCHAR(10) column,
+    no CHECK constraint — extension here is a pure code change).
+
+    Mapping to SoDEX gateway IntEnum values (`adapters.sodex.schemas.TimeInForce`):
+        GTC = "gtc" ↔ IntEnum 1
+        IOC = "ioc" ↔ IntEnum 3
+        FOK = "fok" ↔ IntEnum 2  (gateway docs: "not supported yet")
+        GTX = "gtx" ↔ IntEnum 4  (post-only)
+    """
+
     GTC = "gtc"
     IOC = "ioc"
     FOK = "fok"
+    GTX = "gtx"  # post-only — perps only on SoDEX
 
 
 class Venue(StrEnum):
@@ -175,13 +187,58 @@ class Order(Base):
     # the signature. Stored verbatim so a reconciliation pass can recompute
     # payloadHash byte-for-byte without re-deriving from other columns
     # (which would be brittle if the SDK's field-order rules drift).
-    eip712_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #
+    # PR D.3: **TEXT, not JSONB.** D.1's `TypedDataBundle.payload_json` is a
+    # str whose bytes the wallet signs; JSONB would normalise whitespace
+    # and re-quote numerics, silently breaking the byte-exact contract.
+    # The migration in D.3 converts C.6's JSONB column to TEXT (safe because
+    # Stage 09 hasn't shipped; precondition guard asserts zero rows).
+    # See anti-drift rule 31 + `pipeline/execution/bytes_helpers.py` for
+    # the only sanctioned reader on the HTTP write path.
+    eip712_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PR D.3 — `0x` + 64 lowercase hex chars (keccak256 of `eip712_payload`
+    # bytes). Derivable on demand but persisted for O(1) reconciliation
+    # lookups + log/debug confirmation that what we stored matches what
+    # the wallet signed.
+    eip712_payload_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
     # Typed signature: '0x01' (SoDEX type byte) + 65-byte ECDSA signature.
     # Format = 2 (`0x`) + 2 (`01`) + 130 hex chars = 134 chars; String(140)
     # leaves 6 chars headroom. Stored lowercased (CHECK enforces) so the
     # gateway's case-normalisation behaviour can't cause a stored-vs-replayed
     # mismatch.
     eip712_signature: Mapped[str | None] = mapped_column(String(140), nullable=True)
+
+    # ---- PR D.3 cancel lifecycle ----
+    #
+    # A cancel is a SECOND typed-data action against the same Order row.
+    # Cancel-of-cancel is impossible; cancel-of-PENDING is local-only (no
+    # venue contact, no signature). For ACKED/PARTIALLY_FILLED cancels we
+    # persist the cancel's payload + signature so reconciliation can audit
+    # by re-hashing the stored bytes.
+    #
+    # All five columns are NULL on rows whose order was never cancelled.
+    # `cancel_error_message` is set when the gateway accepts the cancel
+    # request envelope (outer code=0) but rejects the inner item (common:
+    # `"order rejected: OrderNotFound"` when the order filled between
+    # our load and the cancel landing). In that case Order.status is
+    # UNCHANGED — the cancel failed, the order is still live.
+    cancel_nonce: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cancel_eip712_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_eip712_payload_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    cancel_eip712_signature: Mapped[str | None] = mapped_column(String(140), nullable=True)
+    cancel_submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # PR D.3 — conditional-order flag (perps only — stop / trigger orders).
+    # ACKED + is_conditional=True means "trigger pending"; the order is
+    # accepted by the matching engine but won't fill until the trigger
+    # price hits. Reconcile sets this from venue's open-orders response
+    # if present. Defaults False; spot orders never set it.
+    is_conditional: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -221,6 +278,29 @@ class Order(Base):
             "eip712_signature IS NULL OR eip712_signature ~ '^0x01[0-9a-f]{130}$'",
             name="ck_orders_signature_format",
         ),
+        # PR D.3 — eip712_payload_hash format: `0x` + 64 lowercase hex chars.
+        CheckConstraint(
+            "eip712_payload_hash IS NULL OR eip712_payload_hash ~ '^0x[0-9a-f]{64}$'",
+            name="ck_orders_eip712_payload_hash_format",
+        ),
+        # PR D.3 — cancel-side EIP-712 invariants. Mirror the new-order
+        # CHECKs so the cancel branch has the same audit posture.
+        CheckConstraint(
+            "(cancel_nonce IS NULL) = (cancel_eip712_payload IS NULL)",
+            name="ck_orders_cancel_nonce_consistency",
+        ),
+        CheckConstraint(
+            "cancel_eip712_signature IS NULL OR cancel_eip712_payload IS NOT NULL",
+            name="ck_orders_cancel_signature_requires_payload",
+        ),
+        CheckConstraint(
+            "cancel_eip712_signature IS NULL OR cancel_eip712_signature ~ '^0x01[0-9a-f]{130}$'",
+            name="ck_orders_cancel_signature_format",
+        ),
+        CheckConstraint(
+            "cancel_eip712_payload_hash IS NULL OR cancel_eip712_payload_hash ~ '^0x[0-9a-f]{64}$'",
+            name="ck_orders_cancel_payload_hash_format",
+        ),
         Index("ix_orders_user", "user_id"),
         Index("ix_orders_status", "status"),
         Index("ix_orders_exchange", "exchange_order_id"),
@@ -234,23 +314,30 @@ class Order(Base):
             "nonce",
             postgresql_where=text("nonce IS NOT NULL"),
         ),
-        # Reaper scan path. Predicate-aligned with the reaper query so
-        # Postgres can index-only-scan the candidate set instead of
-        # filtering the full table.
+        # Reaper scan path. Predicate-aligned with the reaper query
+        # (`pipeline/reapers.py:expire_overdue_orders`) so Postgres can
+        # index-only-scan the candidate set instead of filtering the full
+        # table.
         #
-        # COUPLING: the status literals `'pending'`, `'submitted'`, `'acked'`
-        # below MUST match `OrderStatus` enum values. If those values are
-        # renamed in `OrderStatus`, this predicate goes silently stale —
-        # the partial index would only cover rows whose status matched the
-        # OLD literal, and the reaper would miss new-name rows. Postgres
-        # does NOT validate partial-index predicates against enum changes.
-        # Anti-drift: any rename to OrderStatus must come with a migration
-        # that drops and recreates this index with the new literals.
+        # PR D.3.1: predicate extended to include `'partially_filled'`.
+        # The original D.3 predicate covered only three statuses, but
+        # the reaper targets four — PARTIALLY_FILLED rows fell back to
+        # seq-scan. Migration `8c61b9480195` re-creates the index with
+        # the broader predicate.
+        #
+        # COUPLING: the status literals below MUST match `OrderStatus`
+        # enum values + `pipeline.reapers._OVERDUE_ORDER_STATUSES`. If
+        # any of the three drifts, the partial index silently misses
+        # rows. Postgres does NOT validate partial-index predicates
+        # against enum changes. Anti-drift: any rename to OrderStatus
+        # must come with a migration that drops and recreates this
+        # index with the new literals.
         Index(
             "ix_orders_expires",
             "nonce_expires_at",
             postgresql_where=text(
-                "nonce_expires_at IS NOT NULL AND status IN ('pending','submitted','acked')"
+                "nonce_expires_at IS NOT NULL "
+                "AND status IN ('pending','submitted','acked','partially_filled')"
             ),
         ),
     )

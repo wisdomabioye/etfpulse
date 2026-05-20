@@ -39,9 +39,16 @@ STARTUP_TASKS: list[StartupTask] = []
 # NOT require editing `app.py` (anti-drift D14); this module is the one place
 # the composition lives. Stage 05 will append the Telegram bot task below.
 from etfpulse.bot.lifespan import start_bot  # noqa: E402
+from etfpulse.pipeline.execution_bootstrap import (  # noqa: E402
+    start_execution_bootstrap,
+)
 from etfpulse.pipeline.scheduler import start_scheduler  # noqa: E402
 
-STARTUP_TASKS.extend([start_scheduler, start_bot])
+# PR D.3 — `start_execution_bootstrap` runs BEFORE the scheduler so the
+# symbols cache is populated by the time the scheduler's first reconcile
+# tick fires (which calls `resolve_symbol_id`). Bot is independent of
+# execution and can register anywhere in the list.
+STARTUP_TASKS.extend([start_execution_bootstrap, start_scheduler, start_bot])
 
 
 def _log_config_preflight() -> None:

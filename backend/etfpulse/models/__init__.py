@@ -27,6 +27,7 @@ from etfpulse.models.signal import (
     SignalStatus,
     SignalType,
 )
+from etfpulse.models.sodex_symbol import SodexSymbol
 from etfpulse.models.user import (
     ChannelType,
     DeliveryPrefsMixin,
@@ -77,4 +78,6 @@ __all__ = [
     "OrderType",
     "TimeInForce",
     "Venue",
+    # SoDEX symbol cache (D.3)
+    "SodexSymbol",
 ]

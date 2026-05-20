@@ -37,6 +37,12 @@ from etfpulse.models import (
     Venue,
 )
 
+# PR D.3 changed `eip712_payload` from JSONB to TEXT — the column now
+# stores the byte-exact JSON the wallet signed, NOT a Python dict. Tests
+# that exercise CHECK constraints pass this compact-JSON string so
+# nothing about the byte-exactness contract leaks into test fixtures.
+_PAYLOAD_TEXT = '{"type":"newOrder","params":{}}'
+
 
 def _base_order_kwargs(
     *,
@@ -136,6 +142,59 @@ class TestPositionVenueEnum:
 
 
 # ---------------------------------------------------------------------------
+# PR D.3 — positions.leverage CHECK (perps-only; NULL on spot)
+# ---------------------------------------------------------------------------
+
+
+class TestPositionLeverageCheck:
+    """`leverage IS NULL OR leverage > 0` — perps leverage must be positive
+    when set. NULL admitted (spot positions never carry leverage)."""
+
+    async def test_null_leverage_accepted(self, db_session):
+        position = Position(
+            venue=Venue.SODEX_SPOT.value,
+            asset="BTC",
+            side=PositionSide.LONG.value,
+            size=Decimal("0.01"),
+            entry_price=Decimal("65000"),
+            status=PositionStatus.OPEN.value,
+        )
+        db_session.add(position)
+        await db_session.flush()
+        assert position.leverage is None
+
+    async def test_positive_leverage_accepted(self, db_session):
+        position = Position(
+            venue=Venue.SODEX_PERPS.value,
+            asset="BTC",
+            side=PositionSide.LONG.value,
+            size=Decimal("0.01"),
+            entry_price=Decimal("65000"),
+            status=PositionStatus.OPEN.value,
+            leverage=Decimal("3"),
+        )
+        db_session.add(position)
+        await db_session.flush()
+        assert position.leverage == Decimal("3")
+
+    @pytest.mark.parametrize("bad_leverage", [Decimal("0"), Decimal("-1")])
+    async def test_zero_or_negative_leverage_rejected(self, db_session, bad_leverage):
+        position = Position(
+            venue=Venue.SODEX_PERPS.value,
+            asset="BTC",
+            side=PositionSide.LONG.value,
+            size=Decimal("0.01"),
+            entry_price=Decimal("65000"),
+            status=PositionStatus.OPEN.value,
+            leverage=bad_leverage,
+        )
+        db_session.add(position)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+# ---------------------------------------------------------------------------
 # EIP-712 integrity CHECKs
 # ---------------------------------------------------------------------------
 
@@ -187,7 +246,7 @@ class TestSignatureRequiresPayload:
         sig = "0x01" + "ab" * 65
         order = Order(
             **_base_order_kwargs(client_order_id="sp-1"),
-            eip712_payload={"type": "newOrder", "params": {}},
+            eip712_payload=_PAYLOAD_TEXT,
             eip712_signature=sig,
         )
         db_session.add(order)
@@ -197,7 +256,7 @@ class TestSignatureRequiresPayload:
         """Build-time state: payload is written before client signs."""
         order = Order(
             **_base_order_kwargs(client_order_id="sp-2"),
-            eip712_payload={"type": "newOrder", "params": {}},
+            eip712_payload=_PAYLOAD_TEXT,
         )
         db_session.add(order)
         await db_session.flush()
@@ -223,7 +282,7 @@ class TestSignatureFormat:
         sig = "0x01" + "ab" * 65
         order = Order(
             **_base_order_kwargs(client_order_id="sf-1"),
-            eip712_payload={"type": "newOrder", "params": {}},
+            eip712_payload=_PAYLOAD_TEXT,
             eip712_signature=sig,
         )
         db_session.add(order)
@@ -246,8 +305,135 @@ class TestSignatureFormat:
     async def test_malformed_signature_rejected(self, db_session, bad_sig):
         order = Order(
             **_base_order_kwargs(client_order_id=f"sf-bad-{hash(bad_sig)}"),
-            eip712_payload={"type": "newOrder", "params": {}},
+            eip712_payload=_PAYLOAD_TEXT,
             eip712_signature=bad_sig,
+        )
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — payload_hash format CHECK
+# ---------------------------------------------------------------------------
+
+
+class TestEip712PayloadHashFormat:
+    """`eip712_payload_hash ~ '^0x[0-9a-f]{64}$'` — keccak256 of payload."""
+
+    async def test_valid_hash_accepted(self, db_session):
+        order = Order(
+            **_base_order_kwargs(client_order_id="ph-1"),
+            eip712_payload=_PAYLOAD_TEXT,
+            eip712_payload_hash="0x" + "ab" * 32,
+        )
+        db_session.add(order)
+        await db_session.flush()
+
+    @pytest.mark.parametrize(
+        "bad_hash",
+        [
+            "0x" + "AB" * 32,  # uppercase
+            "0x" + "ab" * 31,  # too short (62 hex chars)
+            "ab" * 32,  # missing 0x prefix
+            "0x" + "gg" * 32,  # non-hex chars
+            # NB: "too long" cases are caught by VARCHAR(66) length
+            # truncation (DataError), not by this CHECK regex. Tested
+            # implicitly by the column type; not duplicated here.
+        ],
+    )
+    async def test_malformed_hash_rejected(self, db_session, bad_hash):
+        order = Order(
+            **_base_order_kwargs(client_order_id=f"ph-bad-{hash(bad_hash)}"),
+            eip712_payload=_PAYLOAD_TEXT,
+            eip712_payload_hash=bad_hash,
+        )
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — cancel-lifecycle invariants (mirror of new-order)
+# ---------------------------------------------------------------------------
+
+
+class TestCancelLifecycleInvariants:
+    """`cancel_*` columns mirror the new-order EIP-712 invariants. CHECK
+    constraints encode: nonce ⇔ payload (both set or both NULL);
+    signature ⇒ payload; signature format ^0x01[0-9a-f]{130}$;
+    payload_hash format ^0x[0-9a-f]{64}$.
+    """
+
+    async def test_build_time_state_accepted(self, db_session):
+        """payload + nonce set, signature not yet — pre-submission state."""
+        order = Order(
+            **_base_order_kwargs(client_order_id="cl-1"),
+            cancel_nonce=1700000000000,
+            cancel_eip712_payload=_PAYLOAD_TEXT,
+        )
+        db_session.add(order)
+        await db_session.flush()
+
+    async def test_full_cancel_state_accepted(self, db_session):
+        sig = "0x01" + "ab" * 65
+        order = Order(
+            **_base_order_kwargs(client_order_id="cl-2"),
+            cancel_nonce=1700000000001,
+            cancel_eip712_payload=_PAYLOAD_TEXT,
+            cancel_eip712_signature=sig,
+            cancel_eip712_payload_hash="0x" + "cd" * 32,
+        )
+        db_session.add(order)
+        await db_session.flush()
+
+    async def test_signature_without_payload_rejected(self, db_session):
+        sig = "0x01" + "ab" * 65
+        order = Order(
+            **_base_order_kwargs(client_order_id="cl-3"),
+            cancel_eip712_signature=sig,
+        )
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+    async def test_nonce_without_payload_rejected(self, db_session):
+        order = Order(
+            **_base_order_kwargs(client_order_id="cl-4"),
+            cancel_nonce=1700000000002,
+        )
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+    async def test_payload_without_nonce_rejected(self, db_session):
+        order = Order(
+            **_base_order_kwargs(client_order_id="cl-5"),
+            cancel_eip712_payload=_PAYLOAD_TEXT,
+        )
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+    @pytest.mark.parametrize(
+        "bad_sig",
+        [
+            "0x02" + "ab" * 65,  # wrong type byte
+            "0x01" + "AB" * 65,  # uppercase hex
+            "0x01" + "ab" * 64,  # short
+        ],
+    )
+    async def test_malformed_signature_rejected(self, db_session, bad_sig):
+        order = Order(
+            **_base_order_kwargs(client_order_id=f"cl-bs-{hash(bad_sig)}"),
+            cancel_nonce=1700000000003,
+            cancel_eip712_payload=_PAYLOAD_TEXT,
+            cancel_eip712_signature=bad_sig,
         )
         db_session.add(order)
         with pytest.raises(IntegrityError):

@@ -80,6 +80,32 @@ class User(Base, DeliveryPrefsMixin):
     # into a JSONB array or comma-separated string.
     wallet_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
 
+    # PR D.3 — SoDEX execution-surface bindings.
+    #
+    # `sodex_account_id` is the gateway's numeric `accountID` (the `aid`
+    # field on `GET /accounts/{addr}/state` responses, V.3-verified stable
+    # per wallet). Cached so prepare_order doesn't have to round-trip the
+    # gateway just to look it up. Populated at wallet-bind time (D.4).
+    #
+    # `sodex_{spot,perps}_api_key_name` is the NAME of the registered API
+    # key per venue, used in the `X-API-Key` header on signed writes.
+    # The gateway looks up the named key on the target accountID and
+    # recovers the signer from `X-API-Sign`. Registration is per-venue
+    # (V.3 finding) so we cache one name per venue, NULL = not yet
+    # registered on that venue. D.4 owns the bind flow.
+    #
+    # `paper_trade` is an operator-set, per-user toggle: True means
+    # `submit_order` short-circuits before the HTTP call and writes a
+    # simulated ACK. Order.paper_trade is COPIED from this column at
+    # `prepare_order` time (atomically under SELECT FOR UPDATE) so an
+    # operator flip mid-stream doesn't reclassify in-flight orders.
+    sodex_account_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sodex_spot_api_key_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sodex_perps_api_key_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    paper_trade: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

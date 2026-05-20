@@ -42,66 +42,133 @@ async def record(
     session: AsyncSession,
     trigger_type: str,
     details: dict[str, Any] | None = None,
+    user_id: int | None = None,
 ) -> CircuitBreaker | None:
     """Idempotent INSERT for a new breaker activation.
 
     Returns the new row when one is inserted, or None when an unresolved
-    row for the same `trigger_type` already exists (the caller doesn't
-    need to distinguish "first activation now" from "still active from
-    before" — both states mean "breaker is currently tripped").
+    row for the same `(trigger_type, user_id)` scope already exists.
+    Scope dimension (PR D.3):
+      - `user_id=None` → GLOBAL breaker. Idempotency key is
+        `(trigger_type, user_id IS NULL)`.
+      - `user_id=<int>` → per-user breaker. Idempotency key is
+        `(trigger_type, user_id)`. Multiple users can hold the same
+        trigger_type concurrently without de-duping each other; only
+        the same user repeating the same trigger collapses.
 
     `trigger_type` must be one of `CircuitBreakerTrigger`'s values; the DB
-    CHECK constraint (#71) rejects anything else with a clean IntegrityError.
-    """
+    CHECK constraint rejects anything else with a clean IntegrityError.
 
-    existing = await session.execute(
-        select(CircuitBreaker.id)
-        .where(
-            CircuitBreaker.trigger_type == trigger_type,
-            CircuitBreaker.resolved_at.is_(None),
+    PR D.3.1 — race-safe via Postgres `INSERT ... ON CONFLICT DO NOTHING`
+    against the partial unique index `uq_circuit_breakers_active_scope`
+    (introduced by migration 8c61b9480195). The original D.3 used
+    SELECT-then-INSERT, which raced under concurrent record() calls
+    for the same scope → duplicate active rows. The single-statement
+    upsert collapses the race to atomic. When the conflict path fires,
+    the function falls through to `return None` like the original
+    SELECT-miss path; callers' behaviour is unchanged.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    # ON CONFLICT must match the partial unique INDEX
+    # `uq_circuit_breakers_active_scope` — Postgres matches by
+    # `index_elements + index_where`, not `constraint=` (the partial
+    # index has no SQL-standard constraint object).
+    stmt = (
+        pg_insert(CircuitBreaker)
+        .values(trigger_type=trigger_type, user_id=user_id, details=details)
+        .on_conflict_do_nothing(
+            index_elements=[
+                CircuitBreaker.trigger_type,
+                text("COALESCE(user_id, -1)"),
+            ],
+            index_where=text("resolved_at IS NULL"),
         )
-        .limit(1)
+        .returning(CircuitBreaker.id)
     )
-    if existing.scalar_one_or_none() is not None:
+    result = await session.execute(stmt)
+    new_id = result.scalar_one_or_none()
+    if new_id is None:
         logger.debug(
             "circuit_breaker_record_noop",
             trigger_type=trigger_type,
+            user_id=user_id,
             reason="already_unresolved",
         )
         return None
 
-    row = CircuitBreaker(trigger_type=trigger_type, details=details)
-    session.add(row)
-    await session.flush()  # populate row.id without committing
+    # Load the freshly-inserted row so the caller has a fully-populated
+    # CircuitBreaker (matching pre-D.3.1 contract).
+    row = (
+        await session.execute(select(CircuitBreaker).where(CircuitBreaker.id == new_id))
+    ).scalar_one()
     logger.info(
         "circuit_breaker_recorded",
         id=row.id,
         trigger_type=trigger_type,
+        user_id=user_id,
     )
     return row
+
+
+async def find_active(
+    session: AsyncSession,
+    trigger_type: str,
+    user_id: int | None = None,
+) -> CircuitBreaker | None:
+    """Return the currently-active breaker for the requested scope,
+    or None if none exists.
+
+    PR D.3.1 — added so the admin halt route can surface "who/when/why"
+    on the idempotent-noop path (record() returning None doesn't tell
+    the operator which existing breaker is blocking).
+    """
+    q = select(CircuitBreaker).where(
+        CircuitBreaker.trigger_type == trigger_type,
+        CircuitBreaker.resolved_at.is_(None),
+    )
+    if user_id is None:
+        q = q.where(CircuitBreaker.user_id.is_(None))
+    else:
+        q = q.where(CircuitBreaker.user_id == user_id)
+    q = q.order_by(CircuitBreaker.triggered_at.desc()).limit(1)
+    return (await session.execute(q)).scalar_one_or_none()
 
 
 async def resolve(
     session: AsyncSession,
     trigger_type: str,
     resolved_by: str,
+    user_id: int | None = None,
 ) -> int:
-    """Flip every unresolved row for `trigger_type` to resolved.
+    """Flip unresolved rows for the given scope to resolved.
 
-    Returns the number of rows updated. Zero is a valid result (the
-    breaker was already resolved or never recorded). `resolved_by` is
+    Scope dimension (PR D.3):
+      - `user_id=None` → resolves GLOBAL breakers only (rows with
+        `user_id IS NULL`). Does NOT clear per-user breakers.
+      - `user_id=<int>` → resolves only that user's breakers.
+
+    Resolving a global breaker does not implicitly resolve any per-user
+    breakers — they're independent dimensions. Callers wanting "fully
+    clear this user's halt state" must resolve both global (if relevant)
+    and per-user explicitly.
+
+    Returns the number of rows updated. Zero is valid. `resolved_by` is
     free-form — convention: `"auto"` for self-healing, the operator's
     identifier for manual clears.
     """
 
-    stmt = (
-        update(CircuitBreaker)
-        .where(
-            CircuitBreaker.trigger_type == trigger_type,
-            CircuitBreaker.resolved_at.is_(None),
-        )
-        .values(resolved_at=datetime.now(UTC), resolved_by=resolved_by)
+    stmt = update(CircuitBreaker).where(
+        CircuitBreaker.trigger_type == trigger_type,
+        CircuitBreaker.resolved_at.is_(None),
     )
+    if user_id is None:
+        stmt = stmt.where(CircuitBreaker.user_id.is_(None))
+    else:
+        stmt = stmt.where(CircuitBreaker.user_id == user_id)
+    stmt = stmt.values(resolved_at=datetime.now(UTC), resolved_by=resolved_by)
+
     # `rowcount` lives on CursorResult; AsyncSession.execute's static return
     # type doesn't expose it. Same cast pattern as `pipeline/reapers.py`.
     result = cast(CursorResult[Any], await session.execute(stmt))
@@ -110,6 +177,7 @@ async def resolve(
         logger.info(
             "circuit_breaker_resolved",
             trigger_type=trigger_type,
+            user_id=user_id,
             resolved_by=resolved_by,
             rowcount=rowcount,
         )

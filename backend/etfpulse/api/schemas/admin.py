@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SignalStatusCounts(BaseModel):
@@ -269,3 +269,96 @@ class RetryAiResponse(BaseModel):
     updated: int = Field(ge=0)
     failed: int = Field(ge=0)
     error_samples: list[RetryAiErrorSample] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — execution-surface admin schemas
+# ---------------------------------------------------------------------------
+
+
+class HaltExecutionRequest(BaseModel):
+    """`POST /admin/execution/halt`.
+
+    `user_id=None` (default) halts ALL execution globally. Non-None
+    halts only that user. `reason` is free-form operator text and lands
+    in `circuit_breakers.details.reason`.
+    """
+
+    user_id: int | None = Field(default=None, ge=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class HaltExecutionResponse(BaseModel):
+    """Result of a halt request.
+
+    PR D.3.1 — `breaker_id` is now ALWAYS populated:
+      - First halt for the scope: `breaker_id` = newly-inserted row id,
+        `already_active=False`.
+      - Idempotent re-halt: `breaker_id` = existing active row's id,
+        `already_active=True`, plus `existing_triggered_at` +
+        `existing_details` so the operator can see who/when/why the
+        scope is currently halted.
+
+    `scope` is `"global"` or `"user"` for operator clarity.
+    """
+
+    breaker_id: int = Field(ge=1)
+    scope: str
+    already_active: bool
+    existing_triggered_at: datetime | None = None
+    existing_details: dict | None = None
+
+
+class ResumeExecutionRequest(BaseModel):
+    """`POST /admin/execution/resume`. Same scope semantics as halt."""
+
+    user_id: int | None = Field(default=None, ge=1)
+
+
+class ResumeExecutionResponse(BaseModel):
+    """Result of a resume request.
+
+    `rowcount` is the number of breaker rows transitioned to resolved
+    (0 if nothing was active). `scope` mirrors halt's value.
+    """
+
+    rowcount: int = Field(ge=0)
+    scope: str
+
+
+class SetPaperTradeRequest(BaseModel):
+    """`POST /admin/users/{user_id}/paper-trade`. Flips the operator-set
+    per-user flag. Existing orders' `paper_trade` is NOT mutated — only
+    future `prepare_order` calls copy the new value onto new Order rows."""
+
+    paper_trade: bool
+
+
+class SetPaperTradeResponse(BaseModel):
+    user_id: int
+    paper_trade: bool
+
+
+class SymbolsRefreshResponse(BaseModel):
+    """`POST /admin/sodex/symbols/refresh`. Mirrors the
+    `refresh_sodex_symbols` summary so the route is a thin pass-through.
+
+    PR D.3.1 — `extra='ignore'` so future additions to the orchestrator's
+    summary dict (e.g., `delisted_count`, `errors_detail`) don't crash
+    the route. The five fields below remain the documented contract;
+    any extras are silently dropped.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    spot_inserted: int = Field(ge=0)
+    spot_updated: int = Field(ge=0)
+    perps_inserted: int = Field(ge=0)
+    perps_updated: int = Field(ge=0)
+    errors: int = Field(ge=0)
+    # PR D.3.2 — per-row parse-error counts. Non-zero means at least
+    # one venue symbol couldn't be normalized (e.g., malformed name).
+    # Operator should investigate the matching `symbols_refresh_*_row_failed`
+    # log lines.
+    spot_parse_errors: int = Field(default=0, ge=0)
+    perps_parse_errors: int = Field(default=0, ge=0)

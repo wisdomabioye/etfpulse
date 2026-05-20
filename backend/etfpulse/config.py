@@ -498,6 +498,94 @@ class Settings(BaseSettings):
             )
         return self
 
+    # ---------------------------------------------------------------------
+    # Execution surface (PR D.3) — risk caps, reaper cadences, paper slippage
+    # ---------------------------------------------------------------------
+    # Risk-controller caps. Defaults are conservative — production deploys
+    # MUST set `execution_daily_notional_usd_cap` consciously; the
+    # `api/config_check.py` preflight warns when prod still carries the
+    # dev default (10000) so an operator notices before live traffic.
+    #
+    # Range rationale:
+    #   - `max_open_orders_per_user`: 1..100 — a sane upper bound that
+    #     keeps the COUNT(*) gate cheap and prevents a runaway script
+    #     from carpet-bombing the venue.
+    #   - `daily_notional_usd_cap`: 0..10_000_000 — 10M ceiling is the
+    #     "this would be a different conversation" threshold; below 0 is
+    #     meaningless. Operators raising the cap should know what they
+    #     signed up for.
+    #   - `per_symbol_notional_usd_cap`: must be <= the daily cap —
+    #     enforced by a model_validator below so a typo can't admit a
+    #     per-symbol cap higher than the daily.
+    #   - `max_leverage`: 1..20 — 20 is the SoDEX testnet ceiling; mainnet
+    #     may differ but we set a defensive default. Preflight warns above
+    #     10 (retail-prudent line).
+    execution_max_open_orders_per_user: int = Field(default=5, ge=1, le=100)
+    execution_daily_notional_usd_cap: Decimal = Field(
+        default=Decimal("10000"),
+        ge=Decimal("0"),
+        le=Decimal("10000000"),
+    )
+    execution_per_symbol_notional_usd_cap: Decimal = Field(
+        default=Decimal("5000"),
+        # PR D.3.1 — `gt=0` (was `ge=0`). Zero would block every order
+        # (any requested notional > 0 exceeds the cap), which is a
+        # confusing way to express "trading disabled." Operators who
+        # want to halt trading should use `POST /api/admin/execution/halt`
+        # which is purpose-built for it.
+        gt=Decimal("0"),
+        le=Decimal("10000000"),
+    )
+    execution_max_leverage: int = Field(default=5, ge=1, le=20)
+    # Paper-trade simulation: fill price = current spot ± slippage in the
+    # AI's direction. 5 bps (0.05%) is the realistic floor for a small
+    # retail order on a liquid pair. Zero is admitted (instantaneous
+    # fill at exact spot — useful for unit tests).
+    execution_paper_slippage_bps: int = Field(default=5, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def _validate_per_symbol_cap_le_daily(self) -> "Settings":
+        """Per-symbol cap MUST NOT exceed the daily cap.
+
+        A per-symbol cap above the daily cap would never bind — the daily
+        cap would always cut first — so the configuration is logically
+        broken. Catch at boot rather than confusing an operator who
+        wonders why their `EXECUTION_PER_SYMBOL_NOTIONAL_USD_CAP=20000`
+        isn't doing anything with `EXECUTION_DAILY_NOTIONAL_USD_CAP=10000`.
+        """
+        if self.execution_per_symbol_notional_usd_cap > self.execution_daily_notional_usd_cap:
+            raise ValueError(
+                "execution_per_symbol_notional_usd_cap must be <= "
+                "execution_daily_notional_usd_cap. Adjust env vars "
+                "EXECUTION_PER_SYMBOL_NOTIONAL_USD_CAP / "
+                "EXECUTION_DAILY_NOTIONAL_USD_CAP."
+            )
+        return self
+
+    # Order-lifecycle reaper + reconcile cadences. All seconds.
+    # Floors mirror existing reaper conventions (60s minimum so a typo
+    # like `=10` doesn't spam the DB).
+    order_expiry_reaper_interval_seconds: int = Field(default=900, ge=60)
+    order_reconcile_interval_seconds: int = Field(default=60, ge=60)
+    # PR D.3.1 — `min_age` is deliberately `ge=0` (NOT `ge=60` like the
+    # interval fields above) because `0` is a meaningful value: "no min
+    # age, reconcile orders immediately on creation." Useful for
+    # operator-driven force-reconcile flows + tests. The interval
+    # floors of 60s exist to prevent typos like `=10` from spamming
+    # the DB — that concern doesn't apply to a one-shot threshold.
+    order_reconcile_min_age_seconds: int = Field(default=60, ge=0)
+    # Orphan grace: an order missing on venue but past this age + past
+    # nonce_expires_at is logged for operator review. Lower than the
+    # full nonce window (~1d) so we surface drift sooner.
+    order_reconcile_orphan_grace_seconds: int = Field(default=300, ge=60)
+
+    # Daily symbol-refresh cron (cached `sodex_symbols` table). Time in
+    # UTC, matching `scheduler_cron_*`. Default 04:00 fires before the
+    # main daily cycle (04:30) so symbol_id resolution is fresh by the
+    # time signal-driven orders need it.
+    symbols_refresh_cron_hour: int = Field(default=4, ge=0, le=23)
+    symbols_refresh_cron_minute: int = Field(default=0, ge=0, le=59)
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 

@@ -182,3 +182,56 @@ class TestSodexEnvironmentSettings:
         monkeypatch.setenv("SODEX_HTTP_RETRY_MAX_ATTEMPTS", "0")
         with pytest.raises(ValidationError):
             Settings()
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — execution caps + per-symbol invariant
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionCaps:
+    """Settings-level validation for D.3 risk caps.
+
+    The per-symbol ≤ daily invariant is enforced by a `model_validator`
+    so a typo can't admit a per-symbol cap higher than the daily cap
+    (the daily would always cut first, making the config logically broken).
+    """
+
+    def test_defaults_admit(self):
+        """Defaults: 5000 per-symbol ≤ 10000 daily. Pass."""
+        s = Settings()
+        assert s.execution_per_symbol_notional_usd_cap == Decimal("5000")
+        assert s.execution_daily_notional_usd_cap == Decimal("10000")
+
+    def test_per_symbol_equal_to_daily_accepted(self, monkeypatch):
+        """Boundary: per-symbol == daily is allowed (means "this symbol
+        can occupy the entire daily envelope")."""
+        monkeypatch.setenv("EXECUTION_PER_SYMBOL_NOTIONAL_USD_CAP", "10000")
+        monkeypatch.setenv("EXECUTION_DAILY_NOTIONAL_USD_CAP", "10000")
+        s = Settings()
+        assert s.execution_per_symbol_notional_usd_cap == s.execution_daily_notional_usd_cap
+
+    def test_per_symbol_above_daily_rejected(self, monkeypatch):
+        """The misconfiguration we're trying to catch."""
+        monkeypatch.setenv("EXECUTION_PER_SYMBOL_NOTIONAL_USD_CAP", "20000")
+        monkeypatch.setenv("EXECUTION_DAILY_NOTIONAL_USD_CAP", "10000")
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        assert "per_symbol_notional_usd_cap" in str(exc_info.value).lower()
+
+    def test_negative_max_leverage_rejected(self, monkeypatch):
+        monkeypatch.setenv("EXECUTION_MAX_LEVERAGE", "0")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_negative_open_orders_cap_rejected(self, monkeypatch):
+        monkeypatch.setenv("EXECUTION_MAX_OPEN_ORDERS_PER_USER", "0")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_reaper_interval_floor(self, monkeypatch):
+        """60s floor on the order-expiry reaper (same convention as
+        existing reaper cadences)."""
+        monkeypatch.setenv("ORDER_EXPIRY_REAPER_INTERVAL_SECONDS", "30")
+        with pytest.raises(ValidationError):
+            Settings()

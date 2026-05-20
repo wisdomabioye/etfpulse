@@ -972,3 +972,78 @@ class TestGracefulShutdown:
         # Pause was the only sync call; shutdown was attempted via
         # to_thread (which we hung), but never completed within grace.
         scheduler.pause.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# PR D.3 — execution-surface job registration
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionSurfaceJobs:
+    """The three D.3 jobs (order_expiry_reaper, order_reconcile,
+    symbols_refresh) register unconditionally when `run_scheduler=True`.
+    They are NOT gated on `is_bot_enabled` — order lifecycle affects the
+    web UI regardless of Telegram delivery."""
+
+    async def test_all_three_registered(self, monkeypatch, stub_cycle, stub_no_catchup):
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            jobs = {j.id for j in app.state.scheduler.get_jobs()}
+            assert "order_expiry_reaper" in jobs
+            assert "order_reconcile" in jobs
+            assert "symbols_refresh" in jobs
+
+    async def test_clients_attached_to_app_state(self, monkeypatch, stub_cycle, stub_no_catchup):
+        """The shared spot + perps HTTP clients are stashed on
+        `app.state` so admin routes can borrow them."""
+        from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
+        from etfpulse.adapters.sodex.spot_client import SodexSpotClient
+
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            assert isinstance(app.state.sodex_spot_client, SodexSpotClient)
+            assert isinstance(app.state.sodex_perps_client, SodexPerpsClient)
+
+    async def test_not_registered_when_scheduler_disabled(self, monkeypatch):
+        """`run_scheduler=False` → no jobs at all (existing contract)."""
+        monkeypatch.setattr(settings, "run_scheduler", False)
+        app = FastAPI()
+        async with start_scheduler(app):
+            assert not hasattr(app.state, "scheduler")
+            # Clients also not built.
+            assert not hasattr(app.state, "sodex_spot_client")
+
+    async def test_intervals_match_settings(self, monkeypatch, stub_cycle, stub_no_catchup):
+        """Each job's IntervalTrigger / CronTrigger reflects its setting."""
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        monkeypatch.setattr(settings, "order_expiry_reaper_interval_seconds", 600)
+        monkeypatch.setattr(settings, "order_reconcile_interval_seconds", 90)
+        monkeypatch.setattr(settings, "symbols_refresh_cron_hour", 5)
+        monkeypatch.setattr(settings, "symbols_refresh_cron_minute", 15)
+        app = FastAPI()
+        async with start_scheduler(app):
+            jobs = {j.id: j for j in app.state.scheduler.get_jobs()}
+            # IntervalTrigger.interval is a timedelta.
+            assert jobs["order_expiry_reaper"].trigger.interval.total_seconds() == 600
+            assert jobs["order_reconcile"].trigger.interval.total_seconds() == 90
+            # CronTrigger fields are stored as DateTrigger expressions.
+            cron = jobs["symbols_refresh"].trigger
+            assert str(cron.fields[5]) == "5"  # hour
+            assert str(cron.fields[6]) == "15"  # minute
+
+    async def test_all_have_coalesce_and_max_instances_one(
+        self, monkeypatch, stub_cycle, stub_no_catchup
+    ):
+        monkeypatch.setattr(settings, "run_scheduler", True)
+        app = FastAPI()
+        async with start_scheduler(app):
+            jobs = {j.id: j for j in app.state.scheduler.get_jobs()}
+            for job_id in (
+                "order_expiry_reaper",
+                "order_reconcile",
+                "symbols_refresh",
+            ):
+                assert jobs[job_id].max_instances == 1
+                assert jobs[job_id].coalesce is True
