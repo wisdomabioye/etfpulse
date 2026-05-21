@@ -59,6 +59,7 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec("subscribe", "cmd.subscribe.desc"),
     CommandSpec("unsubscribe", "cmd.unsubscribe.desc"),
     CommandSpec("performance", "cmd.performance.desc"),
+    CommandSpec("execute", "cmd.execute.desc"),
     CommandSpec("help", "cmd.help.desc"),
     # Unadvertised alias of `performance`. Reuses the same description key
     # because if it ever appears anywhere (e.g., a future debug command

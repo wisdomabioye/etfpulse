@@ -642,6 +642,21 @@ class Settings(BaseSettings):
     wallet_nonce_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     siwe_statement: str = "Sign in to ETFPulse to manage your trading account."
 
+    # PR D.5.1 — Telegram WebApp initData HMAC verifier.
+    #
+    # `webapp_init_data_max_age_seconds` bounds the replay window: an
+    # initData payload signed by Telegram more than this many seconds
+    # ago is rejected (defense against captured-payload replay). 600s
+    # = 10min — generous enough for user to open the WebApp + load
+    # the SPA, tight enough that a captured initData can't be reused
+    # later.
+    #
+    # The bot token + secret are sourced from the existing
+    # `telegram_bot_token` field (used as the HMAC secret per the
+    # `secret_key = HMAC_SHA256("WebAppData", bot_token)` Telegram
+    # WebApp spec). No new bot-side env variable needed.
+    webapp_init_data_max_age_seconds: int = Field(default=600, ge=60, le=3600)
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

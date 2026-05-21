@@ -31,6 +31,7 @@ from telegram.ext import (
 
 from etfpulse.bot.commands import COMMAND_SPECS
 from etfpulse.bot.handlers.callbacks import handle_callback
+from etfpulse.bot.handlers.execute import cmd_execute
 from etfpulse.bot.handlers.help import cmd_help
 from etfpulse.bot.handlers.membership import handle_my_chat_member
 from etfpulse.bot.handlers.prefs import cmd_prefs
@@ -44,6 +45,7 @@ from etfpulse.bot.handlers.track_record import cmd_performance, cmd_track_record
 # Aliases bind the same callable as their primary: `track_record` shares
 # `cmd_track_record` with the advertised `performance` entry.
 _HANDLERS: dict[str, Callable[..., Any]] = {
+    "execute": cmd_execute,
     "help": cmd_help,
     "performance": cmd_performance,
     "prefs": cmd_prefs,

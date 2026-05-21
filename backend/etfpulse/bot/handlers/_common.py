@@ -22,7 +22,8 @@ from telegram.ext import ContextTypes
 
 from etfpulse.bot.constants import VALID_ASSETS
 from etfpulse.config import settings
-from etfpulse.models import ChannelType, NotificationChannel, TelegramGroup, User
+from etfpulse.identity import resolve_or_create_user_by_tg_id
+from etfpulse.models import TelegramGroup, User
 
 log = structlog.get_logger()
 
@@ -74,53 +75,20 @@ async def get_or_create_target(session: AsyncSession, update: Update) -> Target:
 
 async def _resolve_or_create_user(session: AsyncSession, chat: Chat, tg_user: TgUser) -> User:
     """DM flow — look up existing NotificationChannel, else create User +
-    Channel atomically."""
-    identifier = str(chat.id)
+    Channel atomically.
 
-    # Fast path: already registered.
-    result = await session.execute(
-        select(NotificationChannel).where(
-            NotificationChannel.channel_type == ChannelType.TELEGRAM.value,
-            NotificationChannel.channel_identifier == identifier,
-        )
+    Thin wrapper around `etfpulse.identity.resolve_or_create_user_by_tg_id`
+    so the bot DM path and the D.5 WebApp verifier route share ONE
+    upsert path. For DM chats Telegram protocol guarantees
+    `chat.id == tg_user.id`, so passing either yields the same row —
+    we pass `tg_user.id` explicitly to match the WebApp verifier's
+    `initData.user.id` convention.
+    """
+    return await resolve_or_create_user_by_tg_id(
+        session,
+        tg_user_id=tg_user.id,
+        username=tg_user.username,
     )
-    channel = result.scalar_one_or_none()
-    if channel is not None:
-        user = await session.get(User, channel.user_id)
-        assert user is not None  # FK invariant
-        return user
-
-    # First-time registration — create User with env-driven defaults.
-    user = User(
-        pref_assets=settings.delivery_default_assets_list,
-        pref_min_confidence=settings.delivery_default_min_confidence,
-    )
-    session.add(user)
-    await session.flush()  # assign user.id before we FK to it
-
-    session.add(
-        NotificationChannel(
-            user_id=user.id,
-            channel_type=ChannelType.TELEGRAM.value,
-            channel_identifier=identifier,
-            username=tg_user.username,
-        )
-    )
-    try:
-        await session.flush()
-    except IntegrityError:
-        # Another concurrent /start won the race. Rollback and re-select.
-        await session.rollback()
-        result = await session.execute(
-            select(NotificationChannel).where(
-                NotificationChannel.channel_type == ChannelType.TELEGRAM.value,
-                NotificationChannel.channel_identifier == identifier,
-            )
-        )
-        channel = result.scalar_one()
-        user = await session.get(User, channel.user_id)
-        assert user is not None
-    return user
 
 
 async def _resolve_or_create_group(

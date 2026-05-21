@@ -75,7 +75,23 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "cmd.subscribe.desc": "resume signal delivery",
         "cmd.unsubscribe.desc": "pause signal delivery (preferences preserved)",
         "cmd.performance.desc": "show recent signal track record",
+        "cmd.execute.desc": "open the Execute web app to trade on SoDEX",
         "cmd.help.desc": "show this command list",
+        # /execute (PR D.5.2) — Telegram WebApp launch from the bot.
+        "execute.button_label": "📊 Open Execute",
+        "execute.dm_intro": (
+            "Tap below to open the Execute web app. You'll sign every order in your wallet — "
+            "ETFPulse never holds private keys."
+        ),
+        "execute.group_only": (
+            "🔒 <b>/execute is DM-only</b>\n\n"
+            "Open a direct chat with this bot and run /execute there. Group launches "
+            "don't carry stable wallet identity."
+        ),
+        "execute.not_configured": (
+            "⚠️ The Execute web app isn't configured on this deployment "
+            "(<code>FRONTEND_URL</code> empty). Ping the operator."
+        ),
         # Callback toasts (cap 200 chars per Telegram answerCallbackQuery)
         "callback.not_admin": "Only group admins can change preferences.",
         "callback.last_asset": ("Keep at least one asset selected. Use ⏸ to pause instead."),
@@ -101,7 +117,22 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "cmd.subscribe.desc": "reanudar entrega de señales",
         "cmd.unsubscribe.desc": "pausar entrega (preferencias preservadas)",
         "cmd.performance.desc": "ver historial de rendimiento",
+        "cmd.execute.desc": "abrir la app web Execute para operar en SoDEX",
         "cmd.help.desc": "mostrar esta lista de comandos",
+        "execute.button_label": "📊 Abrir Execute",
+        "execute.dm_intro": (
+            "Toca abajo para abrir Execute. Firmarás cada orden en tu billetera — "
+            "ETFPulse nunca guarda claves privadas."
+        ),
+        "execute.group_only": (
+            "🔒 <b>/execute es solo DM</b>\n\n"
+            "Abre un chat directo con este bot y ejecuta /execute allí. Los lanzamientos "
+            "desde grupos no conllevan una identidad de billetera estable."
+        ),
+        "execute.not_configured": (
+            "⚠️ La app web Execute no está configurada en este despliegue "
+            "(<code>FRONTEND_URL</code> vacío). Contacta al operador."
+        ),
         "callback.not_admin": (
             "Solo los administradores del grupo pueden cambiar las preferencias."
         ),
