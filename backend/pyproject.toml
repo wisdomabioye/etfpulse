@@ -34,6 +34,13 @@ dependencies = [
     # by `api/auth.py` to issue session tokens after SIWE (web) or
     # Telegram WebApp HMAC (PR D.5) bindings succeed.
     "pyjwt[crypto]>=2.9.0",
+    # PR D.4 — EIP-4361 Sign-In-With-Ethereum message parser + verifier.
+    # Re-uses the already-present `eth-account` for signature recovery.
+    # Anti-drift rule 27 is path-scoped to `adapters/sodex/` — the
+    # `siwe` lib (and its `eth_account` recovery primitive) is allowed
+    # outside that path; it does NOT sign anything, only recovers the
+    # signer address from a presented signature.
+    "siwe>=4.4.0",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +78,11 @@ warn_unused_configs = true
 # without sprinkling per-line ignores across the scheduler module.
 [[tool.mypy.overrides]]
 module = "apscheduler.*"
+ignore_missing_imports = true
+
+# `siwe` lib has no py.typed marker. Used only by `api/auth_siwe.py`.
+[[tool.mypy.overrides]]
+module = "siwe.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

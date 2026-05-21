@@ -625,6 +625,23 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
 
+    # PR D.4.2 — SIWE (Sign-In-With-Ethereum) wallet binding flow.
+    #
+    # `wallet_nonce_ttl_seconds` is how long a freshly-issued SIWE nonce
+    # stays valid. 600s = 10min — generous enough for users to read the
+    # wallet prompt, short enough that an intercepted nonce has bounded
+    # replay window. Single-use additionally (consumed on first verify).
+    #
+    # `siwe_statement` is the human-readable text shown in the wallet's
+    # signing prompt. Embedded in the SIWE message; recipients see this
+    # verbatim before clicking "Sign". A distinctive statement helps users
+    # spot phishing attempts ("Sign in to ETFPulse" on a not-ETFPulse
+    # site is suspicious). The verifier does NOT enforce exact match
+    # (would be brittle across i18n / wording revisions) — the FE
+    # always sends this exact text via the `/nonce` response.
+    wallet_nonce_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    siwe_statement: str = "Sign in to ETFPulse to manage your trading account."
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
@@ -638,6 +655,33 @@ class Settings(BaseSettings):
         """Same shape as `cors_origin_list` — comma-separated string in env,
         list in code. Used as default `User.preferences.assets` on /start."""
         return [a.strip().upper() for a in self.delivery_default_assets.split(",") if a.strip()]
+
+    @property
+    def siwe_domain(self) -> str:
+        """RFC 3986 authority (host[:port]) of the SPA — the SIWE `domain`
+        field every wallet shows to the user before signing.
+
+        Derived from `frontend_url` so a single env (`FRONTEND_URL`) drives
+        both the signal-alert deep-link AND the SIWE binding domain. Empty
+        `frontend_url` → empty string here; the verify route refuses to
+        operate without a configured domain, which the prod preflight
+        already gates on `frontend_url` being non-empty.
+
+        Includes port when non-default (e.g. `localhost:5173` in dev,
+        `etfpulse.app` in prod — port 443 stripped per RFC 3986).
+        """
+        if not self.frontend_url:
+            return ""
+        # Local import — urlparse is stdlib but parsing only matters here.
+        from urllib.parse import urlparse
+
+        parsed = urlparse(self.frontend_url)
+        # `netloc` is host[:port]; matches what EIP-4361 §4 calls `domain`.
+        # Empty if frontend_url is malformed (no scheme); fall back to the
+        # raw value so a misconfigured operator still gets a non-empty
+        # domain to compare against (verify will then fail mismatched and
+        # surface the misconfig).
+        return parsed.netloc or self.frontend_url
 
     # ---------------------------------------------------------------------
     # SoDEX resolved-config properties
