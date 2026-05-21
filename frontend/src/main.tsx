@@ -1,8 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { WagmiProvider } from 'wagmi'
 import './index.css'
 import App from './App.tsx'
+import { wagmiConfig } from './lib/wagmi'
 
 // Single QueryClient for the app. Defaults:
 //   - staleTime 30s — dashboard stats + feed don't need sub-second freshness;
@@ -22,10 +24,16 @@ const queryClient = new QueryClient({
   },
 })
 
+// Provider order: WagmiProvider OUTSIDE QueryClientProvider because wagmi
+// v2 piggybacks on the same `@tanstack/react-query` instance — wagmi's
+// hooks need to find the QueryClient in context. Wrapping wagmi outside
+// then query inside keeps wagmi's mutations addressable from any descendant.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </WagmiProvider>
   </StrictMode>,
 )
