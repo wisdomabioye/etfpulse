@@ -3,6 +3,7 @@ import { AuthProvider } from './auth/AuthContext';
 import { Footer, TopNav } from './components/layout';
 import { Admin } from './pages/Admin';
 import { Analytics } from './pages/Analytics';
+import { Execute } from './pages/Execute';
 import { Home } from './pages/Home';
 import { Login } from './pages/Login';
 import { Regime } from './pages/Regime';
@@ -27,9 +28,12 @@ function App() {
                 <Route path="/regime" element={<Regime />} />
                 <Route path="/track-record" element={<TrackRecord />} />
                 <Route path="/analytics" element={<Analytics />} />
-                {/* PR D.4.5 — wallet auth surface. Unlisted from TopNav
-                    until D.4.6 adds the /execute page that requires it. */}
+                {/* PR D.4.5/D.4.6 — wallet auth + execute surfaces.
+                    Unlisted from TopNav for now; surfaced via direct
+                    URL or the Login redirect. TopNav integration is
+                    Stage 10 polish. */}
                 <Route path="/login" element={<Login />} />
+                <Route path="/execute" element={<Execute />} />
                 {/* Unlisted from TopNav — operator route, accessed by direct URL. */}
                 <Route path="/admin" element={<Admin />} />
               </Routes>

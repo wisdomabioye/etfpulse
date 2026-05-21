@@ -142,6 +142,23 @@ def test_telegram_partial_skipped_when_run_bot_false(production, monkeypatch):
     assert not any("telegram" in w for w in report.warnings)
 
 
+def test_production_unknown_sodex_chain_id_is_warning(production, monkeypatch):
+    """PR D.4 — devs may override `SODEX_TESTNET_CHAIN_ID` for a private
+    chain; production deploys should match a known SoDEX environment.
+    Drift between FE `VITE_SODEX_CHAIN_ID` and backend `sodex_chain_id`
+    silently fails every SIWE verify with `chain_id mismatch` — the
+    preflight surfaces the unexpected value at boot so the operator
+    sees the divergence before users do."""
+    # Override the env-derived chain id to a known-bogus value via the
+    # underlying field (the property derives from sodex_environment +
+    # the per-env id fields, so override the testnet field directly).
+    monkeypatch.setattr(settings, "sodex_environment", "testnet")
+    monkeypatch.setattr(settings, "sodex_testnet_chain_id", 999_999)
+    report = check_config_health()
+    assert any("sodex_chain_id=" in w and "not a known" in w for w in report.warnings)
+    assert report.ok is True  # warning, not error
+
+
 def test_production_short_jwt_secret_is_warning(production, monkeypatch):
     """RFC 7518 §3.2 — HS256 keys should be ≥32 bytes. pyjwt warns at
     runtime but the preflight surfaces it once at boot so operators

@@ -35,10 +35,9 @@ import { isWalletConnectAvailable } from '../lib/wagmi';
 export function Login() {
   const { isAuthed } = useAuth();
   if (isAuthed) {
-    // Already logged in — bounce away. Target `/` (Home) until D.4.6
-    // ships `/execute`; once that route exists, update this redirect.
-    // `replace` so back-button doesn't re-show /login after a refresh.
-    return <Navigate to="/" replace />;
+    // Already logged in — bounce to the Execute page. `replace` so
+    // back-button doesn't re-show /login after a refresh.
+    return <Navigate to="/execute" replace />;
   }
   if (!isWalletConnectAvailable) {
     // Deployment didn't set VITE_WALLETCONNECT_PROJECT_ID; AppKit isn't
@@ -108,8 +107,7 @@ function LoginWithWallet() {
     try {
       const resp = await performSiweLogin({ address, signMessageAsync });
       login(resp.jwt);
-      // useAuth's isAuthed flips → parent <Login> returns <Navigate to="/">.
-      // D.4.6 will switch the redirect target to /execute.
+      // useAuth's isAuthed flips → parent <Login> returns <Navigate to="/execute">.
     } catch (e) {
       // Distinguish user-rejected (common, expected) from genuine
       // errors. wagmi/viem throws a `UserRejectedRequestError` with

@@ -42,6 +42,12 @@ _TELEGRAM_FIELD_NAMES: tuple[str, ...] = (
 # the operator hasn't reviewed the cap; surface as a warning so a real
 # trading session doesn't start with $10k/day "I forgot to set this."
 _EXECUTION_DAILY_NOTIONAL_DEV_DEFAULT = Decimal("10000")
+
+# PR D.4 — canonical SoDEX chainIds, V.3-verified for testnet and per
+# api.md for mainnet. Hardcoded (NOT pulled from settings) so a dev
+# override of `SODEX_TESTNET_CHAIN_ID` is flagged, not normalised away.
+_CANONICAL_SODEX_CHAIN_IDS: frozenset[int] = frozenset({138565, 286623})
+
 # Above this leverage the cap is generous beyond retail-prudent norms;
 # warn but don't block (sophisticated operators may want it).
 _EXECUTION_LEVERAGE_PRUDENT_CEILING = 10
@@ -151,6 +157,26 @@ def check_config_health() -> ConfigHealth:
             f"jwt_secret is short ({len(settings.jwt_secret)} chars) — "
             "RFC 7518 §3.2 recommends ≥32 bytes for HS256. Rotate to "
             "`openssl rand -hex 32` (64 hex chars)."
+        )
+
+    # PR D.4 — `sodex_chain_id` outside the canonical set is allowed
+    # (devs may run a private chain for testing) but worth flagging in
+    # prod. The FE pins `VITE_SODEX_CHAIN_ID` to match — drift between
+    # FE↔BE causes `/api/wallet/verify` to reject every SIWE with
+    # `chain_id mismatch`. A surfaced warning means the operator sees
+    # the unexpected value at boot rather than diagnosing the mismatch
+    # from FE error toasts.
+    #
+    # Compared against hardcoded canonical IDs (NOT the configurable
+    # per-env settings fields) so an operator overriding
+    # `SODEX_TESTNET_CHAIN_ID=999` lands here. If we compared against
+    # the live settings the check would be tautological.
+    if settings.sodex_chain_id not in _CANONICAL_SODEX_CHAIN_IDS:
+        warnings.append(
+            f"sodex_chain_id={settings.sodex_chain_id} is not a known SoDEX "
+            f"environment (testnet=138565, mainnet=286623). FE "
+            "VITE_SODEX_CHAIN_ID must match exactly or SIWE verify "
+            "rejects every signature."
         )
 
     # `frontend_url` pointing at localhost in prod: button works for the
