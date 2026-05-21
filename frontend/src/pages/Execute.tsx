@@ -29,9 +29,11 @@
  * resolves locally (no wallet prompt needed; `local_only=true`).
  */
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { useSignTypedData } from 'wagmi';
+import { useAccount, useSignMessage, useSignTypedData } from 'wagmi';
+import { useAppKit } from '@reown/appkit/react';
+import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../api/client';
 import type {
@@ -41,8 +43,10 @@ import type {
   Venue,
   WalletMeResponse,
 } from '../api/execution';
+import { performSiweLogin } from '../auth/siwe';
 import { useAuth } from '../auth/useAuth';
 import {
+  KEY_WALLET_ME,
   useOrders,
   usePositions,
   usePrepareCancel,
@@ -54,6 +58,7 @@ import {
   useWalletMe,
 } from '../hooks/useExecution';
 import { toSodexTypedSignature } from '../lib/sodex-sig';
+import { isWalletConnectAvailable } from '../lib/wagmi';
 
 // Order statuses that can be cancelled. Anything else either has no
 // venue presence yet (PENDING is a local cancel) or is already
@@ -95,11 +100,155 @@ function ExecuteInner() {
   return (
     <PageShell>
       <AccountStrip me={me.data} />
+      {/* Telegram-WebApp users land here with a JWT but no bound wallet.
+          Surface a CTA that explains the gap before the page renders the
+          form sections — without a wallet, prepare_new would 403 with
+          `wallet_not_bound` and the user has no idea why. */}
+      {me.data.wallet_address === null && <WalletMissingNotice />}
       <ApiKeySection me={me.data} />
       <OrderFormSection me={me.data} />
       <OrdersTableSection />
       <PositionsSection />
     </PageShell>
+  );
+}
+
+function WalletMissingNotice() {
+  // Telegram-WebApp users land here with a JWT but `wallet_address=null`.
+  // Run SIWE inline — the backend (`/api/wallet/verify`) honors the
+  // inbound Authorization header and BINDS the wallet to the existing
+  // user instead of creating a duplicate row (D.5 Option A).
+  //
+  // Inside Telegram's WebView there's no `window.ethereum` provider —
+  // wallet connect goes through WalletConnect v2 deep links (Reown
+  // AppKit modal). On mobile that means: tap Connect → wallet app
+  // opens → approve → back to Telegram → tap Sign → wallet app opens
+  // → sign → back to Telegram. Friction-y but functional.
+  //
+  // Component split: `useAppKit()` THROWS at render time if
+  // `createAppKit` was never called (no `VITE_WALLETCONNECT_PROJECT_ID`
+  // path in `wagmi.ts`). Without the split, an Execute-page visit
+  // with `wallet_address=null` on a no-projectId deploy would crash
+  // the page. Same pattern as `<Login>` (D.4.5) — render conditional
+  // BEFORE calling AppKit hooks.
+  if (!isWalletConnectAvailable) {
+    return <WalletMissingUnavailable />;
+  }
+  return <WalletMissingWithWallet />;
+}
+
+function WalletMissingUnavailable() {
+  return (
+    <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-2">
+      <h2 className="text-lg font-semibold text-amber-200">Wallet not bound</h2>
+      <p className="text-text-2 text-sm">
+        Wallet Connect isn&apos;t configured on this deployment, so wallet binding can&apos;t
+        run here. The site administrator must set{' '}
+        <code className="text-text-1">VITE_WALLETCONNECT_PROJECT_ID</code> and redeploy. Until
+        then, trading is disabled.
+      </p>
+    </section>
+  );
+}
+
+function WalletMissingWithWallet() {
+  // Safe to call AppKit hooks unconditionally — this component only
+  // mounts when `isWalletConnectAvailable` is true (verified by the
+  // parent <WalletMissingNotice>).
+  const { login, jwt } = useAuth();
+  const { address, isConnected } = useAccount();
+  const { open } = useAppKit();
+  const { signMessageAsync } = useSignMessage();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Synchronous in-flight guard. `busy` is React state — `setBusy(true)`
+  // doesn't update the DOM until next paint, so a fast double-click
+  // would slip past the `disabled` prop and fire `handleSign` twice
+  // (two nonces, two wallet sign prompts). Same fix as D.4.5 Login.
+  const inFlightRef = useRef(false);
+
+  async function handleConnect() {
+    setError(null);
+    try {
+      await open();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to open wallet picker.');
+    }
+  }
+
+  async function handleSign() {
+    if (!address) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      // performSiweLogin uses apiPost, which auto-attaches the current
+      // JWT as Authorization. Backend route detects it and binds the
+      // verified wallet to the existing User row.
+      const resp = await performSiweLogin({ address, signMessageAsync });
+      login(resp.jwt);
+      // /me query result must refetch — the user.wallet_address column
+      // just flipped from null to bound. Use the canonical key from
+      // useExecution to avoid drift if the key shape ever changes.
+      qc.invalidateQueries({ queryKey: KEY_WALLET_ME });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/rejected|denied/i.test(msg)) {
+        setError('Signature rejected. Tap "Sign in" to retry.');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      inFlightRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  // Defensive — should never see this section if not authed (parent
+  // <Execute> redirects on !isAuthed), but the JWT must be present
+  // for the bind-to-existing path to work on the backend.
+  if (!jwt) return null;
+
+  return (
+    <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+      <h2 className="text-lg font-semibold text-amber-200">Bind a wallet to start trading</h2>
+      <p className="text-text-2 text-sm">
+        You&apos;re signed in via Telegram, but no SoDEX-trading wallet is connected yet.
+        Connect a wallet and sign a one-time message — your Telegram session stays the
+        same, we just attach your wallet to it. We never hold private keys; every order
+        is signed in your wallet.
+      </p>
+      {!isConnected ? (
+        <button
+          type="button"
+          onClick={handleConnect}
+          className="px-4 py-2 rounded-lg bg-accent-1 text-bg-0 font-medium"
+        >
+          Connect Wallet
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-xs text-text-2">
+            Connected as <code className="text-text-1">{address}</code>
+          </div>
+          <button
+            type="button"
+            onClick={handleSign}
+            disabled={busy}
+            className="px-4 py-2 rounded-lg bg-accent-1 text-bg-0 font-medium disabled:opacity-50"
+          >
+            {busy ? 'Waiting for signature…' : 'Sign in with Ethereum'}
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+    </section>
   );
 }
 

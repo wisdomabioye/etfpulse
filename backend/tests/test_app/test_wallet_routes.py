@@ -493,6 +493,130 @@ async def test_api_key_rejects_malformed_name(client, db_session, burner):
 # ---------------------------------------------------------------------------
 
 
+async def test_verify_with_authed_jwt_binds_to_existing_user(client, db_session, burner):
+    """PR D.5 Option A: a Telegram-WebApp-bound user (JWT present,
+    wallet_address NULL) running SIWE must bind the wallet to THAT
+    existing user, NOT create a new one. Otherwise the user has two
+    rows (one keyed by tg_user_id, one keyed by wallet_address) and
+    the FE silently swaps to the wallet-keyed JWT."""
+    from etfpulse.api.auth import mint_jwt
+
+    # Pre-create a wallet-less user (simulating Telegram-WebApp bind).
+    existing = User(wallet_address=None)
+    db_session.add(existing)
+    await db_session.flush()
+    existing_id = existing.id
+    jwt = mint_jwt(existing_id)
+
+    # SIWE bind WITH the JWT attached.
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+        headers={"Authorization": f"Bearer {jwt}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # MUST be the existing user_id, not a fresh insert.
+    assert body["user_id"] == existing_id
+    assert body["wallet_address"] == burner.address.lower()
+
+    # No duplicate user row exists with this wallet.
+    result = await db_session.execute(
+        select(User).where(User.wallet_address == burner.address.lower())
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 1
+    assert rows[0].id == existing_id
+
+
+async def test_verify_authed_path_idempotent_rebind(client, db_session, burner):
+    """Re-running SIWE with the SAME wallet for an already-bound user
+    is a no-op — same user_id, same wallet. Useful when the FE
+    retries verify after a network blip."""
+    from etfpulse.api.auth import mint_jwt
+
+    user = User(wallet_address=burner.address.lower())
+    db_session.add(user)
+    await db_session.flush()
+    user_id = user.id
+    jwt = mint_jwt(user_id)
+
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+        headers={"Authorization": f"Bearer {jwt}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["user_id"] == user_id
+
+
+async def test_verify_authed_user_with_different_wallet_409(client, db_session, burner):
+    """User already has a different wallet → 409 (no silent swap).
+    Operator must explicitly unbind the prior wallet first."""
+    from etfpulse.api.auth import mint_jwt
+
+    user = User(wallet_address="0x" + "1" * 40)  # different wallet
+    db_session.add(user)
+    await db_session.flush()
+    user_id = user.id
+    jwt = mint_jwt(user_id)
+
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+        headers={"Authorization": f"Bearer {jwt}"},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == "wallet_swap_not_allowed"
+
+
+async def test_verify_authed_wallet_already_owned_by_other_user_409(client, db_session, burner):
+    """Wallet is already bound to user A; user B tries to bind it.
+    409. The partial UNIQUE index would also catch this at flush, but
+    the pre-check produces a friendlier 409 with a specific detail."""
+    from etfpulse.api.auth import mint_jwt
+
+    user_a = User(wallet_address=burner.address.lower())  # owns the wallet
+    user_b = User(wallet_address=None)  # tries to claim it
+    db_session.add_all([user_a, user_b])
+    await db_session.flush()
+    user_b_id = user_b.id
+    jwt = mint_jwt(user_b_id)
+
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+        headers={"Authorization": f"Bearer {jwt}"},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == "wallet_already_bound_to_other_user"
+
+
+async def test_verify_stale_jwt_falls_through_to_anonymous_path(client, db_session, burner):
+    """A broken-but-non-empty Authorization header (e.g., expired
+    JWT, garbled, wrong audience) MUST NOT block a legitimate
+    first-time SIWE bind. The route silently falls through to the
+    anonymous create-or-find path."""
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+        headers={"Authorization": "Bearer not.a.valid.jwt"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["wallet_address"] == burner.address.lower()
+
+
 async def test_verify_handles_concurrent_insert_race(client, db_session, burner):
     """Simulate the race: another transaction inserts the same wallet
     before our flush. The route's IntegrityError handler rolls back +

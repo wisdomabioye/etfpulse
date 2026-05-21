@@ -33,7 +33,10 @@ import {
   postWalletApiKey,
 } from '../api/execution';
 
-const KEY_WALLET_ME = ['wallet', 'me'] as const;
+// Exported so callers outside this module (e.g., the Execute page's
+// SIWE bind-to-current flow) can invalidate the cache with the canonical
+// key shape rather than hardcoding a literal that drifts silently.
+export const KEY_WALLET_ME = ['wallet', 'me'] as const;
 const KEY_ORDERS = ['execution', 'orders'] as const;
 const KEY_POSITIONS = ['execution', 'positions'] as const;
 const KEY_SYMBOLS = ['execution', 'symbols'] as const;

@@ -22,12 +22,18 @@ identity.py` helper module is factored.
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from etfpulse.api.auth import get_current_user, get_current_user_unbound, mint_jwt
+from etfpulse.api.auth import (
+    JWTError,
+    get_current_user,
+    get_current_user_unbound,
+    mint_jwt,
+    verify_jwt,
+)
 from etfpulse.api.auth_siwe import consume_and_verify, issue_nonce
 from etfpulse.api.deps import get_db_session
 from etfpulse.api.schemas.wallet import (
@@ -90,37 +96,72 @@ async def post_nonce(body: NonceRequest) -> NonceResponse:
 
 
 # ---------------------------------------------------------------------------
-# POST /verify — anonymous
+# POST /verify — anonymous OR authed (Option A — D.5 design pass)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/verify", response_model=VerifyResponse)
 async def post_verify(
     body: VerifyRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> VerifyResponse:
-    """Validate the SIWE signature, upsert the User by wallet, mint JWT.
+    """Validate the SIWE signature, bind wallet to a User, mint JWT.
 
-    `consume_and_verify` does the full SIWE chain (parse, domain,
-    chain_id, nonce, address-binding, signature, single-use consume)
-    and returns the lowercased recovered address. We then either find
-    an existing User by that address or create a new one.
+    Two entry paths, distinguished by inbound Authorization header:
 
-    Race handling: concurrent first-binds for the same address
-    collide on `ix_users_wallet_address` partial UNIQUE. The loser
-    rolls back and re-SELECTs the winner's row. Both paths return a
-    valid User; identical UX.
+      A. **Anonymous** (no header) — first-time wallet bind from the
+         desktop web flow. Find-or-create a User keyed by wallet_address.
 
-    JWT is minted with default audience (`execution`). FE stores it
-    and rides it on every subsequent authed call.
+      B. **Authed** (`Authorization: Bearer <jwt>` present + valid) —
+         the caller already has a session (e.g. Telegram WebApp via
+         `auth/telegram/verify`). Bind the verified wallet to THAT
+         existing User instead of creating a duplicate.
+
+    Why the two paths land on one route (D.5 design honesty pass):
+    a Telegram-WebApp-bound user lands with a JWT and `wallet_address
+    IS NULL`. If they ran the anonymous verify path, the backend would
+    create a SECOND User keyed by their wallet — splitting their
+    identity across two rows. Honoring the inbound JWT collapses both
+    use cases through the same route: SIWE proves wallet ownership,
+    the existing JWT proves session identity, we UPDATE the User row.
+
+    Race / conflict handling:
+
+      - Concurrent first-binds for the same wallet (path A) collide
+        on the partial UNIQUE `ix_users_wallet_address`. The loser
+        rolls back + re-SELECTs the winner's row.
+      - Path B with a wallet ALREADY bound to a DIFFERENT user → 409.
+        We deliberately do NOT silently swap bindings; a wallet
+        bound to user X cannot be re-bound to user Y without user X
+        being unbound first (operator action, future surface).
+
+    JWT is minted on every success — even on path B (re-mint with
+    the same user_id; effectively refreshes the token's `iat`/`exp`).
     """
     address = consume_and_verify(message=body.message, signature=body.signature)
 
-    user = await _resolve_or_create_user_by_wallet(session, wallet_address=address)
-    await session.commit()  # persist new User row before minting
+    # Path-disambiguation: parse the inbound JWT (if any) WITHOUT the
+    # `wallet_not_bound` gate. The whole point of path B is the caller
+    # has a wallet-less session.
+    authed_user = await _try_resolve_authed_user(request, session)
+
+    if authed_user is not None:
+        user = await _bind_wallet_to_existing_user(
+            session, user=authed_user, wallet_address=address
+        )
+    else:
+        user = await _resolve_or_create_user_by_wallet(session, wallet_address=address)
+
+    await session.commit()  # persist new/updated row before minting
 
     token = mint_jwt(user.id)
-    log.info("wallet_verify_ok", user_id=user.id, address=address)
+    log.info(
+        "wallet_verify_ok",
+        user_id=user.id,
+        address=address,
+        path="bind_to_existing" if authed_user is not None else "anonymous_first_bind",
+    )
     return VerifyResponse(jwt=token, user_id=user.id, wallet_address=address)
 
 
@@ -213,8 +254,15 @@ async def post_api_key(
 
 
 # ---------------------------------------------------------------------------
-# Wallet-by-address upsert
+# Wallet upsert + JWT-aware bind helpers
 # ---------------------------------------------------------------------------
+# Three helpers, two paths:
+#   - `_resolve_or_create_user_by_wallet` — anonymous path (no JWT).
+#     Find-or-create by wallet_address; race-safe via partial UNIQUE.
+#   - `_try_resolve_authed_user` — best-effort JWT parse; returns User
+#     or None. Used by `/verify` to disambiguate the two paths.
+#   - `_bind_wallet_to_existing_user` — authed path; UPDATEs the
+#     existing User's wallet_address, with 409 on conflict.
 
 
 async def _resolve_or_create_user_by_wallet(
@@ -262,4 +310,120 @@ async def _resolve_or_create_user_by_wallet(
         await session.rollback()
         result = await session.execute(select(User).where(User.wallet_address == wallet_address))
         user = result.scalar_one()
+    return user
+
+
+async def _try_resolve_authed_user(request: Request, session: AsyncSession) -> User | None:
+    """Best-effort JWT parse: return the User row IF `Authorization` is
+    present + valid, else None.
+
+    Used by the `/verify` route to disambiguate the two entry paths:
+    anonymous first-bind vs. authed wallet-link-to-existing-user.
+    DOES NOT raise on malformed/missing/expired tokens — those just
+    drop to the anonymous path, since a bad inbound token shouldn't
+    prevent a legitimate first-time SIWE bind from completing.
+
+    `wallet_already_bound` on the existing User is fine — we'll
+    re-bind the same address (no-op) or land in the
+    `_bind_wallet_to_existing_user` conflict path if the wallet was
+    bound to a DIFFERENT user.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    parts = auth_header.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    token = parts[1].strip()
+    if not token:
+        return None
+    try:
+        claims = verify_jwt(token)
+    except JWTError:
+        # Treat any bad-token state as "anonymous". A user with a
+        # broken-but-non-empty JWT (e.g., expired) still gets a clean
+        # first-bind path; their stale token will be replaced by the
+        # one we mint on success.
+        return None
+    user_id = claims["user_id"]
+    return await session.get(User, user_id)
+
+
+async def _bind_wallet_to_existing_user(
+    session: AsyncSession,
+    *,
+    user: User,
+    wallet_address: str,
+) -> User:
+    """Set `user.wallet_address = wallet_address` (idempotent re-bind
+    of the same address; HTTP 409 on conflict with another User).
+
+    Three real branches:
+
+      - Already bound to THIS user with the SAME wallet → no-op,
+        return user unchanged.
+      - User has NO wallet → straightforward UPDATE.
+      - User has a DIFFERENT wallet OR another User holds this wallet
+        → 409. We do not silently overwrite either binding; the
+        operator (or a future explicit "unbind" surface) is the only
+        sanctioned path to reassign.
+    """
+    if user.wallet_address == wallet_address:
+        # Idempotent re-bind. Useful when the FE retries the verify
+        # call after a network blip + the user re-signs.
+        return user
+
+    if user.wallet_address is not None:
+        # User is already wallet-bound to a DIFFERENT address. We
+        # don't silently swap (would erase the binding the user
+        # already approved). 409 surfaces the conflict cleanly.
+        log.warning(
+            "wallet_bind_existing_user_already_has_wallet",
+            user_id=user.id,
+            existing=user.wallet_address,
+            attempted=wallet_address,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="wallet_swap_not_allowed",
+        )
+
+    # Check the address isn't already bound to ANOTHER user (partial
+    # UNIQUE on User.wallet_address would catch this at flush, but
+    # surfacing it as 409 with a clear detail is friendlier than
+    # bubbling IntegrityError → 500.
+    result = await session.execute(
+        select(User).where(User.wallet_address == wallet_address, User.id != user.id)
+    )
+    conflict = result.scalar_one_or_none()
+    if conflict is not None:
+        log.warning(
+            "wallet_bind_address_already_bound",
+            attempting_user_id=user.id,
+            owning_user_id=conflict.id,
+            wallet=wallet_address,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="wallet_already_bound_to_other_user",
+        )
+
+    # All clear — UPDATE the existing user with the verified wallet.
+    user.wallet_address = wallet_address
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # Race: between our SELECT and our UPDATE, another transaction
+        # claimed the wallet. Surface as 409 (same shape as the
+        # check-above path).
+        await session.rollback()
+        log.warning(
+            "wallet_bind_race_lost",
+            user_id=user.id,
+            wallet=wallet_address,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="wallet_already_bound_to_other_user",
+        ) from exc
     return user

@@ -43,6 +43,15 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Telegram WebApp SDK (PR D.5.3). MUST load BEFORE the React
+         bundle so `window.Telegram.WebApp` is populated when
+         AuthProvider's auto-login effect fires on first paint.
+         When the page is opened from a regular browser (not
+         Telegram's in-app WebView), `window.Telegram` stays
+         undefined and the auto-login path no-ops. -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
