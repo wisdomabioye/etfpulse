@@ -95,6 +95,19 @@ def check_config_health() -> ConfigHealth:
     if not settings.sosovalue_api_key:
         errors.append("sosovalue_api_key is empty — every signal cycle will 401")
 
+    # PR D.4 — `jwt_secret` empty in prod is a hard error. `api/auth.py`
+    # falls back to a process-local ephemeral secret in dev, but in prod
+    # that would invalidate every active session on every container
+    # restart (Coolify redeploy, OOM, etc) — silent UX devastation. Fail
+    # readiness so deploys never start issuing tokens that won't survive
+    # the next restart.
+    if not settings.jwt_secret:
+        errors.append(
+            "jwt_secret is empty — JWT auth would fall back to a "
+            "process-local ephemeral secret that invalidates every "
+            "session on restart. Set JWT_SECRET (e.g., openssl rand -hex 32)."
+        )
+
     # `frontend_url` empty in prod was a warning pre-H.2. Post-H.2 the
     # Telegram alert was trimmed to skim-only and depends on the "View on
     # web" inline keyboard for reasoning / regime / news / risks. Without
@@ -123,6 +136,21 @@ def check_config_health() -> ConfigHealth:
         warnings.append(
             "admin_api_key is empty — admin surface (/api/admin/*) is "
             "intentionally disabled but cannot be operated"
+        )
+
+    # PR D.4 — RFC 7518 §3.2 recommends HS256 keys be at least the size
+    # of the hash output (32 bytes / 256 bits). pyjwt warns at runtime
+    # but the warning lands in mint/verify logs only; the preflight
+    # surfaces it once at boot so the operator sees it before tokens
+    # start being issued. Hard error level is too strict (operators
+    # rotating with `openssl rand -hex 16` produce a 32-char string =
+    # 16 bytes of entropy; still weak but functional). Warning is the
+    # right level: visible, fixable, doesn't block deploy.
+    if settings.jwt_secret and len(settings.jwt_secret) < 32:
+        warnings.append(
+            f"jwt_secret is short ({len(settings.jwt_secret)} chars) — "
+            "RFC 7518 §3.2 recommends ≥32 bytes for HS256. Rotate to "
+            "`openssl rand -hex 32` (64 hex chars)."
         )
 
     # `frontend_url` pointing at localhost in prod: button works for the

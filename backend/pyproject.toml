@@ -29,6 +29,11 @@ dependencies = [
     # footprint accepted (Stage 09 is the only consumer).
     "eth-account>=0.13.0",
     "web3>=7.0.0",
+    # PR D.4 — JWT mint/verify for the execution surface. `crypto` extra
+    # pulls `cryptography` for HS256 fast-path (constant-time HMAC). Used
+    # by `api/auth.py` to issue session tokens after SIWE (web) or
+    # Telegram WebApp HMAC (PR D.5) bindings succeed.
+    "pyjwt[crypto]>=2.9.0",
 ]
 
 [project.optional-dependencies]

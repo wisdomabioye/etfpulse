@@ -607,6 +607,24 @@ class Settings(BaseSettings):
     # Admin
     admin_api_key: str = ""
 
+    # PR D.4 — JWT auth for the execution surface.
+    #
+    # `jwt_secret` is the HS256 signing key. Empty in dev is tolerated:
+    # `api/auth.py` generates an ephemeral process-local secret at first
+    # use and logs a one-time warning so host-native dev stays zero-config.
+    # In production the preflight (`api/config_check.py`) hard-errors when
+    # empty so deploys fail readiness before any token is issued — an
+    # ephemeral prod secret would invalidate every active session on
+    # restart.
+    #
+    # `jwt_ttl_seconds` is the lifetime of a freshly-minted token. 24h is
+    # the V1 balance — long enough that demo sessions don't die mid-flow,
+    # short enough that a leaked token has a bounded blast radius. No
+    # refresh tokens V1: re-mint by re-doing SIWE (web) or re-launching
+    # the Telegram WebApp (mobile).
+    jwt_secret: str = ""
+    jwt_ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

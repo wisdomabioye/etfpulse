@@ -40,6 +40,9 @@ def production(monkeypatch):
     from decimal import Decimal  # local import — fixture scope
 
     monkeypatch.setattr(settings, "execution_daily_notional_usd_cap", Decimal("50000"))
+    # PR D.4 — `jwt_secret` empty in prod is a hard error (sessions would
+    # die on every restart). Pin a placeholder for the clean baseline.
+    monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret-32-chars-long-xx")
 
 
 def test_dev_returns_empty_report(monkeypatch):
@@ -137,6 +140,27 @@ def test_telegram_partial_skipped_when_run_bot_false(production, monkeypatch):
 
     report = check_config_health()
     assert not any("telegram" in w for w in report.warnings)
+
+
+def test_production_short_jwt_secret_is_warning(production, monkeypatch):
+    """RFC 7518 §3.2 — HS256 keys should be ≥32 bytes. pyjwt warns at
+    runtime but the preflight surfaces it once at boot so operators
+    see it before tokens issue."""
+    monkeypatch.setattr(settings, "jwt_secret", "short-key")
+    report = check_config_health()
+    assert any("jwt_secret is short" in w for w in report.warnings)
+    assert report.ok is True  # warning, not error
+
+
+def test_production_empty_jwt_secret_is_error(production, monkeypatch):
+    """PR D.4 — JWT_SECRET empty in prod is a hard error. The dev
+    fallback (ephemeral process-local secret) would invalidate every
+    active session on every container restart, which we won't ship to
+    users."""
+    monkeypatch.setattr(settings, "jwt_secret", "")
+    report = check_config_health()
+    assert any("jwt_secret is empty" in e for e in report.errors)
+    assert report.ok is False
 
 
 def test_production_empty_frontend_url_is_error(production, monkeypatch):
