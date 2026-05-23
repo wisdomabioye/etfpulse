@@ -246,6 +246,28 @@ async def test_route_happy_path_creates_user(app_and_client, db_session):
     assert channel.user_id == body["user_id"]
 
 
+async def test_route_mints_jwt_with_webapp_ttl(app_and_client, db_session, monkeypatch):
+    """#78.9 — WebApp verify MUST use `webapp_jwt_ttl_seconds`, not the
+    longer-lived SIWE TTL (`jwt_ttl_seconds`). Set them to different
+    values, mint via the route, decode the JWT, and confirm exp-iat
+    matches the WebApp setting (not the SIWE one)."""
+    from etfpulse.api.auth import verify_jwt
+
+    # Distinctive non-default values so a regression that uses the wrong
+    # field fails with maximum signal.
+    monkeypatch.setattr(settings, "jwt_ttl_seconds", 86400)  # 24h (SIWE)
+    monkeypatch.setattr(settings, "webapp_jwt_ttl_seconds", 1800)  # 30min (WebApp)
+
+    _, client = app_and_client
+    raw = _build_init_data(tg_user_id=99042, username="ttl_test")
+    r = await client.post("/api/auth/telegram/verify", json={"init_data": raw})
+    assert r.status_code == 200, r.text
+
+    claims = verify_jwt(r.json()["jwt"])
+    # exp-iat MUST match the WebApp setting, NOT the SIWE setting.
+    assert claims["exp"] - claims["iat"] == 1800
+
+
 async def test_route_404_when_bot_disabled(db_session, monkeypatch):
     """`is_bot_enabled` requires all 4 telegram fields set; clearing
     one falsifies it. Route then returns 404 (info-leak policy)."""

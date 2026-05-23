@@ -136,14 +136,19 @@ def _resolve_secret() -> str:
     return _ephemeral_secret
 
 
-def mint_jwt(user_id: int, *, audience: str = _AUDIENCE_EXECUTION) -> str:
+def mint_jwt(
+    user_id: int,
+    *,
+    audience: str = _AUDIENCE_EXECUTION,
+    ttl_seconds: int | None = None,
+) -> str:
     """Issue a session token for `user_id`.
 
     Claims:
       - `sub`: stringified user_id (RFC 7519 §4.1.2 — `sub` is a string)
       - `aud`: audience (default 'execution')
       - `iat`: issued-at (UTC unix-seconds)
-      - `exp`: iat + settings.jwt_ttl_seconds
+      - `exp`: iat + effective TTL (see `ttl_seconds` below)
       - `jti`: random token id (forward-compat for a future blocklist)
 
     `sub` MUST be a string per spec — `pyjwt` accepts an int but some
@@ -155,15 +160,27 @@ def mint_jwt(user_id: int, *, audience: str = _AUDIENCE_EXECUTION) -> str:
     returns None → forever-401. Failing loud at the mint site catches
     the programmer-error case at the moment of the bug rather than at
     the user's next request.
+
+    `ttl_seconds` (#78.9) — per-call override for the token lifetime.
+    `None` (default) uses `settings.jwt_ttl_seconds` (24h default — the
+    SIWE path). The Telegram WebApp path passes
+    `settings.webapp_jwt_ttl_seconds` (1h default) since re-launching
+    the WebApp is cheap, so a tighter blast-radius is appropriate.
+    Validated > 0 — a zero or negative override would mint a token
+    that's already expired at iat (or in the past), with no recovery
+    path for the caller.
     """
     if user_id <= 0:
         raise ValueError(f"mint_jwt: user_id must be > 0, got {user_id!r}")
+    if ttl_seconds is not None and ttl_seconds <= 0:
+        raise ValueError(f"mint_jwt: ttl_seconds must be > 0, got {ttl_seconds!r}")
+    effective_ttl = ttl_seconds if ttl_seconds is not None else settings.jwt_ttl_seconds
     now = datetime.now(UTC)
     payload = {
         "sub": str(user_id),
         "aud": audience,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(seconds=settings.jwt_ttl_seconds)).timestamp()),
+        "exp": int((now + timedelta(seconds=effective_ttl)).timestamp()),
         "jti": secrets.token_urlsafe(16),
     }
     return jwt.encode(payload, _resolve_secret(), algorithm=_JWT_ALGORITHMS[0])

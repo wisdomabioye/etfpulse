@@ -87,7 +87,12 @@ async def post_telegram_verify(
     )
     await session.commit()
 
-    token = mint_jwt(user.id)
+    # #78.9 — WebApp-minted tokens carry a SHORTER TTL than SIWE-minted
+    # ones. SIWE re-bind is expensive (open wallet + approve + scan),
+    # so its tokens default to 24h. WebApp re-launch is cheap (tap the
+    # `/execute` reply's button), so a 1h default is the right blast-
+    # radius cap. Both knobs are env-tunable.
+    token = mint_jwt(user.id, ttl_seconds=settings.webapp_jwt_ttl_seconds)
     log.info(
         "telegram_verify_ok",
         user_id=user.id,

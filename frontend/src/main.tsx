@@ -1,10 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { WagmiProvider } from 'wagmi'
 import './index.css'
 import App from './App.tsx'
-import { wagmiConfig } from './lib/wagmi'
 
 // Single QueryClient for the app. Defaults:
 //   - staleTime 30s — dashboard stats + feed don't need sub-second freshness;
@@ -24,16 +22,22 @@ const queryClient = new QueryClient({
   },
 })
 
-// Provider order: WagmiProvider OUTSIDE QueryClientProvider because wagmi
-// v2 piggybacks on the same `@tanstack/react-query` instance — wagmi's
-// hooks need to find the QueryClient in context. Wrapping wagmi outside
-// then query inside keeps wagmi's mutations addressable from any descendant.
+// #78.5 — WagmiProvider USED to be mounted here at the root, which
+// pulled the 1.5 MB AppKit + wagmi + viem bundle onto every page,
+// including public pages (Home / Signals / TrackRecord / Regime /
+// Analytics) that don't use wallet hooks. It now lives in
+// `lib/WalletProviders.tsx`, lazy-imported only on `/login` +
+// `/execute` (see App.tsx). Public pages no longer pay the cost.
+//
+// QueryClient stays at the root — wagmi v2 piggybacks on the same
+// `@tanstack/react-query` instance, but it doesn't matter that
+// QueryClient is mounted ABOVE WagmiProvider in the tree (wagmi's
+// hooks look up QueryClient via context, which is available in any
+// descendant).
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </WagmiProvider>
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
   </StrictMode>,
 )

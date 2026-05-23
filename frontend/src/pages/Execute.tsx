@@ -113,7 +113,10 @@ function ExecuteInner() {
   );
 }
 
-function WalletMissingNotice() {
+// Exported for #78.4 regression test. Internal callers within this file
+// can still use them via the same local name — `export function X` does
+// not change in-module references.
+export function WalletMissingNotice() {
   // Telegram-WebApp users land here with a JWT but `wallet_address=null`.
   // Run SIWE inline — the backend (`/api/wallet/verify`) honors the
   // inbound Authorization header and BINDS the wallet to the existing
@@ -137,7 +140,7 @@ function WalletMissingNotice() {
   return <WalletMissingWithWallet />;
 }
 
-function WalletMissingUnavailable() {
+export function WalletMissingUnavailable() {
   return (
     <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-2">
       <h2 className="text-lg font-semibold text-amber-200">Wallet not bound</h2>

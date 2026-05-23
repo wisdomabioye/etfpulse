@@ -642,6 +642,20 @@ class Settings(BaseSettings):
     wallet_nonce_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     siwe_statement: str = "Sign in to ETFPulse to manage your trading account."
 
+    # #78.9 — shorter TTL for WebApp-minted JWTs. The SIWE path keeps
+    # `jwt_ttl_seconds` (24h default) because a fresh SIWE prompt is a
+    # heavy ask: open wallet, scan QR or deep-link, approve. The
+    # WebApp path is comparatively cheap — re-launching the bot's
+    # /execute → tapping the WebApp button takes a few seconds. So a
+    # shorter TTL is safe to ship without UX regression and meaningfully
+    # caps the blast radius of a leaked WebApp-minted token. 1h default
+    # is the V1 balance; range matches `jwt_ttl_seconds` (60..30d).
+    #
+    # When `None` (or the default 3600), the auth route passes the
+    # value to `mint_jwt(..., ttl_seconds=...)`. The SIWE path calls
+    # `mint_jwt(...)` with NO override and so uses `jwt_ttl_seconds`.
+    webapp_jwt_ttl_seconds: int = Field(default=3600, ge=60, le=2592000)
+
     # PR D.5.1 — Telegram WebApp initData HMAC verifier.
     #
     # `webapp_init_data_max_age_seconds` bounds the replay window: an

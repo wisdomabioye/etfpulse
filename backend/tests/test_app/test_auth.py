@@ -75,6 +75,53 @@ def test_mint_emits_string_sub_per_spec():
     assert raw["sub"] == "99"
 
 
+def test_mint_default_ttl_uses_settings_jwt_ttl_seconds(monkeypatch):
+    """#78.9 — Without `ttl_seconds`, exp - iat MUST equal
+    `settings.jwt_ttl_seconds`. Pin so a future refactor can't silently
+    swap default TTLs."""
+    from etfpulse.config import settings
+
+    monkeypatch.setattr(settings, "jwt_ttl_seconds", 12345)
+    token = mint_jwt(7)
+    claims = verify_jwt(token)
+    assert claims["exp"] - claims["iat"] == 12345
+
+
+def test_mint_ttl_override_takes_precedence(monkeypatch):
+    """#78.9 — `ttl_seconds=N` overrides `settings.jwt_ttl_seconds`.
+    Verifies the WebApp path's tighter-TTL behaviour: setting `jwt_ttl_seconds`
+    to one value and passing a different `ttl_seconds` MUST use the override,
+    not the setting."""
+    from etfpulse.config import settings
+
+    monkeypatch.setattr(settings, "jwt_ttl_seconds", 86400)  # 24h
+    token = mint_jwt(7, ttl_seconds=3600)  # 1h override
+    claims = verify_jwt(token)
+    assert claims["exp"] - claims["iat"] == 3600
+
+
+def test_mint_rejects_zero_or_negative_ttl():
+    """#78.9 — A zero or negative `ttl_seconds` would mint a token
+    already expired at iat; the caller has no recovery path. Fail loud
+    at the mint site, same as the user_id<=0 contract."""
+    with pytest.raises(ValueError, match="ttl_seconds must be > 0"):
+        mint_jwt(7, ttl_seconds=0)
+    with pytest.raises(ValueError, match="ttl_seconds must be > 0"):
+        mint_jwt(7, ttl_seconds=-1)
+
+
+def test_mint_ttl_override_none_falls_through_to_default(monkeypatch):
+    """`ttl_seconds=None` (the default) MUST behave identically to
+    omitting the kwarg. Catches a regression where None gets validated
+    against the > 0 check."""
+    from etfpulse.config import settings
+
+    monkeypatch.setattr(settings, "jwt_ttl_seconds", 999)
+    token = mint_jwt(7, ttl_seconds=None)
+    claims = verify_jwt(token)
+    assert claims["exp"] - claims["iat"] == 999
+
+
 def test_verify_rejects_expired_token():
     # Mint with a stale exp by directly building the payload.
     now = datetime.now(UTC)

@@ -37,6 +37,16 @@ import type { AppKitNetwork } from '@reown/appkit/networks';
 
 import { getActiveSodexStubChain } from './sodex-chains';
 
+// #78.6 — HMR singleton gate. Vite hot-reload re-evaluates this module
+// on every edit; without the gate, each re-eval calls `createAppKit`
+// again, layering modal portals and emitting "AppKit already
+// initialised" console warnings. `globalThis` persists across module
+// re-evals within the same browser context but resets on a real page
+// reload — so dev gets dedupe, prod gets a clean first-init either way.
+declare global {
+  var __ETFPULSE_APPKIT_INITIALISED__: boolean | undefined;
+}
+
 const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? '';
 
 // AppKit hard-rejects an empty projectId at runtime. We surface the
@@ -76,22 +86,27 @@ const wagmiAdapter = new WagmiAdapter({
 // Initialise AppKit at module load. The modal is then globally
 // available via `useAppKit()`. We only call this when the projectId
 // is real — calling it with the placeholder triggers AppKit's
-// "invalid project ID" runtime warning every page load.
+// "invalid project ID" runtime warning every page load. Gate on the
+// HMR singleton flag (declared above) so Vite hot-reload doesn't
+// register the modal twice.
 if (isWalletConnectAvailable) {
-  createAppKit({
-    adapters: [wagmiAdapter],
-    networks,
-    projectId,
-    metadata,
-    defaultNetwork: activeStub,
-    features: {
-      // ETFPulse is wallet-only auth; strip AppKit's email magic-link,
-      // social-login, and analytics-pixel surfaces.
-      analytics: false,
-      email: false,
-      socials: false,
-    },
-  });
+  if (!globalThis.__ETFPULSE_APPKIT_INITIALISED__) {
+    createAppKit({
+      adapters: [wagmiAdapter],
+      networks,
+      projectId,
+      metadata,
+      defaultNetwork: activeStub,
+      features: {
+        // ETFPulse is wallet-only auth; strip AppKit's email magic-link,
+        // social-login, and analytics-pixel surfaces.
+        analytics: false,
+        email: false,
+        socials: false,
+      },
+    });
+    globalThis.__ETFPULSE_APPKIT_INITIALISED__ = true;
+  }
 } else {
   // Warn unconditionally (not gated on DEV) so a misconfigured prod
   // deploy surfaces in the browser console — operators investigating
