@@ -51,6 +51,8 @@ EXPECTED_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # Wallet introspection + binding (D.4.2)
         ("GET", "/api/wallet/me"),
         ("POST", "/api/wallet/api-key"),
+        # PR #185 — paper-trade users request live trading.
+        ("POST", "/api/wallet/request-live"),
         # Execution surface (D.4.3)
         ("POST", "/api/execution/prepare"),
         ("POST", "/api/execution/submit/{order_id}"),

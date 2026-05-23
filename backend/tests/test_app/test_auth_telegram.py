@@ -386,6 +386,31 @@ async def test_shared_helper_new_user_has_delivery_defaults(db_session):
     assert isinstance(user.id, int) and user.id > 0
 
 
+async def test_helper_applies_paper_trade_default_true(db_session, monkeypatch):
+    """PR #184 — new User created via the helper inherits
+    `settings.user_paper_trade_default`. Default is True (safe-by-
+    default for mainnet). Pin this so a regression that drops the
+    paper_trade= kwarg from the User() call silently exposes new
+    users to live execution."""
+    monkeypatch.setattr(settings, "user_paper_trade_default", True)
+    user = await resolve_or_create_user_by_tg_id(
+        db_session, tg_user_id=99110, username="paper_default_true"
+    )
+    assert user.paper_trade is True
+
+
+async def test_helper_applies_paper_trade_default_false_when_overridden(db_session, monkeypatch):
+    """The default must be CONFIG-DRIVEN, not hardcoded. Setting
+    `USER_PAPER_TRADE_DEFAULT=false` produces live-trading users from
+    the start — useful for testnet-only deploys where the chain has
+    no real money."""
+    monkeypatch.setattr(settings, "user_paper_trade_default", False)
+    user = await resolve_or_create_user_by_tg_id(
+        db_session, tg_user_id=99111, username="paper_default_false"
+    )
+    assert user.paper_trade is False
+
+
 async def test_helper_user_row_query_after_create(db_session):
     """Sanity: after the helper inserts a fresh row, it's retrievable
     via `session.get`. Pins that the flush actually committed."""

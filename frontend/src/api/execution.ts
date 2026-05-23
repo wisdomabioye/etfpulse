@@ -187,6 +187,19 @@ export function postWalletApiKey(req: SetApiKeyRequest): Promise<SetApiKeyRespon
   return apiPost<SetApiKeyResponse>('/api/wallet/api-key', req);
 }
 
+export interface RequestLiveRequest {
+  note?: string;
+}
+
+export interface RequestLiveResponse {
+  ok: true;
+  message: string;
+}
+
+export function postRequestLive(req: RequestLiveRequest): Promise<RequestLiveResponse> {
+  return apiPost<RequestLiveResponse>('/api/wallet/request-live', req);
+}
+
 // ---------------------------------------------------------------------------
 // Execution API wrappers
 // ---------------------------------------------------------------------------

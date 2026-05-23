@@ -186,6 +186,51 @@ async def test_verify_happy_path_creates_new_user(client, db_session, burner):
     assert user.wallet_address == burner.address.lower()
 
 
+async def test_verify_applies_paper_trade_default_true(client, db_session, burner, monkeypatch):
+    """PR #184 — SIWE-bound new users inherit `settings.user_paper_trade_default`.
+    Default True is the safe-by-default posture for mainnet. Regression
+    that drops the `paper_trade=` kwarg from `_resolve_or_create_user_by_wallet`
+    would silently expose new mainnet users to live execution before
+    operator review."""
+    from etfpulse.config import settings
+
+    monkeypatch.setattr(settings, "user_paper_trade_default", True)
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+    )
+    assert r.status_code == 200
+
+    user_id = r.json()["user_id"]
+    user = await db_session.get(User, user_id)
+    assert user is not None
+    assert user.paper_trade is True
+
+
+async def test_verify_applies_paper_trade_default_false_when_overridden(
+    client, db_session, burner, monkeypatch
+):
+    """Counterpart: SIWE-bound users inherit False when the setting is
+    flipped. Confirms the default is config-driven, not hardcoded."""
+    from etfpulse.config import settings
+
+    monkeypatch.setattr(settings, "user_paper_trade_default", False)
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+    )
+    assert r.status_code == 200
+
+    user_id = r.json()["user_id"]
+    user = await db_session.get(User, user_id)
+    assert user is not None
+    assert user.paper_trade is False
+
+
 async def test_verify_rebind_returns_existing_user(client, db_session, burner):
     # First bind creates the user
     nonce_body = await _request_nonce(client, burner.address)
@@ -369,7 +414,10 @@ async def test_me_200_wallet_bound(client, db_session, burner):
     assert r.status_code == 200
     body = r.json()
     assert body["wallet_address"] == burner.address.lower()
-    assert body["paper_trade"] is False
+    # PR #184 — freshly-bound user defaults to paper_trade=True (safe-
+    # by-default). Operator opts INTO live execution via the admin
+    # paper-trade route. Was False pre-#184.
+    assert body["paper_trade"] is True
     assert body["sodex_account_id"] is None
     assert body["sodex_spot_api_key_name"] is None
     assert body["sodex_perps_api_key_name"] is None
@@ -484,6 +532,352 @@ async def test_api_key_rejects_malformed_name(client, db_session, burner):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /api/wallet/request-live (#185)
+# ---------------------------------------------------------------------------
+
+
+async def _bind_and_get_token(client, burner) -> tuple[str, int]:
+    """Helper: run a full SIWE bind, return (jwt, user_id)."""
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    return body["jwt"], body["user_id"]
+
+
+@pytest.fixture(autouse=True)
+def _clear_request_live_cooldown():
+    """The route uses an in-memory TTLCache for per-user cooldown.
+    Tests that hit the route would carry cooldown state across cases
+    (within one process) without this. Clear before AND after to
+    isolate."""
+    from etfpulse.api.routes.wallet import _REQUEST_LIVE_COOLDOWN
+
+    _REQUEST_LIVE_COOLDOWN.clear()
+    yield
+    _REQUEST_LIVE_COOLDOWN.clear()
+
+
+@pytest.fixture
+def _bot_enabled_with_operator_chat(monkeypatch):
+    """Boots a fully-configured bot + operator chat for request-live
+    tests. The 4-field Telegram config + non-zero operator chat id are
+    both required by the route — independent monkeypatches keep each
+    test focused on which gate it's exercising."""
+    monkeypatch.setattr(settings, "run_bot", True)
+    monkeypatch.setattr(settings, "telegram_bot_token", "1234:fake-token")
+    monkeypatch.setattr(settings, "telegram_public_url", "https://etfpulse.example.com")
+    monkeypatch.setattr(settings, "telegram_webhook_secret", "x" * 32)
+    monkeypatch.setattr(settings, "telegram_webhook_url_suffix", "test-suffix")
+    monkeypatch.setattr(settings, "operator_telegram_chat_id", -1001234567890)
+
+
+async def test_request_live_401_unauth(client):
+    r = await client.post("/api/wallet/request-live", json={})
+    assert r.status_code == 401
+
+
+async def test_request_live_403_wallet_unbound(client, db_session, monkeypatch):
+    """Wallet-less Telegram user (Option A path mid-bind) — `get_current_user`
+    enforces wallet presence so the route 403s before any bot interaction."""
+    from etfpulse.api.auth import mint_jwt
+
+    u = User(wallet_address=None)
+    db_session.add(u)
+    await db_session.flush()
+    token = mint_jwt(u.id)
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 403
+
+
+async def test_request_live_503_when_bot_disabled(
+    client, db_session, burner, monkeypatch
+):
+    """All four telegram fields empty → bot disabled → 503 with a clear
+    detail string (NOT 404 — this is a user-facing affordance, info-leak
+    policy doesn't apply)."""
+    monkeypatch.setattr(settings, "run_bot", False)
+    token, _ = await _bind_and_get_token(client, burner)
+
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 503
+    assert "bot not configured" in r.json()["detail"]
+
+
+async def test_request_live_503_when_operator_chat_unset(
+    client, db_session, burner, monkeypatch
+):
+    """Bot enabled but operator chat id is 0 → 503 with distinct detail
+    so operators see which knob is missing."""
+    monkeypatch.setattr(settings, "run_bot", True)
+    monkeypatch.setattr(settings, "telegram_bot_token", "1234:fake-token")
+    monkeypatch.setattr(settings, "telegram_public_url", "https://etfpulse.example.com")
+    monkeypatch.setattr(settings, "telegram_webhook_secret", "x" * 32)
+    monkeypatch.setattr(settings, "telegram_webhook_url_suffix", "test-suffix")
+    monkeypatch.setattr(settings, "operator_telegram_chat_id", 0)
+    token, _ = await _bind_and_get_token(client, burner)
+
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 503
+    assert "operator contact channel not configured" in r.json()["detail"]
+
+
+async def test_request_live_happy_path_sends_telegram_message(
+    client, db_session, burner, monkeypatch, _bot_enabled_with_operator_chat
+):
+    """Happy path — request goes through, operator gets a Telegram message
+    with the user's id + wallet + note. The route does NOT flip paper_trade."""
+    from unittest.mock import AsyncMock
+
+    from etfpulse.adapters import telegram as telegram_mod
+
+    sent: list[dict] = []
+
+    async def fake_send(*, chat_id, text, parse_mode, reply_markup=None):
+        sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+
+    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=fake_send))
+
+    token, user_id = await _bind_and_get_token(client, burner)
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={"note": "First paper-trade run was clean."},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert "paper-trade" in body["message"]
+
+    # Exactly one Telegram send.
+    assert len(sent) == 1
+    msg = sent[0]
+    assert msg["chat_id"] == -1001234567890
+    assert msg["parse_mode"] == "HTML"
+    assert f"<code>{user_id}</code>" in msg["text"]
+    assert burner.address.lower() in msg["text"].lower()
+    assert "First paper-trade run was clean." in msg["text"]
+
+    # Route did NOT flip paper_trade — operator stays the gatekeeper.
+    user = await db_session.get(User, user_id)
+    assert user is not None
+    # paper_trade is True per #184 default; the request-live route MUST
+    # leave it that way.
+    assert user.paper_trade is True
+
+
+async def test_request_live_html_escapes_note(
+    client, db_session, burner, monkeypatch, _bot_enabled_with_operator_chat
+):
+    """Hostile note must be HTML-escaped before embedding in the Telegram
+    message (we render parse_mode=HTML). Pin this so a future format
+    change can't introduce injection."""
+    from unittest.mock import AsyncMock
+
+    from etfpulse.adapters import telegram as telegram_mod
+
+    sent: list[dict] = []
+
+    async def fake_send(*, chat_id, text, parse_mode, reply_markup=None):
+        sent.append({"text": text})
+
+    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=fake_send))
+
+    token, _ = await _bind_and_get_token(client, burner)
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={"note": "<script>alert('xss')</script>"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+
+    text = sent[0]["text"]
+    # The literal `<script>` MUST NOT appear; HTML-escaped form MUST.
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
+
+
+async def test_request_live_cooldown_blocks_repeat(
+    client, db_session, burner, monkeypatch, _bot_enabled_with_operator_chat
+):
+    """Per-user cooldown — second request within the window returns
+    429 with a time-remaining hint."""
+    from unittest.mock import AsyncMock
+
+    from etfpulse.adapters import telegram as telegram_mod
+
+    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock())
+
+    token, _ = await _bind_and_get_token(client, burner)
+
+    r1 = await client.post(
+        "/api/wallet/request-live",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r1.status_code == 200
+
+    r2 = await client.post(
+        "/api/wallet/request-live",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r2.status_code == 429
+    assert "cooldown" in r2.json()["detail"]
+
+
+async def test_request_live_503_when_telegram_send_fails(
+    client, db_session, burner, monkeypatch, _bot_enabled_with_operator_chat
+):
+    """Telegram raise → 503 with user-friendly message; cooldown NOT set
+    (so user can retry after fixing whatever transient issue)."""
+    from unittest.mock import AsyncMock
+
+    from etfpulse.adapters import telegram as telegram_mod
+    from etfpulse.adapters.telegram import TelegramError
+    from etfpulse.api.routes.wallet import _REQUEST_LIVE_COOLDOWN
+
+    monkeypatch.setattr(
+        telegram_mod.telegram_client,
+        "send_message",
+        AsyncMock(side_effect=TelegramError("upstream rate limited")),
+    )
+
+    token, user_id = await _bind_and_get_token(client, burner)
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 503
+    # Cooldown NOT recorded — user must be able to retry.
+    assert user_id not in _REQUEST_LIVE_COOLDOWN
+
+
+async def test_request_live_rejects_oversized_note(
+    client, db_session, burner, monkeypatch, _bot_enabled_with_operator_chat
+):
+    """500-char cap. Above that, 422 from pydantic — the bot message
+    stays bounded regardless of what the user submits."""
+    token, _ = await _bind_and_get_token(client, burner)
+    r = await client.post(
+        "/api/wallet/request-live",
+        json={"note": "x" * 501},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 422
+
+
+async def test_request_live_concurrent_requests_single_message(
+    client, db_session, burner, monkeypatch, _bot_enabled_with_operator_chat
+):
+    """Race regression: two concurrent requests for the same user MUST
+    produce at most ONE Telegram message. Without reserving the
+    cooldown slot before the `await telegram_client.send_message`,
+    both requests would pass the cooldown check (cache.get → None
+    for both), both await the send, both succeed, both set the
+    cooldown — operator receives 2 messages.
+
+    Fix: reserve the cooldown slot BEFORE the await; release on
+    Telegram failure. This test holds a real (but mocked) Telegram
+    send open for both requests, then runs them concurrently, and
+    asserts the operator sees exactly one message.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from etfpulse.adapters import telegram as telegram_mod
+
+    sent: list[dict] = []
+    # Gate the mocked send so both requests can pile up at the await
+    # point — simulates a slow upstream where the race window is
+    # actually large.
+    release = asyncio.Event()
+
+    async def slow_send(*, chat_id, text, parse_mode, reply_markup=None):
+        await release.wait()
+        sent.append({"chat_id": chat_id})
+
+    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=slow_send))
+
+    token, _ = await _bind_and_get_token(client, burner)
+
+    async def fire():
+        return await client.post(
+            "/api/wallet/request-live",
+            json={},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    # Fire two requests in parallel; both park at `await send_message`.
+    task1 = asyncio.create_task(fire())
+    task2 = asyncio.create_task(fire())
+    # Let both tasks enter the route + reach the await.
+    await asyncio.sleep(0.05)
+    # Unblock both sends.
+    release.set()
+    r1, r2 = await asyncio.gather(task1, task2)
+
+    # Exactly ONE 200 + ONE 429. The race-protected slot ensures the
+    # second request sees the cooldown set BEFORE the first's send
+    # completes.
+    statuses = sorted([r1.status_code, r2.status_code])
+    assert statuses == [200, 429], f"expected one 200 + one 429, got {statuses}"
+    assert len(sent) == 1, f"expected exactly 1 Telegram message, got {len(sent)}"
+
+
+def test_request_live_cooldown_cache_ttl_covers_max_setting():
+    """Invariant: the cache TTL must be at least as long as the maximum
+    possible value of `settings.request_live_cooldown_seconds`. If the
+    settings `le=` bound is raised in config.py without raising the
+    cache TTL constant, this test fails LOUDLY — preventing a silent
+    gap where the cache evicts before the cooldown expires.
+
+    Catches the bug class: handler asks the cache "when did you last
+    submit?" — cache says "no record" because it evicted — handler
+    thinks no cooldown applies — operator gets spammed.
+    """
+    from pydantic.fields import FieldInfo
+
+    from etfpulse.api.routes.wallet import (
+        _REQUEST_LIVE_COOLDOWN,
+        _REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS,
+    )
+    from etfpulse.config import Settings
+
+    field: FieldInfo = Settings.model_fields["request_live_cooldown_seconds"]
+    # Walk pydantic's metadata for the `le` constraint (le=86400 in config.py).
+    le_values = [m.le for m in field.metadata if hasattr(m, "le") and m.le is not None]
+    assert le_values, "request_live_cooldown_seconds must declare an `le=` upper bound"
+    settings_max = int(le_values[0])
+
+    assert _REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS >= settings_max, (
+        f"Cache TTL ({_REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS}s) must be >= "
+        f"settings.request_live_cooldown_seconds upper bound ({settings_max}s). "
+        f"Raise _REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS in wallet.py or lower "
+        f"the Field(le=...) in config.py."
+    )
+    # Belt: the live cache instance MUST be constructed with this TTL.
+    assert _REQUEST_LIVE_COOLDOWN.ttl == _REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS
 
 
 # ---------------------------------------------------------------------------

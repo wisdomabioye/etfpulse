@@ -125,3 +125,33 @@ class SetApiKeyResponse(BaseModel):
     venue: str
     api_key_name: str
     sodex_account_id: int
+
+
+class RequestLiveRequest(BaseModel):
+    """`POST /api/wallet/request-live` body (PR #185).
+
+    A paper-trade user submits a request to the operator to be moved
+    onto live trading. The operator reviews via Telegram + flips
+    `paper_trade=False` via the existing admin route. No automatic
+    self-service flip.
+
+    `note` is operator-facing context the user can include (e.g.,
+    "first run was successful, ready to go live"). Capped at 500
+    chars; the bot message renders it verbatim under HTML-escape, so
+    no injection risk.
+    """
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+class RequestLiveResponse(BaseModel):
+    """`POST /api/wallet/request-live` 200 body.
+
+    `ok=True` means the operator was notified. The user is still on
+    paper-trade until the operator flips them — the response message
+    states this explicitly so the user doesn't expect immediate
+    behaviour change.
+    """
+
+    ok: Literal[True] = True
+    message: str

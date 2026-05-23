@@ -21,11 +21,17 @@ identity.py` helper module is factored.
 
 from __future__ import annotations
 
+import html
+import time
+
 import structlog
+from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from etfpulse.adapters.telegram import TelegramError, telegram_client
 
 from etfpulse.api.auth import (
     JWTError,
@@ -39,6 +45,8 @@ from etfpulse.api.deps import get_db_session
 from etfpulse.api.schemas.wallet import (
     NonceRequest,
     NonceResponse,
+    RequestLiveRequest,
+    RequestLiveResponse,
     SetApiKeyRequest,
     SetApiKeyResponse,
     VerifyRequest,
@@ -254,6 +262,143 @@ async def post_api_key(
 
 
 # ---------------------------------------------------------------------------
+# Request live trading (PR #185) — user-facing affordance for the paper-
+# trade → live transition. The operator stays the gatekeeper; this route
+# just notifies them.
+# ---------------------------------------------------------------------------
+
+# In-memory per-user cooldown. Survives the request handler but resets
+# on container restart. Operators won't see duplicates within a cooldown
+# window; restart-induced double-notifications are tolerated (they cost
+# one extra Telegram message). Sized large enough that legitimate user
+# counts don't evict each other.
+#
+# TTL = the MAX possible value of `settings.request_live_cooldown_seconds`
+# (per `Field(le=86400)` in config.py). This guarantees the cache retains
+# entries for at least as long as the configured cooldown — otherwise an
+# operator who raises the cooldown above the cache TTL would see a
+# silent gap where entries evict but the handler still wants to enforce.
+# The handler reads the LIVE settings value to make the actual decision;
+# the cache is just storage.
+_REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS = 86400  # MUST match Settings.request_live_cooldown_seconds Field(le=...)
+_REQUEST_LIVE_COOLDOWN: TTLCache[int, float] = TTLCache(
+    maxsize=100_000, ttl=_REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS
+)
+
+
+@router.post("/request-live", response_model=RequestLiveResponse)
+async def post_request_live(
+    body: RequestLiveRequest,
+    user: User = Depends(get_current_user),
+) -> RequestLiveResponse:
+    """Notify the operator that this user wants to be moved to live trading.
+
+    Gate stack (matches code order):
+      1. Wallet-authed (`get_current_user` requires a bound wallet —
+         paper_trade only matters for users who can place orders).
+      2. Per-user cooldown FIRST so a user in cooldown sees the
+         "try again in N s" message regardless of whether bot/chat
+         config drifted underneath them. Returns 429 with the
+         remaining time.
+      3. Bot enabled + operator chat configured. If either is empty,
+         503 with a clear detail string. Distinct from the webhook's
+         404 info-leak policy: this is a user-facing affordance where
+         "feature not configured" is the actionable feedback.
+
+    Does NOT flip `paper_trade`. Operator action via
+    `POST /api/admin/users/{id}/paper-trade` is the only path that
+    actually changes execution behaviour — keeps the safe-by-default
+    posture intact.
+
+    `note` is operator-facing context (HTML-escaped before embedding
+    in the Telegram message; no injection risk since we render
+    `parse_mode=HTML`).
+    """
+    # Belt: cooldown table refresh — TTLCache reaps lazily on read.
+    _REQUEST_LIVE_COOLDOWN.expire()
+    last_at = _REQUEST_LIVE_COOLDOWN.get(user.id)
+    if last_at is not None:
+        elapsed = time.monotonic() - last_at
+        if elapsed < settings.request_live_cooldown_seconds:
+            remaining = int(settings.request_live_cooldown_seconds - elapsed)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"request_live_cooldown: try again in {remaining}s",
+            )
+
+    if not settings.is_bot_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="bot not configured — operator contact unavailable",
+        )
+    if settings.operator_telegram_chat_id == 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="operator contact channel not configured",
+        )
+
+    # Compose the operator-facing Telegram message. HTML-escape the
+    # user-supplied note + wallet address so a future change to the
+    # wallet_address format (or a hostile note) can't inject tags.
+    note_html = html.escape(body.note or "").strip()
+    wallet_html = html.escape(user.wallet_address or "(unbound)")
+    note_block = f"\n\n<b>Note:</b> {note_html}" if note_html else ""
+    text = (
+        "<b>📨 Live-trading request</b>\n"
+        f"<b>User:</b> <code>{user.id}</code>\n"
+        f"<b>Wallet:</b> <code>{wallet_html}</code>\n"
+        f"<b>SoDEX account:</b> <code>{user.sodex_account_id or '—'}</code>\n"
+        f"<b>Paper-trade:</b> <code>{user.paper_trade}</code>"
+        f"{note_block}\n\n"
+        "<i>Flip via `POST /api/admin/users/"
+        f"{user.id}/paper-trade` with body <code>{{\"paper_trade\": false}}</code>.</i>"
+    )
+
+    # Reserve the cooldown slot BEFORE the await — closes the race
+    # window where two concurrent requests for the same user could
+    # both pass the `last_at is None` check, both send a message,
+    # both record the cooldown. Without this, an FE bypass (curl
+    # spam against the route) could fan out N messages to the
+    # operator before the cooldown takes effect; the reservation
+    # ensures the FIRST concurrent request "owns" the slot and the
+    # rest see it on their cooldown check.
+    #
+    # On Telegram failure, the slot is RELEASED so the user can
+    # retry. Process crash between reservation and send leaks the
+    # slot for one cooldown window — acceptable failure mode since
+    # the user can ping the operator out-of-band.
+    _REQUEST_LIVE_COOLDOWN[user.id] = time.monotonic()
+    try:
+        await telegram_client.send_message(
+            chat_id=settings.operator_telegram_chat_id,
+            text=text,
+            parse_mode="HTML",
+        )
+    except TelegramError as exc:
+        _REQUEST_LIVE_COOLDOWN.pop(user.id, None)
+        # Distinguish transient failure from misconfig so the user UX
+        # can show a useful message. We don't try to retry inline —
+        # the user can re-submit immediately (no cooldown set).
+        log.warning(
+            "request_live_send_failed",
+            user_id=user.id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="couldn't reach operator right now — please try again later",
+        ) from exc
+
+    log.info("request_live_sent", user_id=user.id, note_present=bool(note_html))
+    return RequestLiveResponse(
+        message=(
+            "Request sent. You're still on paper-trade — an operator will "
+            "review and reach out to confirm before flipping you to live."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Wallet upsert + JWT-aware bind helpers
 # ---------------------------------------------------------------------------
 # Three helpers, two paths:
@@ -278,9 +423,10 @@ async def _resolve_or_create_user_by_wallet(
 
     New users are created with the env-driven delivery defaults so
     they're indistinguishable from a Telegram-bound new user in terms
-    of preference shape. `paper_trade` defaults to False (per User
-    model definition) — execution-route policy gates whether real
-    funds can move, not this binding step.
+    of preference shape. `paper_trade` is initialised from
+    `settings.user_paper_trade_default` (True out of the box per PR
+    #184 — safe-by-default for mainnet deploys; operators opt users
+    INTO live execution via `POST /api/admin/users/{id}/paper-trade`).
     """
     if not wallet_address.startswith("0x") or wallet_address != wallet_address.lower():
         # Defensive — `consume_and_verify` lowercases its return, but if
@@ -300,6 +446,7 @@ async def _resolve_or_create_user_by_wallet(
         wallet_address=wallet_address,
         pref_assets=settings.delivery_default_assets_list,
         pref_min_confidence=settings.delivery_default_min_confidence,
+        paper_trade=settings.user_paper_trade_default,
     )
     session.add(user)
     try:

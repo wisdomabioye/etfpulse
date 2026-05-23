@@ -51,6 +51,7 @@ import {
   usePositions,
   usePrepareCancel,
   usePrepareNew,
+  useRequestLive,
   useSetApiKey,
   useSubmitCancel,
   useSubmitNew,
@@ -273,27 +274,140 @@ function PageShell({ children }: { children: React.ReactNode }) {
 
 function AccountStrip({ me }: { me: WalletMeResponse }) {
   return (
-    <section className="rounded-xl border border-border-2 p-4 flex flex-wrap items-center gap-4 text-sm">
-      <div>
-        <div className="text-text-2 text-xs uppercase tracking-wide">Wallet</div>
-        <code className="text-text-1">{me.wallet_address ?? '—'}</code>
+    <section className="rounded-xl border border-border-2 p-4 space-y-3 text-sm">
+      <div className="flex flex-wrap items-center gap-4">
+        <div>
+          <div className="text-text-2 text-xs uppercase tracking-wide">Wallet</div>
+          <code className="text-text-1">{me.wallet_address ?? '—'}</code>
+        </div>
+        <div>
+          <div className="text-text-2 text-xs uppercase tracking-wide">SoDEX account</div>
+          <code className="text-text-1">{me.sodex_account_id ?? '—'}</code>
+        </div>
+        <div className="ml-auto">
+          {me.paper_trade ? (
+            <span className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-medium">
+              PAPER TRADE
+            </span>
+          ) : (
+            <span className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-medium">
+              REAL FUNDS
+            </span>
+          )}
+        </div>
       </div>
-      <div>
-        <div className="text-text-2 text-xs uppercase tracking-wide">SoDEX account</div>
-        <code className="text-text-1">{me.sodex_account_id ?? '—'}</code>
+      {me.paper_trade && <RequestLiveBlock />}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 1b. RequestLiveBlock (#185)
+// ---------------------------------------------------------------------------
+// Rendered inside AccountStrip ONLY when `me.paper_trade === true`. Gives
+// paper-trade users a breadcrumb to the operator instead of a dead-end
+// badge. Does NOT flip paper_trade itself — operator action via the
+// admin route is the only switch. Errors are inline (no toast system in
+// the codebase yet); the 503 path tells users to contact the operator
+// directly.
+
+function RequestLiveBlock() {
+  const mutation = useRequestLive();
+  const [note, setNote] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  // Synchronous in-flight guard — same pattern as the Sign button on
+  // WalletMissingWithWallet. `useMutation`'s `isPending` updates on
+  // React's schedule; a fast double-click can slip past it before the
+  // disabled prop lands.
+  const inFlightRef = useRef(false);
+
+  async function handleSubmit() {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      await mutation.mutateAsync({ note: note.trim() || undefined });
+      setShowForm(false);
+      setNote('');
+    } catch {
+      // mutation.error already carries the ApiError for inline render below.
+    } finally {
+      inFlightRef.current = false;
+    }
+  }
+
+  // Success state — user just submitted. Stay visible so they can
+  // re-read the message; the badge above still shows PAPER TRADE so
+  // there's no confusion about state.
+  if (mutation.isSuccess && mutation.data) {
+    return (
+      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-emerald-200 text-xs">
+        {mutation.data.message}
       </div>
-      <div className="ml-auto">
-        {me.paper_trade ? (
-          <span className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-medium">
-            PAPER TRADE
-          </span>
-        ) : (
-          <span className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-medium">
-            REAL FUNDS
-          </span>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-border-2 p-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-text-2 text-xs flex-1 min-w-[200px]">
+          You&apos;re in paper-trade mode. Orders use simulated fills — no real
+          funds move. Ready to go live? Ask the operator to flip you over.
+        </p>
+        {!showForm && (
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="px-3 py-1.5 rounded-md bg-text-1 text-bg-1 text-xs font-medium hover:bg-text-2 transition-colors"
+          >
+            Request live trading
+          </button>
         )}
       </div>
-    </section>
+      {showForm && (
+        <div className="space-y-2 pt-1">
+          <label className="block text-text-2 text-xs">
+            Optional note for the operator (max 500 chars):
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value.slice(0, 500))}
+              maxLength={500}
+              rows={2}
+              className="mt-1 w-full rounded-md bg-bg-2 border border-border-2 text-text-1 text-xs p-2 resize-y"
+              placeholder="e.g. ran one paper order, ready for live"
+            />
+          </label>
+          {mutation.isError && (
+            <div className="text-amber-300 text-xs">
+              {mutation.error instanceof ApiError && mutation.error.status === 429
+                ? `Already sent recently. ${mutation.error.detail.replace(/^request_live_cooldown: /, '')}`
+                : "Couldn't send. Please contact the operator directly."}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={mutation.isPending}
+              className="px-3 py-1.5 rounded-md bg-text-1 text-bg-1 text-xs font-medium hover:bg-text-2 transition-colors disabled:opacity-50"
+            >
+              {mutation.isPending ? 'Sending…' : 'Send request'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowForm(false);
+                setNote('');
+                mutation.reset();
+              }}
+              disabled={mutation.isPending}
+              className="px-3 py-1.5 rounded-md text-text-2 hover:text-text-1 text-xs disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

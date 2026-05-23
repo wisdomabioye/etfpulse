@@ -19,6 +19,8 @@ import {
   type PrepareCancelResponse,
   type PrepareNewRequest,
   type PrepareNewResponse,
+  type RequestLiveRequest,
+  type RequestLiveResponse,
   type SetApiKeyRequest,
   type SubmitResponse,
   type Venue,
@@ -28,6 +30,7 @@ import {
   fetchWalletMe,
   postPrepareCancel,
   postPrepareNew,
+  postRequestLive,
   postSubmitCancel,
   postSubmitNew,
   postWalletApiKey,
@@ -92,6 +95,21 @@ export function useSetApiKey() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEY_WALLET_ME });
     },
+  });
+}
+
+/**
+ * #185 — paper-trade user requests live trading. Operator gets a Telegram
+ * message; route does NOT flip `paper_trade` (operator action via the
+ * admin route is the only path that changes execution behaviour).
+ *
+ * No cache invalidation on success — the user's state is unchanged
+ * (still paper_trade=true). The FE reads the response message and
+ * shows a toast/inline confirmation.
+ */
+export function useRequestLive() {
+  return useMutation<RequestLiveResponse, unknown, RequestLiveRequest>({
+    mutationFn: (req) => postRequestLive(req),
   });
 }
 

@@ -69,9 +69,14 @@ async def resolve_or_create_user_by_tg_id(
         return user
 
     # First-time registration — create User with env-driven defaults.
+    # `paper_trade` defaults to `settings.user_paper_trade_default`
+    # (True out of the box per PR #184 — safe-by-default for mainnet
+    # deploys; operators opt users INTO live execution via
+    # `POST /api/admin/users/{id}/paper-trade`).
     user = User(
         pref_assets=settings.delivery_default_assets_list,
         pref_min_confidence=settings.delivery_default_min_confidence,
+        paper_trade=settings.user_paper_trade_default,
     )
     session.add(user)
     await session.flush()  # assign user.id before we FK to it

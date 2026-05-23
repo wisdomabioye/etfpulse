@@ -270,6 +270,37 @@ class Settings(BaseSettings):
     delivery_default_min_confidence: int = Field(default=6, ge=1, le=10)
     delivery_default_assets: str = "BTC,ETH"
 
+    # PR #184 — default value of `User.paper_trade` applied at user-creation
+    # time (BOTH paths: `identity.resolve_or_create_user_by_tg_id` for
+    # Telegram-bound users + `wallet._resolve_or_create_user_by_wallet`
+    # for anonymous SIWE-bound users). The User model column still
+    # defaults to False at the SQL level — this knob is enforced in the
+    # Python creation path so DB-level inserts (tests, manual SQL) keep
+    # their explicit semantics.
+    #
+    # Default True is the safe-by-default posture: a fresh user trading
+    # against mainnet would otherwise place real-money orders the instant
+    # they finish wallet binding. Operators MUST flip the user off paper-
+    # trade explicitly (`POST /api/admin/users/{id}/paper-trade`) before
+    # live execution. Testnet deployments can set this False to mirror
+    # production realism; the blast radius on testnet is zero by
+    # construction.
+    user_paper_trade_default: bool = True
+
+    # PR #185 — operator Telegram chat id that receives "request live
+    # trading" notifications from paper-trade users (`POST /api/wallet/
+    # request-live`). 0 = disabled; the route returns 503 when set to 0
+    # so a misconfigured deploy doesn't silently swallow user requests.
+    # Typical operator setup: create a private Telegram group, add the
+    # bot, find the group id via `getUpdates` after a test message,
+    # paste here.
+    operator_telegram_chat_id: int = Field(default=0, ge=0)
+    # Per-user cooldown on request-live submissions (seconds). Default
+    # 1 hour — prevents a user spamming the operator while keeping
+    # the path responsive to a real "I missed the first one" retry.
+    # In-memory cache; resets on container restart.
+    request_live_cooldown_seconds: int = Field(default=3600, ge=60, le=86400)
+
     # Detector thresholds (issue #33). Defaults match the historical
     # constructor args in `pipeline/detectors/*` — change behaviour by
     # setting env vars instead of editing code. Each detector's __init__
