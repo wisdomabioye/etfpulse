@@ -41,6 +41,7 @@ from etfpulse.api.schemas.admin import (
     SetPaperTradeResponse,
     SignalStatusCounts,
     SymbolsRefreshResponse,
+    UnbindWalletResponse,
 )
 from etfpulse.api.schemas.telegram_admin import (
     RotateWebhookSecretRequest,
@@ -892,6 +893,84 @@ async def set_user_paper_trade(
         paper_trade=body.paper_trade,
     )
     return SetPaperTradeResponse(user_id=user_id, paper_trade=body.paper_trade)
+
+
+@router.post(
+    "/users/{user_id}/unbind-wallet",
+    response_model=UnbindWalletResponse,
+    dependencies=[Depends(require_admin_key)],
+    include_in_schema=False,
+)
+async def unbind_user_wallet(
+    user_id: int,
+    session: AsyncSession = Depends(get_db_session),
+) -> UnbindWalletResponse:
+    """Operator wallet-recovery endpoint (#78.7).
+
+    Clears the user's wallet binding so the next SIWE / WebApp-bind flow
+    starts fresh. Use case: a user has lost access to the wallet they
+    bound (key compromise, device loss, switching custody model). Without
+    this route, `_bind_wallet_to_existing_user` in routes/wallet.py
+    returns 409 `wallet_swap_not_allowed` — there's no in-band path for
+    the operator to clear the binding short of direct SQL.
+
+    Atomically clears FOUR wallet-bound fields under `SELECT FOR UPDATE`
+    on the User row (anti-drift rule 30 — same primitive `prepare_new`
+    holds via `risk.check_order`, so a concurrent prepare cannot land
+    an Order against a stale wallet binding mid-unbind):
+
+      - wallet_address
+      - sodex_account_id
+      - sodex_spot_api_key_name
+      - sodex_perps_api_key_name
+
+    Idempotent: re-running on an already-unbound user returns 200 with
+    `was_bound=false` and `previous_wallet_address=null` — operators
+    chaining recovery steps don't need to pre-check state.
+
+    Does NOT touch:
+      - `paper_trade` (operator-set; survives wallet rebind)
+      - Notification channels (the user can still receive signal alerts
+        even while unbound from execution)
+      - `is_active` / `pref_*` (delivery prefs)
+      - Existing Order / Position / SignalDelivery rows (audit trail
+        preserved; orders pending the now-unbound wallet's signature
+        will timeout via the nonce-expiry reaper, no data loss)
+
+    Returns 404 if `user_id` doesn't exist (distinguishes "user not
+    found" from "user found and unbound" — both legitimate states).
+    """
+    locked = await session.execute(select(User).where(User.id == user_id).with_for_update())
+    user = locked.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"user {user_id} not found",
+        )
+
+    previous_wallet_address = user.wallet_address
+    was_bound = previous_wallet_address is not None
+
+    # Clear ALL four wallet-bound fields. Doing this even when already
+    # unbound is harmless (sets None → None) and keeps the call site
+    # idempotent without a pre-check branch.
+    user.wallet_address = None
+    user.sodex_account_id = None
+    user.sodex_spot_api_key_name = None
+    user.sodex_perps_api_key_name = None
+
+    await session.commit()
+    log.info(
+        "admin_unbind_wallet",
+        user_id=user_id,
+        was_bound=was_bound,
+        previous_wallet_address=previous_wallet_address,
+    )
+    return UnbindWalletResponse(
+        user_id=user_id,
+        was_bound=was_bound,
+        previous_wallet_address=previous_wallet_address,
+    )
 
 
 @router.post(

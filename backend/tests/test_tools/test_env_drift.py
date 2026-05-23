@@ -52,7 +52,7 @@ def test_live_settings_match_live_env_example(checker):
     text = _ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
     settings_keys = checker.collect_settings_keys()
     documented = checker.extract_documented_keys(text)
-    missing, _extra = checker.compute_drift(settings_keys, documented)
+    missing, _ = checker.compute_drift(settings_keys, documented)
     assert missing == [], (
         f"{len(missing)} Settings field(s) not documented in .env.example: {missing}. "
         f"Add each as `# KEY=default` (or as a required var) and re-run."

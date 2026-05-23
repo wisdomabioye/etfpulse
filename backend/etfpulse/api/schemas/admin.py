@@ -339,6 +339,35 @@ class SetPaperTradeResponse(BaseModel):
     paper_trade: bool
 
 
+class UnbindWalletResponse(BaseModel):
+    """`POST /admin/users/{user_id}/unbind-wallet`. Operator-driven
+    wallet recovery — clears the user's wallet binding so the next SIWE
+    flow re-binds fresh.
+
+    Clears ALL four wallet-bound fields atomically:
+      - wallet_address (the EVM 0x… string)
+      - sodex_account_id (gateway-issued accountID, cached at bind time)
+      - sodex_spot_api_key_name (per-venue API-key NAME for `X-API-Key`)
+      - sodex_perps_api_key_name (same, perps venue)
+
+    Leaves untouched: paper_trade (operator flag), preferences (assets,
+    confidence), pref_paused, is_active, notification channels.
+
+    `was_bound` distinguishes "we cleared a real binding" (true) from
+    "user was already unbound; idempotent no-op" (false). Operators
+    chaining recovery steps need both states to be observable.
+
+    `previous_wallet_address` is the cleared address (or null if the
+    user was already unbound). Returned ONCE only — useful for an
+    audit trail at the call site. Not logged in plaintext beyond the
+    standard structlog event (which lives in private operator logs).
+    """
+
+    user_id: int
+    was_bound: bool
+    previous_wallet_address: str | None
+
+
 class SymbolsRefreshResponse(BaseModel):
     """`POST /admin/sodex/symbols/refresh`. Mirrors the
     `refresh_sodex_symbols` summary so the route is a thin pass-through.

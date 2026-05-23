@@ -180,6 +180,36 @@ def test_production_empty_jwt_secret_is_error(production, monkeypatch):
     assert report.ok is False
 
 
+def test_production_empty_siwe_statement_is_warning(production, monkeypatch):
+    """#78.10 — empty SIWE statement in prod is a warning (not error).
+    SIWE still functions, but the wallet sign-in prompt loses its
+    distinctive phishing-defense text — users can't tell a real
+    ETFPulse prompt from a phishing one."""
+    monkeypatch.setattr(settings, "siwe_statement", "")
+    report = check_config_health()
+    assert any("siwe_statement is empty" in w for w in report.warnings)
+    assert report.ok is True  # warning, not error
+
+
+def test_production_whitespace_siwe_statement_is_warning(production, monkeypatch):
+    """Whitespace-only is functionally equivalent to empty — the wallet
+    renders no visible text. `.strip()` in the check covers `"   "`,
+    `"\\n"`, `"\\t\\t"`, and the empty case in one branch."""
+    monkeypatch.setattr(settings, "siwe_statement", "   \n\t  ")
+    report = check_config_health()
+    assert any("siwe_statement is empty" in w for w in report.warnings)
+    assert report.ok is True
+
+
+def test_production_default_siwe_statement_is_clean(production):
+    """Default value ('Sign in to ETFPulse to manage your trading
+    account.') is the intended prod value — no warning. The `production`
+    fixture doesn't touch `siwe_statement`, so this exercises the real
+    Settings default."""
+    report = check_config_health()
+    assert not any("siwe_statement" in w for w in report.warnings)
+
+
 def test_production_empty_frontend_url_is_error(production, monkeypatch):
     """PR H.3 — promoted from warning to hard error. The Telegram alert
     was trimmed to skim-only in PR H.2 and depends on the 'View on web'

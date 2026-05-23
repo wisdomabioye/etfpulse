@@ -261,6 +261,129 @@ class TestSetPaperTrade:
 
 
 # ---------------------------------------------------------------------------
+# /admin/users/{user_id}/unbind-wallet (#78.7)
+# ---------------------------------------------------------------------------
+
+
+class TestUnbindWallet:
+    """Operator wallet-recovery endpoint. Clears all four wallet-bound
+    fields atomically; leaves untouched everything else on the User row."""
+
+    async def test_clears_all_four_wallet_bound_fields(self, admin_client, db_session):
+        """Happy path — every wallet-bound field nulled in one call."""
+        client, _ = admin_client
+        user = User(
+            wallet_address="0x" + secrets.token_hex(20),
+            sodex_account_id=42,
+            sodex_spot_api_key_name="my-spot",
+            sodex_perps_api_key_name="my-perps",
+            paper_trade=True,  # operator flag — MUST survive unbind
+        )
+        db_session.add(user)
+        await db_session.flush()
+        prev_wallet = user.wallet_address
+
+        resp = await client.post(
+            f"/api/admin/users/{user.id}/unbind-wallet",
+            headers=_HEADERS,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {
+            "user_id": user.id,
+            "was_bound": True,
+            "previous_wallet_address": prev_wallet,
+        }
+
+        await db_session.refresh(user)
+        assert user.wallet_address is None
+        assert user.sodex_account_id is None
+        assert user.sodex_spot_api_key_name is None
+        assert user.sodex_perps_api_key_name is None
+        # paper_trade is operator-set, NOT wallet-derived — must survive.
+        assert user.paper_trade is True
+
+    async def test_idempotent_when_already_unbound(self, admin_client, db_session):
+        """Re-unbinding an already-unbound user is a no-op (200, was_bound=false).
+        Operators chaining recovery steps don't need to pre-check state."""
+        client, _ = admin_client
+        # User exists, never had a wallet bound.
+        user = User(wallet_address=None)
+        db_session.add(user)
+        await db_session.flush()
+
+        resp = await client.post(
+            f"/api/admin/users/{user.id}/unbind-wallet",
+            headers=_HEADERS,
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "user_id": user.id,
+            "was_bound": False,
+            "previous_wallet_address": None,
+        }
+
+    async def test_unknown_user_404(self, admin_client):
+        """Missing user is 404 — distinguished from `was_bound=false` so
+        operators can tell "user doesn't exist" from "user found, already
+        unbound"."""
+        client, _ = admin_client
+        resp = await client.post(
+            "/api/admin/users/999999/unbind-wallet",
+            headers=_HEADERS,
+        )
+        assert resp.status_code == 404
+
+    async def test_requires_admin_key(self, admin_client, db_session):
+        """No `X-Admin-Key` header when the key IS configured → 401.
+        (Empty-config posture is 503; the fixture configures a key, so
+        missing-header is the "unauthorized" branch, not "disabled".)
+        Pins the dependency wiring — the auth chain itself is covered
+        in test_admin.py."""
+        client, _ = admin_client
+        user = await _seed_user(db_session)
+
+        resp = await client.post(
+            f"/api/admin/users/{user.id}/unbind-wallet",
+        )
+        assert resp.status_code == 401
+
+    async def test_does_not_touch_unrelated_fields(self, admin_client, db_session):
+        """User has delivery prefs (DeliveryPrefsMixin) + paper_trade
+        operator flag. None should be affected. Pin this so a future
+        drive-by edit doesn't accidentally widen the blast radius."""
+        client, _ = admin_client
+        user = User(
+            wallet_address="0x" + secrets.token_hex(20),
+            sodex_account_id=99,
+            pref_assets=["BTC", "ETH"],
+            pref_min_confidence=8,
+            pref_paused=False,
+            is_active=True,
+            paper_trade=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        resp = await client.post(
+            f"/api/admin/users/{user.id}/unbind-wallet",
+            headers=_HEADERS,
+        )
+        assert resp.status_code == 200
+
+        await db_session.refresh(user)
+        # Wallet-bound fields cleared.
+        assert user.wallet_address is None
+        assert user.sodex_account_id is None
+        # Everything else untouched.
+        assert user.pref_assets == ["BTC", "ETH"]
+        assert user.pref_min_confidence == 8
+        assert user.pref_paused is False
+        assert user.is_active is True
+        assert user.paper_trade is False
+
+
+# ---------------------------------------------------------------------------
 # /admin/sodex/symbols/refresh
 # ---------------------------------------------------------------------------
 

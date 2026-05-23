@@ -30,6 +30,15 @@ const NAV_ITEMS: NavItem[] = [
   // the current classification inline so users can see the regime without
   // navigating. The "Regime" string itself is also a link to /regime.
   { label: 'Regime', to: '/regime', matches: ['/regime'] },
+  // Trade (Stage 09 / PR D.4–D.5) — entry point to the SoDEX execution
+  // surface. Placed last so the nav reads read-only-first → action-last
+  // and the CTA sits where users instinctively scan for a "do something"
+  // affordance. `matches` includes `/login` because the auth fallback
+  // (`<Execute>` → `<Navigate to="/login">` when unauthed) is part of the
+  // same logical surface — the user thinks "I'm trying to trade," not
+  // "I'm on the login page". Without matching /login, the nav would lose
+  // its active state mid-auth-flow.
+  { label: 'Trade', to: '/execute', matches: ['/execute', '/login'] },
 ];
 
 /**

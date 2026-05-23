@@ -109,6 +109,7 @@ EXPECTED_NON_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/admin/execution/halt"),
         ("POST", "/api/admin/execution/resume"),
         ("POST", "/api/admin/users/{user_id}/paper-trade"),
+        ("POST", "/api/admin/users/{user_id}/unbind-wallet"),
         ("POST", "/api/admin/sodex/symbols/refresh"),
     }
 )

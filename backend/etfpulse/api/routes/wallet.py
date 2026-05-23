@@ -346,7 +346,19 @@ async def _try_resolve_authed_user(request: Request, session: AsyncSession) -> U
         # one we mint on success.
         return None
     user_id = claims["user_id"]
-    return await session.get(User, user_id)
+    user = await session.get(User, user_id)
+    if user is None:
+        # JWT was valid (signature OK, not expired, audience matches) but
+        # the User row is gone. Causes: a mint→delete race, manual operator
+        # DELETE, DB restore to a snapshot taken before this user existed,
+        # OR a long-lived token surviving a user being unbound and re-created
+        # under a different id. The call falls through to the anonymous
+        # path (correct UX — the SIWE flow rebuilds a user via the wallet
+        # address), but log so operators can spot if this fires more than
+        # rarely. #78.8.
+        log.warning("wallet_verify_authed_user_vanished", user_id=user_id)
+        return None
+    return user
 
 
 async def _bind_wallet_to_existing_user(

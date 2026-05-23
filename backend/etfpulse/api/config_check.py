@@ -159,6 +159,22 @@ def check_config_health() -> ConfigHealth:
             "`openssl rand -hex 32` (64 hex chars)."
         )
 
+    # #78.10 — `siwe_statement` empty (or whitespace-only) in prod means
+    # the wallet's sign-in prompt shows NO statement field. SIWE still
+    # functions (the binding works), but operators lose the
+    # phishing-defense affordance: users learn to expect "Sign in to
+    # ETFPulse" on the prompt; a blank statement on a phishing site
+    # becomes indistinguishable from the real one. Warning, not error
+    # — the deploy ships a working SIWE flow, just one that's harder
+    # to recognise. `.strip()` covers the "" / "   " / "\n" cases that
+    # an operator might accidentally produce when editing env files.
+    if not settings.siwe_statement.strip():
+        warnings.append(
+            "siwe_statement is empty or whitespace — wallet sign-in prompt "
+            "will show no statement field, removing a phishing-defense "
+            "affordance. Set SIWE_STATEMENT to a distinctive non-empty string."
+        )
+
     # PR D.4 — `sodex_chain_id` outside the canonical set is allowed
     # (devs may run a private chain for testing) but worth flagging in
     # prod. The FE pins `VITE_SODEX_CHAIN_ID` to match — drift between

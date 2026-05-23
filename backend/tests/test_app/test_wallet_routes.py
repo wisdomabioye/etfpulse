@@ -617,6 +617,71 @@ async def test_verify_stale_jwt_falls_through_to_anonymous_path(client, db_sessi
     assert body["wallet_address"] == burner.address.lower()
 
 
+async def test_verify_vanished_user_jwt_falls_through_and_logs(
+    client, db_session, burner, monkeypatch
+):
+    """#78.8 — JWT is valid (signature OK, not expired, audience matches)
+    but the User row it points at is gone (mint→delete race, manual
+    admin DELETE, DB restore, etc). The verify route silently falls
+    through to the anonymous path, AND emits a `log.warning` so
+    operators can see if this fires more than rarely.
+
+    Pins both:
+      1. Behavior — the request succeeds and creates a fresh user keyed
+         by the SIWE-verified wallet. The stale JWT doesn't block the
+         legitimate first-bind.
+      2. Observability — `wallet_verify_authed_user_vanished` warning
+         emitted with the vanished user_id. A future refactor that
+         removes the log line should fail this test.
+    """
+    from unittest.mock import MagicMock
+
+    from etfpulse.api.auth import mint_jwt
+    from etfpulse.api.routes import wallet as wallet_route
+
+    # Pre-create a user, mint a JWT for them, then delete the row before
+    # the verify call lands. `db_session` is shared with the route via
+    # the `client` fixture's dependency override.
+    ghost = User(wallet_address=None)
+    db_session.add(ghost)
+    await db_session.flush()
+    ghost_id = ghost.id
+    jwt = mint_jwt(ghost_id)
+    await db_session.delete(ghost)
+    await db_session.flush()
+
+    # Spy the wallet route's `log` so we can assert .warning was called.
+    # Direct attribute swap on the module — the route binds `log` at
+    # module load, so monkeypatching here replaces it process-wide for
+    # the test's duration.
+    mock_log = MagicMock()
+    monkeypatch.setattr(wallet_route, "log", mock_log)
+
+    nonce_body = await _request_nonce(client, burner.address)
+    message, signature = _build_signed_siwe(burner, nonce=nonce_body["nonce"])
+    r = await client.post(
+        "/api/wallet/verify",
+        json={"message": message, "signature": signature},
+        headers={"Authorization": f"Bearer {jwt}"},
+    )
+    # Behavior: request succeeds, a new user is created keyed by wallet.
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["wallet_address"] == burner.address.lower()
+    assert body["user_id"] != ghost_id  # fresh row, not the deleted ghost
+
+    # Observability: warning emitted with the vanished user_id.
+    warning_calls = [c for c in mock_log.warning.call_args_list if c.args]
+    assert any(
+        call.args[0] == "wallet_verify_authed_user_vanished"
+        and call.kwargs.get("user_id") == ghost_id
+        for call in warning_calls
+    ), (
+        f"expected wallet_verify_authed_user_vanished log.warning with "
+        f"user_id={ghost_id}, got calls: {mock_log.warning.call_args_list}"
+    )
+
+
 async def test_verify_handles_concurrent_insert_race(client, db_session, burner):
     """Simulate the race: another transaction inserts the same wallet
     before our flush. The route's IntegrityError handler rolls back +
