@@ -180,7 +180,11 @@ help = "Issue #22 — static check: every migration must declare a non-trivial d
 cmd = "bash scripts/check_migration_roundtrip.sh"
 help = "Issue #22 — DB round-trip: upgrade → downgrade -1 → upgrade head against test DB"
 
+[tool.poe.tasks.env-drift-check]
+cmd = "python scripts/check_env_drift.py"
+help = "Task #183 — static check: every Settings field is documented in .env.example"
+
 [tool.poe.tasks.check]
-help = "Run the full CI check suite — lint, format, typecheck, migrate-check, test+coverage"
-sequence = ["lint", "format", "typecheck", "migrate-check", "cov"]
+help = "Run the full CI check suite — lint, format, typecheck, migrate-check, env-drift-check, test+coverage"
+sequence = ["lint", "format", "typecheck", "migrate-check", "env-drift-check", "cov"]
 default_item_type = "ref"
