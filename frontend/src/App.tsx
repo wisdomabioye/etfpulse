@@ -3,7 +3,6 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Footer, TopNav } from './components/layout';
-import { Admin } from './pages/Admin';
 import { Analytics } from './pages/Analytics';
 import { Home } from './pages/Home';
 import { Regime } from './pages/Regime';
@@ -23,6 +22,9 @@ import { TrackRecord } from './pages/TrackRecord';
 const WalletProviders = lazy(() => import('./lib/WalletProviders'));
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
 const Execute = lazy(() => import('./pages/Execute').then((m) => ({ default: m.Execute })));
+// Admin is unlisted from TopNav (operator-only, accessed by direct URL).
+// Lazy so its ~30 kB doesn't bloat the public-page bundle (#186).
+const Admin = lazy(() => import('./pages/Admin').then((m) => ({ default: m.Admin })));
 
 /**
  * Suspense fallback while the wallet chunk loads. Kept identical-width to
@@ -82,8 +84,18 @@ function App() {
                       </Suspense>
                     }
                   />
-                  {/* Unlisted from TopNav — operator route, accessed by direct URL. */}
-                  <Route path="/admin" element={<Admin />} />
+                  {/* Unlisted from TopNav — operator route, accessed by direct URL.
+                      Lazy-loaded (#186) so the operator surface doesn't bloat
+                      the public-page bundle for the 99%+ of visitors who'll
+                      never hit it. */}
+                  <Route
+                    path="/admin"
+                    element={
+                      <Suspense fallback={<WalletRouteFallback />}>
+                        <Admin />
+                      </Suspense>
+                    }
+                  />
                 </Routes>
               </main>
               <Footer />

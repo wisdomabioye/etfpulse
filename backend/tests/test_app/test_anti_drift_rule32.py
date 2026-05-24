@@ -106,7 +106,6 @@ EXPECTED_NON_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/admin/signals/retry-ai"),
         ("GET", "/api/admin/signals/{signal_id}/delivery-trace"),
         ("POST", "/api/admin/telegram/rotate-webhook-secret"),
-        ("POST", "/api/admin/telegram/groups/{group_id}/heal-migration"),
         ("GET", "/api/admin/metrics"),
         ("POST", "/api/admin/execution/halt"),
         ("POST", "/api/admin/execution/resume"),
