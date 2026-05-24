@@ -34,8 +34,8 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from pydantic import AliasChoices
 
@@ -150,7 +150,10 @@ def main() -> int:
     if extra:
         # Informational: keys in the example that aren't Settings fields.
         # Could be platform vars, intentional, or stale — surface but don't fail.
-        msg += f" (info: {len(extra)} extra key(s) in example with no matching Settings field: {sorted(extra)})"
+        msg += (
+            f" (info: {len(extra)} extra key(s) in example "
+            f"with no matching Settings field: {sorted(extra)})"
+        )
     print(msg)
     return 0
 

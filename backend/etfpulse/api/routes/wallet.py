@@ -32,7 +32,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.adapters.telegram import TelegramError, telegram_client
-
 from etfpulse.api.auth import (
     JWTError,
     get_current_user,
@@ -280,7 +279,8 @@ async def post_api_key(
 # silent gap where entries evict but the handler still wants to enforce.
 # The handler reads the LIVE settings value to make the actual decision;
 # the cache is just storage.
-_REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS = 86400  # MUST match Settings.request_live_cooldown_seconds Field(le=...)
+# MUST match Settings.request_live_cooldown_seconds Field(le=...)
+_REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS = 86400
 _REQUEST_LIVE_COOLDOWN: TTLCache[int, float] = TTLCache(
     maxsize=100_000, ttl=_REQUEST_LIVE_COOLDOWN_MAX_TTL_SECONDS
 )
@@ -351,7 +351,7 @@ async def post_request_live(
         f"<b>Paper-trade:</b> <code>{user.paper_trade}</code>"
         f"{note_block}\n\n"
         "<i>Flip via `POST /api/admin/users/"
-        f"{user.id}/paper-trade` with body <code>{{\"paper_trade\": false}}</code>.</i>"
+        f'{user.id}/paper-trade` with body <code>{{"paper_trade": false}}</code>.</i>'
     )
 
     # Reserve the cooldown slot BEFORE the await — closes the race

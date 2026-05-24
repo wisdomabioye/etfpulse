@@ -601,9 +601,7 @@ async def test_request_live_403_wallet_unbound(client, db_session, monkeypatch):
     assert r.status_code == 403
 
 
-async def test_request_live_503_when_bot_disabled(
-    client, db_session, burner, monkeypatch
-):
+async def test_request_live_503_when_bot_disabled(client, db_session, burner, monkeypatch):
     """All four telegram fields empty → bot disabled → 503 with a clear
     detail string (NOT 404 — this is a user-facing affordance, info-leak
     policy doesn't apply)."""
@@ -619,9 +617,7 @@ async def test_request_live_503_when_bot_disabled(
     assert "bot not configured" in r.json()["detail"]
 
 
-async def test_request_live_503_when_operator_chat_unset(
-    client, db_session, burner, monkeypatch
-):
+async def test_request_live_503_when_operator_chat_unset(client, db_session, burner, monkeypatch):
     """Bot enabled but operator chat id is 0 → 503 with distinct detail
     so operators see which knob is missing."""
     monkeypatch.setattr(settings, "run_bot", True)
@@ -655,7 +651,9 @@ async def test_request_live_happy_path_sends_telegram_message(
     async def fake_send(*, chat_id, text, parse_mode, reply_markup=None):
         sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
 
-    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=fake_send))
+    monkeypatch.setattr(
+        telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=fake_send)
+    )
 
     token, user_id = await _bind_and_get_token(client, burner)
     r = await client.post(
@@ -700,7 +698,9 @@ async def test_request_live_html_escapes_note(
     async def fake_send(*, chat_id, text, parse_mode, reply_markup=None):
         sent.append({"text": text})
 
-    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=fake_send))
+    monkeypatch.setattr(
+        telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=fake_send)
+    )
 
     token, _ = await _bind_and_get_token(client, burner)
     r = await client.post(
@@ -817,7 +817,9 @@ async def test_request_live_concurrent_requests_single_message(
         await release.wait()
         sent.append({"chat_id": chat_id})
 
-    monkeypatch.setattr(telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=slow_send))
+    monkeypatch.setattr(
+        telegram_mod.telegram_client, "send_message", AsyncMock(side_effect=slow_send)
+    )
 
     token, _ = await _bind_and_get_token(client, burner)
 
