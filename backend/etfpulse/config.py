@@ -438,6 +438,17 @@ class Settings(BaseSettings):
     # surface preliminary numbers with very wide CIs.
     per_detector_min_samples: int = Field(default=3, ge=1, le=100)
 
+    # PR P2.4 — backtest admin route window cap. The route runs the
+    # orchestrator synchronously; longer windows tie up a request worker
+    # and exhaust the gateway timeout. 90d is the operating ceiling: it
+    # covers the full magnitude cold-start window (90d lookback) plus
+    # one detection day, so a sweep can actually exercise every detector
+    # under each candidate threshold. The cap is platform-tunable in case
+    # an operator wants to raise it after measuring p95 against
+    # production data. Upper bound 730 matches the calibration route's
+    # lookback ceiling for symmetry.
+    backtest_max_window_days: int = Field(default=90, ge=1, le=730)
+
     # PR I.3b — MARKET (regime_shift) signals score against a weighted
     # BTC + ETH composite. Weights are configurable (no hardcoded "equal
     # weighted" decision); the boot-time `model_validator` below pins

@@ -112,6 +112,11 @@ EXPECTED_NON_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/admin/users/{user_id}/paper-trade"),
         ("POST", "/api/admin/users/{user_id}/unbind-wallet"),
         ("POST", "/api/admin/sodex/symbols/refresh"),
+        # PR P2.4 — backtest harness operator surface (#201/#202).
+        # Gated by `require_admin_key`, not user JWT — same pattern
+        # as every other `/api/admin/*` route above.
+        ("POST", "/api/admin/backtest"),
+        ("GET", "/api/admin/backtest/detectors"),
     }
 )
 

@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+
 import { TELEGRAM_GROUP_URL } from '../../lib/links';
 import { Logo } from './Logo';
 
@@ -23,7 +25,9 @@ export function Footer() {
         >
           Telegram
         </a>
-        <a href="#" className="text-text-2 hover:text-text-1">How it works</a>
+        <Link to="/methodology" className="text-text-2 hover:text-text-1">
+          How it works
+        </Link>
       </div>
     </footer>
   );

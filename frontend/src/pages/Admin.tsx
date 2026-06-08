@@ -1,8 +1,11 @@
 import { useState } from 'react';
-import type { FormEvent } from 'react';
+
+import { Link } from 'react-router-dom';
 
 import { useAdminMetrics } from '../api/queries';
-import { Button, EmptyState, Kicker, PageHeader } from '../components/ui';
+import { loadAdminKey, saveAdminKey } from '../auth/adminKey';
+import { AdminKeyForm } from '../components/admin/AdminKeyForm';
+import { EmptyState, Kicker, PageHeader } from '../components/ui';
 import { formatAgo } from '../lib/format';
 
 import { MetricsBody, MetricsError, MetricsSkeleton } from './admin/metrics';
@@ -32,39 +35,19 @@ import { ActionsPanel, DeliveryTracePanel } from './admin/sections';
  * `/admin`.
  */
 
-const SESSION_KEY = 'etfpulse:admin_key';
-
-function loadKey(): string {
-  try {
-    return sessionStorage.getItem(SESSION_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-function persistKey(key: string) {
-  try {
-    if (key) sessionStorage.setItem(SESSION_KEY, key);
-    else sessionStorage.removeItem(SESSION_KEY);
-  } catch {
-    // ignore — private mode / disabled storage. Key still works for this render.
-  }
-}
-
 export function Admin() {
-  const [keyInput, setKeyInput] = useState(loadKey);
-  const [activeKey, setActiveKey] = useState(loadKey);
+  const [keyInput, setKeyInput] = useState(loadAdminKey);
+  const [activeKey, setActiveKey] = useState(loadAdminKey);
 
   const query = useAdminMetrics(activeKey);
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    persistKey(keyInput);
+  const handleSubmit = () => {
+    saveAdminKey(keyInput);
     setActiveKey(keyInput);
   };
 
   const handleClear = () => {
-    persistKey('');
+    saveAdminKey('');
     setKeyInput('');
     setActiveKey('');
   };
@@ -83,33 +66,14 @@ export function Admin() {
         }
       />
 
-      {/* Key gate ----------------------------------------------------------- */}
-      <form
+      {/* Key gate — shared component, used on every admin surface. */}
+      <AdminKeyForm
+        keyInput={keyInput}
+        onInputChange={setKeyInput}
+        activeKey={activeKey}
         onSubmit={handleSubmit}
-        className="flex flex-wrap items-end gap-3 border border-border-2 bg-bg-2 rounded-md p-4"
-      >
-        <label className="flex-1 min-w-[240px]">
-          <div className="font-mono text-[10px] text-text-3 uppercase tracking-[0.1em] mb-2">
-            Admin Key
-          </div>
-          <input
-            type="password"
-            autoComplete="off"
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-            placeholder="X-Admin-Key header value"
-            className="w-full bg-bg-3 text-text-1 border border-border-3 rounded-[5px] px-3 py-2 text-[13px] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          />
-        </label>
-        <Button type="submit" variant="primary">
-          {activeKey ? 'Reload' : 'Unlock'}
-        </Button>
-        {activeKey && (
-          <Button type="button" variant="ghost" onClick={handleClear}>
-            Clear key
-          </Button>
-        )}
-      </form>
+        onClear={handleClear}
+      />
 
       {/* Body --------------------------------------------------------------- */}
       {!activeKey && (
@@ -122,6 +86,26 @@ export function Admin() {
       {activeKey && query.isLoading && <MetricsSkeleton />}
 
       {activeKey && query.error && <MetricsError error={query.error} />}
+
+      {activeKey && (
+        <Link
+          to="/admin/backtest"
+          className="block border border-border-2 bg-bg-2 rounded-md p-4 hover:border-accent transition-colors"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-text-1 font-medium text-[14px]">
+                Run backtest
+              </div>
+              <div className="text-text-3 text-[12px] mt-1">
+                Replay detectors over a historical window with override
+                configs. Read-only, never writes signals.
+              </div>
+            </div>
+            <span className="text-accent text-[13px] font-mono">→</span>
+          </div>
+        </Link>
+      )}
 
       {activeKey && <ActionsPanel adminKey={activeKey} />}
 

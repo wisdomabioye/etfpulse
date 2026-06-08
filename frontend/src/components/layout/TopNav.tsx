@@ -30,6 +30,11 @@ const NAV_ITEMS: NavItem[] = [
   // the current classification inline so users can see the regime without
   // navigating. The "Regime" string itself is also a link to /regime.
   { label: 'Regime', to: '/regime', matches: ['/regime'] },
+  // Methodology (PR P2.1) discoverable from the Footer "How it works"
+  // link only — a 6th TopNav item at md (768px) breakpoint risks
+  // overflow given PriceStrip + LivePulse already share the row, and
+  // the page is a once-or-twice reference read, not a primary nav
+  // destination.
   // Trade (Stage 09 / PR D.4–D.5) — entry point to the SoDEX execution
   // surface. Placed last so the nav reads read-only-first → action-last
   // and the CTA sits where users instinctively scan for a "do something"
