@@ -26,6 +26,7 @@ import {
   type Venue,
   fetchOrders,
   fetchPositions,
+  fetchSodexBootstrap,
   fetchSymbols,
   fetchWalletMe,
   postPrepareCancel,
@@ -43,6 +44,11 @@ export const KEY_WALLET_ME = ['wallet', 'me'] as const;
 const KEY_ORDERS = ['execution', 'orders'] as const;
 const KEY_POSITIONS = ['execution', 'positions'] as const;
 const KEY_SYMBOLS = ['execution', 'symbols'] as const;
+// Cache key for the SoDEX bootstrap (auto-fetched account_id +
+// per-venue named keys). Same shape as KEY_WALLET_ME — the
+// `address` slot lets us refetch independently per wallet if the
+// page ever supports wallet switching mid-session.
+const KEY_SODEX_BOOTSTRAP = ['wallet', 'sodex-bootstrap'] as const;
 
 // ---------------------------------------------------------------------------
 // Reads
@@ -53,6 +59,27 @@ export function useWalletMe() {
     queryKey: KEY_WALLET_ME,
     queryFn: fetchWalletMe,
     refetchInterval: 30_000,
+  });
+}
+
+/**
+ * Discover the wallet's SoDEX account_id + per-venue named API keys
+ * so the FE can skip the manual ApiKeyForm. Enabled only when the
+ * caller has a bound wallet — there's nothing to discover otherwise
+ * AND the backend returns 403.
+ *
+ * `staleTime: 30s` matches `useWalletMe` so a key registered on the
+ * SoDEX dashboard mid-session is picked up on the next refetch.
+ * Retry off — 503 means SoDEX is unreachable, and the consumer
+ * falls back to today's manual form (graceful degrade).
+ */
+export function useSodexBootstrap(walletAddress: string | null) {
+  return useQuery({
+    queryKey: KEY_SODEX_BOOTSTRAP,
+    queryFn: fetchSodexBootstrap,
+    enabled: !!walletAddress,
+    staleTime: 30_000,
+    retry: false,
   });
 }
 

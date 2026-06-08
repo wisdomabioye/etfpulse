@@ -43,6 +43,7 @@ import type {
   Venue,
   WalletMeResponse,
 } from '../api/execution';
+import { ApiKeySection } from '../components/execution/ApiKeySection';
 import { performSiweLogin } from '../auth/siwe';
 import { useAuth } from '../auth/useAuth';
 import {
@@ -52,7 +53,6 @@ import {
   usePrepareCancel,
   usePrepareNew,
   useRequestLive,
-  useSetApiKey,
   useSubmitCancel,
   useSubmitNew,
   useSymbols,
@@ -412,94 +412,10 @@ function RequestLiveBlock() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. ApiKeyForm — visible when at least one venue is missing the named key
+// 2. ApiKeySection (SDXB) — moved to components/execution/ApiKeySection.tsx
+//    Auto-fetches the wallet's account_id + named keys from SoDEX
+//    instead of asking the operator to copy-paste them. Imported above.
 // ---------------------------------------------------------------------------
-
-function ApiKeySection({ me }: { me: WalletMeResponse }) {
-  const missing: Venue[] = [];
-  if (!me.sodex_spot_api_key_name) missing.push('sodex_spot');
-  if (!me.sodex_perps_api_key_name) missing.push('sodex_perps');
-  if (missing.length === 0) return null;
-  return <ApiKeyForm missing={missing} initialAccountId={me.sodex_account_id} />;
-}
-
-function ApiKeyForm({
-  missing,
-  initialAccountId,
-}: {
-  missing: Venue[];
-  initialAccountId: number | null;
-}) {
-  const setKey = useSetApiKey();
-  const [venue, setVenue] = useState<Venue>(missing[0]);
-  const [apiKeyName, setApiKeyName] = useState('');
-  const [accountId, setAccountId] = useState<string>(initialAccountId ? String(initialAccountId) : '');
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    const parsedAccountId = Number(accountId);
-    if (!Number.isFinite(parsedAccountId) || parsedAccountId <= 0) return;
-    if (!apiKeyName) return;
-    await setKey.mutateAsync({
-      venue,
-      api_key_name: apiKeyName,
-      sodex_account_id: parsedAccountId,
-    });
-    setApiKeyName('');
-  }
-
-  return (
-    <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
-      <h2 className="text-lg font-semibold text-amber-200">Bind SoDEX API key</h2>
-      <p className="text-text-2 text-sm">
-        Register a named API key on the SoDEX frontend, then paste its <strong>name</strong>{' '}
-        (NOT the EVM address) here. ETFPulse never sees or stores your private key — the
-        gateway looks up your named key under the account id below.
-      </p>
-      <form onSubmit={onSubmit} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        <select
-          value={venue}
-          onChange={(e) => setVenue(e.target.value as Venue)}
-          className="px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-        >
-          {missing.map((v) => (
-            <option key={v} value={v}>
-              {v === 'sodex_spot' ? 'Spot' : 'Perps'}
-            </option>
-          ))}
-        </select>
-        <input
-          type="text"
-          placeholder="api_key_name"
-          value={apiKeyName}
-          onChange={(e) => setApiKeyName(e.target.value)}
-          pattern="^[A-Za-z0-9_\-]+$"
-          required
-          className="px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-        />
-        <input
-          type="number"
-          placeholder="sodex_account_id"
-          value={accountId}
-          onChange={(e) => setAccountId(e.target.value)}
-          min={1}
-          required
-          className="px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-        />
-        <button
-          type="submit"
-          disabled={setKey.isPending}
-          className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50"
-        >
-          {setKey.isPending ? 'Saving…' : 'Bind key'}
-        </button>
-      </form>
-      {setKey.error && (
-        <ErrorBanner error={setKey.error} fallback="Failed to bind API key." />
-      )}
-    </section>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // 3. OrderForm

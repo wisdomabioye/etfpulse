@@ -21,6 +21,7 @@ identity.py` helper module is factored.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import time
 
@@ -31,6 +32,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.adapters.sodex._http import SodexError, SodexHttpError
+from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
+from etfpulse.adapters.sodex.spot_client import SodexSpotClient
 from etfpulse.adapters.telegram import TelegramError, telegram_client
 from etfpulse.api.auth import (
     JWTError,
@@ -40,14 +44,16 @@ from etfpulse.api.auth import (
     verify_jwt,
 )
 from etfpulse.api.auth_siwe import consume_and_verify, issue_nonce
-from etfpulse.api.deps import get_db_session
+from etfpulse.api.deps import get_db_session, get_sodex_clients
 from etfpulse.api.schemas.wallet import (
+    APIKeyOut,
     NonceRequest,
     NonceResponse,
     RequestLiveRequest,
     RequestLiveResponse,
     SetApiKeyRequest,
     SetApiKeyResponse,
+    SodexBootstrapResponse,
     VerifyRequest,
     VerifyResponse,
     WalletMeResponse,
@@ -194,6 +200,108 @@ async def get_me(user: User = Depends(get_current_user_unbound)) -> WalletMeResp
         paper_trade=user.paper_trade,
         sodex_spot_api_key_name=user.sodex_spot_api_key_name,
         sodex_perps_api_key_name=user.sodex_perps_api_key_name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /sodex-bootstrap — authed (wallet must be bound)
+#
+# Auto-fetch helper that replaces the manual `api_key_name` + `account_id`
+# form on /execute. Returns whatever the gateway exposes for this wallet:
+#   - account_id (null if the wallet has no SoDEX account yet)
+#   - registered named API keys per venue (empty list if none registered)
+#
+# Per-call failure handling: SodexHttpError(404) is treated as "missing on
+# the gateway side" — yields null/empty. Any other SodexError (rate limit,
+# 5xx, validation, parse) yields 503 so the FE can fall back to the
+# manual form. The three SoDEX calls fire in parallel via asyncio.gather.
+# ---------------------------------------------------------------------------
+
+
+async def _safe_get_account_id(client: SodexSpotClient, address: str) -> int | None:
+    """Return `aid` from spot state, or None on 404 (no SoDEX account).
+
+    account_id is per-(chain, address) — same value on spot and perps —
+    so we only query the spot endpoint. Re-raises other Sodex errors so
+    the route returns 503 (graceful degrade on the FE).
+    """
+    try:
+        state = await client.get_state(address)
+    except SodexHttpError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+    return state.aid
+
+
+async def _safe_get_keys(
+    client: SodexSpotClient | SodexPerpsClient, address: str
+) -> list[APIKeyOut]:
+    """Return the named API keys for the wallet on this venue.
+
+    SodexHttpError(404) → empty list (some gateway deployments return 404
+    instead of `[]` for accounts with no keys; treat both as zero keys).
+    """
+    try:
+        keys = await client.get_api_keys(address)
+    except SodexHttpError as exc:
+        if exc.status_code == 404:
+            return []
+        raise
+    return [APIKeyOut(name=k.name, public_key=k.public_key, expires_at=k.expires_at) for k in keys]
+
+
+@router.get("/sodex-bootstrap", response_model=SodexBootstrapResponse)
+async def get_sodex_bootstrap(
+    user: User = Depends(get_current_user),
+    clients: tuple[SodexSpotClient, SodexPerpsClient] = Depends(get_sodex_clients),
+) -> SodexBootstrapResponse:
+    """Discover the wallet's SoDEX account_id + named API keys per venue.
+
+    The FE uses this to skip the manual `api_key_name` + `account_id`
+    form: if exactly one key is registered on a venue, auto-bind it; if
+    multiple, render a dropdown; if zero, show a link to the SoDEX
+    dashboard.
+
+    Read-only — no DB writes; no Sodex writes. Wallet must be bound
+    (`get_current_user` enforces). The 503 path mirrors
+    `get_sodex_clients`'s shape so a missing SoDEX surface degrades
+    uniformly.
+    """
+    spot, perps = clients
+    address = user.wallet_address
+    assert address is not None  # get_current_user gates on bound wallet
+    try:
+        account_id, spot_keys, perps_keys = await asyncio.gather(
+            _safe_get_account_id(spot, address),
+            _safe_get_keys(spot, address),
+            _safe_get_keys(perps, address),
+        )
+    except SodexError as exc:
+        log.warning(
+            "sodex_bootstrap_failed",
+            user_id=user.id,
+            wallet=address,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="sodex_bootstrap_unavailable",
+        ) from exc
+
+    log.info(
+        "sodex_bootstrap_ok",
+        user_id=user.id,
+        wallet=address,
+        account_id=account_id,
+        spot_keys=len(spot_keys),
+        perps_keys=len(perps_keys),
+    )
+    return SodexBootstrapResponse(
+        account_id=account_id,
+        spot_keys=spot_keys,
+        perps_keys=perps_keys,
     )
 
 

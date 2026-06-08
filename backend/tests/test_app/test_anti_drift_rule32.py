@@ -51,6 +51,10 @@ EXPECTED_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # Wallet introspection + binding (D.4.2)
         ("GET", "/api/wallet/me"),
         ("POST", "/api/wallet/api-key"),
+        # SDXB — auto-fetch SoDEX account_id + named keys for the FE
+        # (replaces the manual ApiKeyForm). Wallet must be bound, so
+        # gated by `get_current_user` (not the unbound variant).
+        ("GET", "/api/wallet/sodex-bootstrap"),
         # PR #185 — paper-trade users request live trading.
         ("POST", "/api/wallet/request-live"),
         # Execution surface (D.4.3)

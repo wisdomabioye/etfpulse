@@ -44,6 +44,30 @@ export interface SetApiKeyResponse {
   sodex_account_id: number;
 }
 
+/**
+ * One named API key as returned by `/api/wallet/sodex-bootstrap`.
+ * Mirrors `etfpulse/api/schemas/wallet.py:APIKeyOut` field-for-field.
+ * `expires_at: 0` means "never expires" per SoDEX api.md.
+ */
+export interface APIKeyOut {
+  name: string;
+  public_key: string;
+  expires_at: number;
+}
+
+/**
+ * Response shape of `GET /api/wallet/sodex-bootstrap`. Mirrors
+ * `SodexBootstrapResponse` on the backend. Any of the three fields
+ * can independently land in its "missing" state:
+ *   - account_id null: wallet has no SoDEX account yet
+ *   - spot_keys / perps_keys empty: no named keys on that venue
+ */
+export interface SodexBootstrapResponse {
+  account_id: number | null;
+  spot_keys: APIKeyOut[];
+  perps_keys: APIKeyOut[];
+}
+
 // ---------------------------------------------------------------------------
 // Execution (D.4.3)
 // ---------------------------------------------------------------------------
@@ -185,6 +209,10 @@ export function fetchWalletMe(): Promise<WalletMeResponse> {
 
 export function postWalletApiKey(req: SetApiKeyRequest): Promise<SetApiKeyResponse> {
   return apiPost<SetApiKeyResponse>('/api/wallet/api-key', req);
+}
+
+export function fetchSodexBootstrap(): Promise<SodexBootstrapResponse> {
+  return apiGet<SodexBootstrapResponse>('/api/wallet/sodex-bootstrap');
 }
 
 export interface RequestLiveRequest {

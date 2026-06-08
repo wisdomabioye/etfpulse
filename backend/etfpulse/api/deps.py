@@ -12,6 +12,8 @@ from collections.abc import AsyncIterator
 from fastapi import Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
+from etfpulse.adapters.sodex.spot_client import SodexSpotClient
 from etfpulse.config import settings
 from etfpulse.db import async_session, engine
 
@@ -122,3 +124,36 @@ async def verify_telegram_secret(
     accepted: set[str] = getattr(request.app.state, "telegram_webhook_secrets", set())
     if not accepted or x_telegram_bot_api_secret_token not in accepted:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+
+# ---------------------------------------------------------------------------
+# SoDEX clients — long-lived HTTP clients owned by the scheduler lifespan
+# (D.3.3) and stashed on `app.state`. Routes pull them via this dep so the
+# attribute name + missing-state behavior live in ONE place.
+# ---------------------------------------------------------------------------
+
+
+def get_sodex_clients(
+    request: Request,
+) -> tuple[SodexSpotClient, SodexPerpsClient]:
+    """Pull the long-lived SoDEX clients off `app.state`.
+
+    Returns `(spot, perps)`. Raises 503 with an operator hint when
+    either is missing — typical cause is `RUN_SCHEDULER=false` or
+    incomplete SODEX_* env. Same shape as the prior
+    `api/routes/execution.py:_get_sodex_clients` helper (which this
+    replaces); extracted here so the bootstrap route + execution route
+    + any future operator surface share the lookup.
+    """
+    spot = getattr(request.app.state, "sodex_spot_client", None)
+    perps = getattr(request.app.state, "sodex_perps_client", None)
+    if not isinstance(spot, SodexSpotClient) or not isinstance(perps, SodexPerpsClient):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "SoDEX clients not initialised on app.state. The scheduler "
+                "lifespan owns these; check that RUN_SCHEDULER=true and "
+                "SODEX_* env is set."
+            ),
+        )
+    return spot, perps

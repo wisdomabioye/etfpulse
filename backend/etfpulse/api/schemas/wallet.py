@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from etfpulse.models.order import Venue
 
@@ -155,3 +155,49 @@ class RequestLiveResponse(BaseModel):
 
     ok: Literal[True] = True
     message: str
+
+
+# ---------------------------------------------------------------------------
+# SDXB — GET /api/wallet/sodex-bootstrap (auto-fetch account_id + named keys)
+# ---------------------------------------------------------------------------
+
+
+class APIKeyOut(BaseModel):
+    """One named API key as exposed to the FE. Mirrors
+    `etfpulse.adapters.sodex.responses.APIKey` minus the `type` field
+    (we only register EVM keys today; surfacing the type would invite
+    a UI for a non-existent choice). The `name` value is what
+    eventually goes in the `X-API-Key` header on signed writes.
+
+    `expires_at: 0` means never expires (per api.md). Frontend renders
+    this as "—" instead of an epoch timestamp.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    public_key: str
+    expires_at: int = Field(ge=0)
+
+
+class SodexBootstrapResponse(BaseModel):
+    """`GET /api/wallet/sodex-bootstrap` 200 body.
+
+    All three fields can independently land in their "missing" state:
+      - `account_id IS NULL` — wallet has never interacted with SoDEX
+        (404 on `/accounts/{addr}/state`). FE renders the
+        create-your-account guidance instead of the manual form.
+      - `spot_keys == []` — wallet has the account but registered no
+        spot key. FE links to the SoDEX spot dashboard.
+      - `perps_keys == []` — same as spot, perps-side.
+
+    Anti-DRY: the FE auto-bind path POSTs to `/api/wallet/api-key`
+    (per-venue) with the discovered values. No new write endpoint —
+    bootstrap is read-only.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: int | None = Field(default=None, ge=0)
+    spot_keys: list[APIKeyOut]
+    perps_keys: list[APIKeyOut]

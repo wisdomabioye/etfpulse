@@ -51,10 +51,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
-from etfpulse.adapters.sodex.spot_client import SodexSpotClient
 from etfpulse.api.auth import get_current_user
-from etfpulse.api.deps import get_db_session
+from etfpulse.api.deps import get_db_session, get_sodex_clients
 from etfpulse.api.schemas.execution import (
     VALID_VENUES,
     OrderOut,
@@ -201,7 +199,7 @@ async def post_submit(
     # so we don't leak the existence of someone else's order_id.
     await _ensure_user_owns_order(session, order_id=order_id, user_id=user.id)
 
-    spot_client, perps_client = _get_sodex_clients(request)
+    spot_client, perps_client = get_sodex_clients(request)
 
     result: SubmitResult = await submit_new(
         session,
@@ -273,7 +271,7 @@ async def post_submit_cancel(
 ) -> SubmitResponse:
     """Forward a wallet-signed cancel to the gateway."""
     await _ensure_user_owns_order(session, order_id=order_id, user_id=user.id)
-    spot_client, perps_client = _get_sodex_clients(request)
+    spot_client, perps_client = get_sodex_clients(request)
 
     result: SubmitResult = await submit_cancel(
         session,
@@ -447,25 +445,8 @@ async def _ensure_user_owns_order(session: AsyncSession, *, order_id: int, user_
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
-def _get_sodex_clients(request: Request) -> tuple[SodexSpotClient, SodexPerpsClient]:
-    """Pull the long-lived clients off `app.state`.
-
-    These are entered into the scheduler lifespan (D.3.3) AsyncExitStack
-    at boot. If the scheduler is disabled or didn't boot, `app.state`
-    lacks the attributes → 503 with an operator hint.
-    """
-    spot = getattr(request.app.state, "sodex_spot_client", None)
-    perps = getattr(request.app.state, "sodex_perps_client", None)
-    if spot is None or perps is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "SoDEX clients not initialised on app.state. The scheduler "
-                "lifespan owns these; check that RUN_SCHEDULER=true and "
-                "SODEX_* env is set."
-            ),
-        )
-    return spot, perps
+# `_get_sodex_clients` moved to `api/deps.py:get_sodex_clients` (SDXB.1)
+# so the bootstrap route + execution route share one lookup.
 
 
 def _submit_result_to_response(result: SubmitResult) -> SubmitResponse:
