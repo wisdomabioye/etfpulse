@@ -228,7 +228,7 @@ function WalletMissingWithWallet() {
         <button
           type="button"
           onClick={handleConnect}
-          className="px-4 py-2 rounded-lg bg-accent-1 text-bg-0 font-medium"
+          className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium"
         >
           Connect Wallet
         </button>
@@ -241,7 +241,7 @@ function WalletMissingWithWallet() {
             type="button"
             onClick={handleSign}
             disabled={busy}
-            className="px-4 py-2 rounded-lg bg-accent-1 text-bg-0 font-medium disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50"
           >
             {busy ? 'Waiting for signature…' : 'Sign in with Ethereum'}
           </button>
@@ -489,7 +489,7 @@ function ApiKeyForm({
         <button
           type="submit"
           disabled={setKey.isPending}
-          className="px-4 py-2 rounded-lg bg-accent-1 text-bg-0 font-medium disabled:opacity-50"
+          className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50"
         >
           {setKey.isPending ? 'Saving…' : 'Bind key'}
         </button>
@@ -693,7 +693,7 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
         <button
           type="submit"
           disabled={submitting || assetOptions.length === 0}
-          className="col-span-2 sm:col-span-4 px-4 py-3 rounded-lg bg-accent-1 text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          className="col-span-2 sm:col-span-4 px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {submitting ? 'Working…' : 'Place order'}
         </button>

@@ -97,6 +97,26 @@ if (isWalletConnectAvailable) {
       projectId,
       metadata,
       defaultNetwork: activeStub,
+      // SoDEX is an off-chain signing gateway, NOT a real EVM chain
+      // — the stub above exists only so wagmi/AppKit have ONE
+      // structurally-valid network to register. Without these two
+      // options, AppKit notices the user's wallet is on a real chain
+      // (Ethereum mainnet etc) that doesn't match our stub's chainId
+      // and shows a "switch network" prompt the user CANNOT satisfy
+      // (the stub's RPC is `.invalid` by design — see sodex-chains.ts).
+      //
+      //   - `allowUnsupportedChain: true` — let the user proceed with
+      //     their wallet's current chainId. EIP-712 typed-data signing
+      //     uses `domain.chainId` supplied by the backend (SIWE nonce /
+      //     order typed_data), independent of wagmi's "active" chain.
+      //   - `enableNetworkSwitch: false` — hide AppKit's network
+      //     selector entirely. Switching is meaningless for SoDEX so
+      //     surfacing the control just invites support tickets.
+      //
+      // Verified against `@reown/appkit-controllers` OptionsController
+      // types at install time (v1.8.20).
+      allowUnsupportedChain: true,
+      enableNetworkSwitch: false,
       features: {
         // ETFPulse is wallet-only auth; strip AppKit's email magic-link,
         // social-login, and analytics-pixel surfaces.

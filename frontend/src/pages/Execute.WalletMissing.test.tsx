@@ -32,7 +32,17 @@
  */
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Force-mock the gate's flag so this test doesn't depend on whether
+// the running shell happens to have `VITE_WALLETCONNECT_PROJECT_ID`
+// set in .env (which the project ID now is, for live dev testing).
+// Without this, AppKit initialises at import time inside jsdom and
+// `<WalletMissingNotice>` routes through the AppKit-hook path that
+// requires WagmiProvider — exactly what the test is trying to AVOID.
+vi.mock('../lib/wagmi', () => ({
+  isWalletConnectAvailable: false,
+}));
 
 import { WalletMissingNotice, WalletMissingUnavailable } from './Execute';
 

@@ -25,7 +25,7 @@
 
 import { useRef, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { useAccount, useSignMessage } from 'wagmi';
+import { useAccount, useDisconnect, useSignMessage } from 'wagmi';
 import { useAppKit } from '@reown/appkit/react';
 
 import { performSiweLogin } from '../auth/siwe';
@@ -56,7 +56,7 @@ function LoginUnavailable() {
         Wallet Connect isn&apos;t configured on this deployment. The site administrator must set
         <code className="mx-1 text-text-1">VITE_WALLETCONNECT_PROJECT_ID</code>
         and redeploy. Get a free project ID at{' '}
-        <a className="text-accent-1 underline" href="https://cloud.reown.com">
+        <a className="text-accent underline" href="https://cloud.reown.com">
           cloud.reown.com
         </a>
         .
@@ -72,6 +72,7 @@ function LoginWithWallet() {
   const { address, isConnected } = useAccount();
   const { open } = useAppKit();
   const { signMessageAsync } = useSignMessage();
+  const { disconnect } = useDisconnect();
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +137,7 @@ function LoginWithWallet() {
         <button
           type="button"
           onClick={handleConnect}
-          className="w-full px-4 py-3 rounded-lg bg-accent-1 text-bg-0 font-medium"
+          className="w-full px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium"
         >
           Connect Wallet
         </button>
@@ -144,14 +145,29 @@ function LoginWithWallet() {
 
       {isConnected && (
         <div className="space-y-4">
-          <div className="text-sm text-text-2">
-            Connected as <code className="text-text-1">{address}</code>
+          <div className="flex items-center justify-between gap-3 text-sm text-text-2">
+            <span className="truncate">
+              Connected as <code className="text-text-1">{address}</code>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                // Sync: also clear any in-flight signing state so the
+                // user can immediately reconnect a different wallet
+                // without a stale "Waiting for signature…" label.
+                setError(null);
+                disconnect();
+              }}
+              className="shrink-0 text-[12px] text-text-3 hover:text-text-1 underline"
+            >
+              Disconnect
+            </button>
           </div>
           <button
             type="button"
             onClick={handleSiwe}
             disabled={busy || !address}
-            className="w-full px-4 py-3 rounded-lg bg-accent-1 text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy ? 'Waiting for signature…' : 'Sign in with Ethereum'}
           </button>
