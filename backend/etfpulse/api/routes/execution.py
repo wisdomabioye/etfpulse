@@ -11,6 +11,7 @@ Route map:
   POST /api/execution/submit/{id}          forward signature to gateway
   POST /api/execution/prepare-cancel/{id}  build cancel typed-data
   POST /api/execution/submit-cancel/{id}   forward cancel signature
+  POST /api/execution/close-position/{id}  market-close an open position (P1.4)
   GET  /api/execution/orders               list user's orders (paginated)
   GET  /api/execution/orders/{id}          single order detail
   GET  /api/execution/positions            open positions
@@ -46,11 +47,25 @@ tx discarded).
 
 from __future__ import annotations
 
+from typing import cast
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.adapters.sodex.schemas import (
+    OrderSide as SodexOrderSide,
+)
+from etfpulse.adapters.sodex.schemas import (
+    OrderType as SodexOrderType,
+)
+from etfpulse.adapters.sodex.schemas import (
+    PositionSide as SodexPositionSide,
+)
+from etfpulse.adapters.sodex.schemas import (
+    TimeInForce as SodexTimeInForce,
+)
 from etfpulse.api.auth import get_current_user
 from etfpulse.api.deps import get_db_session, get_sodex_clients
 from etfpulse.api.schemas.execution import (
@@ -72,8 +87,8 @@ from etfpulse.api.schemas.execution import (
     api_tif_to_sodex,
     api_trigger_type_to_sodex,
 )
-from etfpulse.models.order import Order, OrderStatus
-from etfpulse.models.position import Position, PositionStatus
+from etfpulse.models.order import TERMINAL_ORDER_STATUSES, Order, OrderStatus, Venue
+from etfpulse.models.position import Position, PositionSide, PositionStatus
 from etfpulse.models.sodex_symbol import SodexSymbol
 from etfpulse.models.user import User
 from etfpulse.pipeline.execution.pipeline import (
@@ -86,6 +101,8 @@ from etfpulse.pipeline.execution.pipeline import (
 )
 from etfpulse.pipeline.execution.risk import RiskRequest
 from etfpulse.pipeline.execution.symbols import SymbolNotResolved
+from etfpulse.pipeline.prices import Asset as PriceAsset
+from etfpulse.pipeline.prices import get_spot_price_with_source
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/execution", tags=["execution"])
@@ -285,6 +302,215 @@ async def post_submit_cancel(
 
 
 # ---------------------------------------------------------------------------
+# close-position (PR P1.4)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/close-position/{position_id}", response_model=PrepareNewResponse)
+async def post_close_position(
+    position_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> PrepareNewResponse:
+    """Build a typed-data MARKET order that closes an open position.
+
+    Same response shape as `/prepare`: the wallet still has to sign +
+    submit. This endpoint is a convenience that resolves the position's
+    asset/venue/size + opposite-side automatically; the user does NOT
+    pick a side or size.
+
+    - **Spot LONG** → SELL of the held quantity. `reduce_only=False`
+      (spot rejects reduce_only per the risk gate; the SELL itself
+      brings size to zero in the position-reconciler).
+    - **Perps LONG** → SELL MARKET, `reduce_only=True`.
+    - **Perps SHORT** → BUY MARKET, `reduce_only=True`.
+
+    A 404 hides the existence of someone else's position_id. A 422
+    surfaces if the position is already closed (`status != OPEN`) so the
+    UI doesn't pump a no-op. Spot price fetch failure → 503 (same shape
+    as `SymbolNotResolved` — operator can act).
+    """
+    # PR P1-fix.F1 — take FOR UPDATE on the User row at the top so the
+    # dedupe SELECT below is atomic with the prepare_new INSERT that
+    # follows. `check_order` (inside prepare_new) also acquires this
+    # lock; in PostgreSQL the same session re-selecting FOR UPDATE on
+    # an already-locked row is a no-op. Without this lock, two
+    # concurrent close-position POSTs would both pass dedupe before
+    # either committed and both insert close orders.
+    locked_user = (
+        await session.execute(select(User).where(User.id == user.id).with_for_update())
+    ).scalar_one_or_none()
+    if locked_user is None:
+        # Race with /admin/users/{id}/unbind-wallet or similar — the
+        # JWT was valid at auth-time, but the row vanished. 401 is the
+        # honest answer.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    position = await session.get(Position, position_id)
+    if (
+        position is None
+        or position.user_id != user.id
+        or position.status != PositionStatus.OPEN.value
+    ):
+        # Either not found, not yours, or already closed. Don't leak
+        # which one — same 404 envelope as `_ensure_user_owns_order`.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    if position.size <= 0:
+        # Defensive: an OPEN position with zero size is a corrupt row;
+        # the reconciler should have flipped it to CLOSED. Surface as
+        # 422 so the UI shows "nothing to close" without 5xx noise.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="position has zero size",
+        )
+
+    # PR P1-fix.B2 — short-circuit if a previous PERPS *immediate close*
+    # for this (user, venue, asset) is still in-flight.
+    #
+    # The marker for "immediate close intent" is `reduce_only=True AND
+    # is_conditional=False`. The `is_conditional=False` filter is
+    # load-bearing (PR P1-fix.Issue-A): resting SL/TP legs are ALSO
+    # `reduce_only=True` but carry `is_conditional=True` — without this
+    # filter the dedupe would treat a resting stop as "a close already
+    # in flight" and 409 every manual close on a protected position.
+    #
+    # On SPOT a close is a plain SELL indistinguishable from a regular
+    # trade, so we cannot safely dedupe at this layer (the venue rejects
+    # over-sell via insufficient-balance and the resulting REJECTED row
+    # is the audit trail). 409 with the extant order_id so the FE can
+    # surface "close already pending — wait or cancel" instead of
+    # silently creating a second perps close.
+    if position.venue == Venue.SODEX_PERPS.value:
+        inflight_stmt = (
+            select(Order.id)
+            .where(Order.user_id == user.id)
+            .where(Order.venue == position.venue)
+            .where(Order.asset == position.asset)
+            .where(Order.reduce_only.is_(True))
+            .where(Order.is_conditional.is_(False))
+            .where(Order.status.notin_([s.value for s in TERMINAL_ORDER_STATUSES]))
+            .limit(1)
+        )
+        existing_close = (await session.execute(inflight_stmt)).scalar_one_or_none()
+        if existing_close is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "reason": "close_already_in_flight",
+                    "detail": (
+                        f"a close order ({existing_close}) is already in-flight for "
+                        f"{position.asset} on {position.venue}; cancel or wait for "
+                        "it before issuing a new close."
+                    ),
+                    "order_id": existing_close,
+                },
+            )
+
+    # Resolve closing side from the position's directional side.
+    if position.side == PositionSide.LONG.value:
+        sodex_side = SodexOrderSide.SELL.value
+    elif position.side == PositionSide.SHORT.value:
+        sodex_side = SodexOrderSide.BUY.value
+    else:  # pragma: no cover — DB CHECK pins side to {long, short}
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"unrecognised position side {position.side!r}",
+        )
+
+    is_perps = position.venue == Venue.SODEX_PERPS.value
+    # `position.asset` is a str column; the price oracle only supports
+    # BTC + ETH today. Narrow at runtime + 503 otherwise so a future
+    # asset addition surfaces operator-actionable rather than 500.
+    if position.asset not in {"BTC", "ETH"}:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"price oracle does not support asset={position.asset}",
+        )
+    # `position.asset` was just narrowed to {"BTC", "ETH"}; cast to the
+    # matching Literal alias so mypy can verify the oracle call.
+    price_result = await get_spot_price_with_source(cast(PriceAsset, position.asset))
+    if price_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"spot price unavailable for asset={position.asset} — cannot "
+                "size risk gate for close. Retry shortly."
+            ),
+        )
+    ref_price, _source = price_result
+
+    risk_req = RiskRequest(
+        venue=position.venue,
+        asset=position.asset,
+        side=sodex_side,
+        order_type=SodexOrderType.MARKET.value,
+        time_in_force=SodexTimeInForce.IOC.value,
+        requested_size=position.size,
+        requested_price=ref_price,
+        position_side=SodexPositionSide.BOTH.value if is_perps else None,
+        # A close is an IMMEDIATE market reduce-only order, NOT a
+        # conditional/stop order — so it carries no trigger_type and no
+        # stop_price. (PR P1-fix.CRIT-1: trigger_type is now meaningful
+        # in the signed payload, so we must not set it spuriously here.)
+        trigger_type=None,
+        leverage=position.leverage if is_perps else None,
+        is_conditional=False,
+        reduce_only=is_perps,
+    )
+
+    try:
+        result: PrepareResult = await prepare_new(
+            session,
+            user_id=user.id,
+            request=risk_req,
+            signal_id=None,
+        )
+    except SymbolNotResolved as exc:
+        log.warning(
+            "execution_close_symbol_not_resolved",
+            venue=position.venue,
+            asset=position.asset,
+            user_id=user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"symbol not resolved for venue={position.venue} asset={position.asset}. "
+                "Admin can refresh via POST /api/admin/sodex/symbols/refresh."
+            ),
+        ) from exc
+
+    if not result.allow:
+        log.info(
+            "execution_close_position_denied",
+            user_id=user.id,
+            position_id=position_id,
+            reason=result.reason,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "reason": result.reason,
+                "detail": result.detail,
+                "breaker_trigger": result.breaker_trigger,
+            },
+        )
+
+    await session.commit()
+    assert result.typed_data is not None
+    assert result.order_id is not None
+    assert result.client_order_id is not None
+    assert result.nonce is not None
+    return PrepareNewResponse(
+        order_id=result.order_id,
+        client_order_id=result.client_order_id,
+        nonce=result.nonce,
+        typed_data=result.typed_data,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------
 
@@ -429,6 +655,10 @@ def _to_risk_request(body: PrepareNewRequest) -> RiskRequest:
         ),
         leverage=body.leverage,
         is_conditional=body.is_conditional,
+        stop_price=body.stop_price,
+        stop_type=body.stop_type.value if body.stop_type is not None else None,
+        reduce_only=body.reduce_only,
+        parent_order_id=body.parent_order_id,
     )
 
 

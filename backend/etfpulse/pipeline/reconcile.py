@@ -451,14 +451,31 @@ async def _handle_unmatched_order(*, order: Order, summary: dict[str, int]) -> N
     )
     if order.updated_at < orphan_grace_cutoff_at:
         summary["orders_drift_unmatched"] += 1
+        # PR P1-fix.REAP-1 made venue-live conditional orders exempt from
+        # the nonce-expiry reaper, so the terminalisation note is only
+        # accurate for NON-conditional orders. A resting conditional that
+        # is genuinely missing from /open is the RECON-1 operator-gated
+        # unknown (does the SoDEX open-orders endpoint list trigger-
+        # pending conditionals?) — it will NOT auto-terminalise; it logs
+        # here every tick until the wire contract is confirmed + handled.
+        note = (
+            "order missing on venue past orphan grace; nonce expiry will terminalise"
+            if not order.is_conditional
+            else (
+                "CONDITIONAL order missing on venue past orphan grace; NOT reaper-"
+                "terminalised (REAP-1 exempt) — verify RECON-1 (does /open list "
+                "trigger-pending conditionals?) before live perps stops"
+            )
+        )
         log.warning(
             "reconcile_drift_unmatched",
             order_id=order.id,
             venue=order.venue,
             client_order_id=order.client_order_id,
             status=order.status,
+            is_conditional=order.is_conditional,
             updated_at=order.updated_at.isoformat(),
-            note="order missing on venue past orphan grace; nonce expiry will terminalise",
+            note=note,
         )
 
 

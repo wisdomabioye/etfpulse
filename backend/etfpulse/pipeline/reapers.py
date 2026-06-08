@@ -134,37 +134,59 @@ async def fail_stuck_deliveries(session: AsyncSession) -> dict[str, int]:
 # is already in our DB; transitioning Order to EXPIRED doesn't unwind
 # the position. The audit trail (filled_size on Order, Position row) is
 # preserved.
+# PR P1-fix.REAP-2 — the reaper targets ONLY orders the venue never
+# accepted: PENDING (signed-or-not, never sent) and SUBMITTED (sent,
+# ACK never persisted — crash window). Their signed payload genuinely
+# can no longer be submitted once the nonce window passes, so they're
+# dead and should be EXPIRED.
+#
+# ACKED / PARTIALLY_FILLED are DELIBERATELY EXCLUDED: such an order is
+# already accepted and LIVE on the venue. The nonce is spent — the order
+# never needs re-submission — and its lifetime is governed by the venue
+# (a resting GTC limit) or its trigger (a resting stop), NOT the 24h
+# nonce. EXPIRING such a row locally would (a) lie about a venue-live
+# order, (b) drop it out of `_RECONCILABLE_STATUSES` so a later venue
+# fill is never folded into the Position (silent drift), and (c) break
+# GTC-limit "good till cancelled" semantics. This supersedes the
+# narrower REAP-1 carve-out (which exempted only *conditional* venue-
+# live orders) — the correct rule applies to ALL venue-live orders.
 _OVERDUE_ORDER_STATUSES: frozenset[str] = frozenset(
     {
         OrderStatus.PENDING.value,
         OrderStatus.SUBMITTED.value,
-        OrderStatus.ACKED.value,
-        OrderStatus.PARTIALLY_FILLED.value,
     }
 )
 
 
 async def expire_overdue_orders(session: AsyncSession) -> dict[str, int]:
-    """Bulk-update orders past their EIP-712 nonce window.
+    """Bulk-update never-accepted orders past their EIP-712 nonce window.
 
     The SoDEX gateway enforces a 1-day nonce window (api.md). Once
     `nonce_expires_at < now`, the signed payload can no longer be
     submitted — even retry is structurally impossible without
-    re-signing. This reaper terminalises orders that haven't reached
-    a real terminal state (filled/cancelled/rejected) by that point.
+    re-signing. This reaper terminalises orders that were never accepted
+    by the venue and so can never be submitted again.
 
     Targets only rows where:
-        - `status IN (pending, submitted, acked, partially_filled)`
+        - `status IN (pending, submitted)`  — never venue-accepted
         - `nonce_expires_at IS NOT NULL`
         - `nonce_expires_at < now()`
 
-    The partial index `ix_orders_expires` is predicate-aligned with
-    this exact WHERE clause for index-only scan performance.
+    **PR P1-fix.REAP-2 (supersedes REAP-1):** ACKED / PARTIALLY_FILLED
+    orders are NOT reaped — they're live on the venue, the nonce is
+    spent, and a local EXPIRE would create DB/venue drift (the row falls
+    out of `_RECONCILABLE_STATUSES`, so a later venue fill is never
+    detected) and break GTC-limit resting + resting-stop semantics. Such
+    an order leaves the active set only via a real terminal transition
+    (fill / cancel / reject) detected by reconcile or the cancel flow.
+
+    The partial index `ix_orders_expires` covers a superset of this
+    predicate (it indexes acked/partially_filled too, from before
+    REAP-2); the planner applies the narrowed status filter as a
+    residual. Still index-eligible; no migration needed.
 
     Idempotent — re-runs are no-ops because once a row is EXPIRED it
-    no longer matches the predicate. PARTIALLY_FILLED rows' filled_size
-    is preserved (the Position row was opened on the original fill;
-    EXPIRED just closes the Order's lifecycle).
+    no longer matches the predicate.
 
     D14: does NOT commit. Returns `{expired: N}`.
     """

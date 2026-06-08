@@ -55,6 +55,7 @@ import {
 } from '../lib/signalExecute';
 import {
   KEY_WALLET_ME,
+  useClosePosition,
   useOrders,
   usePositions,
   usePrepareCancel,
@@ -65,6 +66,7 @@ import {
   useSymbols,
   useWalletMe,
 } from '../hooks/useExecution';
+import { executeOrderChain, type ChainProgress } from '../lib/orderChain';
 import { toSodexTypedSignature } from '../lib/sodex-sig';
 import { isWalletConnectAvailable } from '../lib/wagmi';
 
@@ -458,6 +460,20 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
   const [size, setSize] = useState('');
   const [price, setPrice] = useState('');
   const [leverage, setLeverage] = useState('');
+  // PR P1.5/1.6 — perps-only SL/TP/reduce_only inputs + sequential
+  // chain progress. `chainProgress=null` while the form is idle; an
+  // active `{step,total,label}` drives the "Signing X of Y…" UX.
+  const [stopLoss, setStopLoss] = useState('');
+  const [takeProfit, setTakeProfit] = useState('');
+  const [reduceOnly, setReduceOnly] = useState(false);
+  const [chainProgress, setChainProgress] = useState<ChainProgress | null>(null);
+  // PR P1-fix.DBLSUB-1 — synchronous in-flight guard. The `submitting`
+  // derived state + disabled button isn't enough: React re-renders the
+  // disabled attribute asynchronously, so a fast double-click can fire
+  // onSubmit twice before the button disables → two chains → duplicate
+  // entry orders (real duplicate exposure). Same guard pattern as
+  // PositionRow.onClose + ApiKeyAutoBind.
+  const submitInFlightRef = useRef(false);
   const [flowError, setFlowError] = useState<string | null>(null);
   const [flowSuccess, setFlowSuccess] = useState<string | null>(null);
 
@@ -501,6 +517,15 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
       setOrderType('limit');
       setPrice(String(s.ai_analysis!.entry_price));
     }
+    // PR P1.5 / PR P1-fix.B3 — prefill SL / TP from the AI's levels
+    // unconditionally. The fields are perps-only in the form, but the
+    // *state* persists across venue switches — so a user who lands
+    // via a LONG signal (default venue spot) and switches to perps to
+    // use stops will see the AI's suggested levels already filled in.
+    // Without this, dominant-case LONG signals silently discard the
+    // AI's `stop_price` / `target_price`.
+    if (s.ai_analysis!.stop_price != null) setStopLoss(String(s.ai_analysis!.stop_price));
+    if (s.ai_analysis!.target_price != null) setTakeProfit(String(s.ai_analysis!.target_price));
     // Size: AI doesn't suggest one; leave the field blank for the user.
   }, [signalQuery.data]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -516,13 +541,18 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    // PR P1-fix.DBLSUB-1 — bail synchronously if a chain is already
+    // running (defeats the double-click-before-disabled race).
+    if (submitInFlightRef.current) return;
     setFlowError(null);
     setFlowSuccess(null);
     if (!size || (orderType === 'limit' && !price)) {
       setFlowError('Size and (for limit orders) price are required.');
       return;
     }
-    const req: PrepareNewRequest = {
+    submitInFlightRef.current = true;
+    const isPerps = venue === 'sodex_perps';
+    const entryReq: PrepareNewRequest = {
       venue,
       asset,
       side,
@@ -530,38 +560,60 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
       time_in_force: tif,
       requested_size: size,
       requested_price: orderType === 'limit' ? price : null,
-      position_side: venue === 'sodex_perps' ? 'both' : null,
-      leverage: venue === 'sodex_perps' && leverage ? leverage : null,
+      position_side: isPerps ? 'both' : null,
+      leverage: isPerps && leverage ? leverage : null,
       // SIG2X — attribute the order to the source signal when one was
       // supplied via ?signal_id. NULL = ad-hoc trade.
       signal_id: signalId ?? null,
+      // PR P1.5 — reduce-only is a standalone toggle (perps only,
+      // backend rejects on spot). SL/TP children get their own
+      // reduce_only=true set by the chain helper; this flag is for
+      // the ENTRY leg only (manual position-exit use case).
+      reduce_only: isPerps && reduceOnly ? true : undefined,
     };
+    // Spot rejects stop attachments at the risk gate; ignore the
+    // input values when the active venue is spot so the user can't
+    // ship a 403-bound payload.
+    const slForChain = isPerps ? stopLoss : '';
+    const tpForChain = isPerps ? takeProfit : '';
     try {
-      const prepared = await prepare.mutateAsync(req);
-      // Sign the EIP-712 envelope the backend constructed. viem's
-      // signTypedData verifies the domain types match the typed-data
-      // shape — backend MUST emit a complete `types.EIP712Domain`.
-      const signature = await signTypedDataAsync(
-        prepared.typed_data as unknown as Parameters<typeof signTypedDataAsync>[0],
+      // viem's `signTypedData` validates the domain shape — backend
+      // MUST emit a complete `types.EIP712Domain` (D.1 guarantees).
+      const results = await executeOrderChain(
+        { entry: entryReq, stopLoss: slForChain, takeProfit: tpForChain },
+        {
+          prepare: (req) => prepare.mutateAsync(req),
+          sign: async (typed) => {
+            const sig = await signTypedDataAsync(
+              typed as unknown as Parameters<typeof signTypedDataAsync>[0],
+            );
+            return toSodexTypedSignature(sig);
+          },
+          submit: ({ orderId, signature }) => submit.mutateAsync({ orderId, signature }),
+          onStep: (p) => setChainProgress(p),
+        },
       );
-      const wireSig = toSodexTypedSignature(signature);
-      const result = await submit.mutateAsync({
-        orderId: prepared.order_id,
-        signature: wireSig,
-      });
+      const entryResult = results[0];
+      const extras = results.length > 1 ? ` + ${results.length - 1} child leg(s)` : '';
       setFlowSuccess(
-        `Order ${result.order_id} → ${result.status}${
-          result.exchange_order_id ? ` (exchange ${result.exchange_order_id})` : ''
-        }`,
+        `Order ${entryResult.order_id} → ${entryResult.status}${
+          entryResult.exchange_order_id ? ` (exchange ${entryResult.exchange_order_id})` : ''
+        }${extras}`,
       );
       setSize('');
       setPrice('');
+      setStopLoss('');
+      setTakeProfit('');
+      setReduceOnly(false);
     } catch (e) {
       setFlowError(formatError(e));
+    } finally {
+      setChainProgress(null);
+      submitInFlightRef.current = false;
     }
   }
 
-  const submitting = prepare.isPending || submit.isPending;
+  const submitting = prepare.isPending || submit.isPending || chainProgress !== null;
 
   return (
     <section className="rounded-xl border border-border-2 p-4 space-y-4">
@@ -673,12 +725,64 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
             />
           </label>
         )}
+        {/* PR P1.5 — perps-only SL / TP / reduce-only. Optional;
+            empty values skip the leg. Each non-empty leg adds ONE
+            extra wallet sign prompt (3 total when both SL + TP are
+            set). Spot hides these — the risk gate would reject. */}
+        {venue === 'sodex_perps' && (
+          <>
+            <label className="space-y-1">
+              <span className="text-xs text-text-2 uppercase tracking-wide">
+                Stop-loss (optional)
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={stopLoss}
+                onChange={(e) => setStopLoss(e.target.value)}
+                placeholder="—"
+                aria-label="Stop loss price"
+                className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-text-2 uppercase tracking-wide">
+                Take-profit (optional)
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={takeProfit}
+                onChange={(e) => setTakeProfit(e.target.value)}
+                placeholder="—"
+                aria-label="Take profit price"
+                className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
+              />
+            </label>
+            <label className="flex items-center gap-2 col-span-2 sm:col-span-4">
+              <input
+                type="checkbox"
+                checked={reduceOnly}
+                onChange={(e) => setReduceOnly(e.target.checked)}
+                aria-label="Reduce only (perps only)"
+                className="rounded border-border-2"
+              />
+              <span className="text-xs text-text-2">
+                Reduce only — order can only close, never open new exposure
+              </span>
+            </label>
+          </>
+        )}
         <button
           type="submit"
           disabled={submitting || assetOptions.length === 0}
           className="col-span-2 sm:col-span-4 px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {submitting ? 'Working…' : 'Place order'}
+          {chainProgress
+            ? `Signing ${chainProgress.step} of ${chainProgress.total} (${chainProgress.label.replace('_', ' ')})…`
+            : submitting
+              ? 'Working…'
+              : 'Place order'}
         </button>
       </form>
       {flowError && <ErrorBanner error={flowError} fallback="Order failed." />}
@@ -909,6 +1013,7 @@ function PositionsSection() {
                 <th>Size</th>
                 <th>Entry</th>
                 <th>Leverage</th>
+                <th className="text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -924,6 +1029,44 @@ function PositionsSection() {
 }
 
 function PositionRow({ pos }: { pos: PositionOut }) {
+  const closePos = useClosePosition();
+  const submit = useSubmitNew();
+  const { signTypedDataAsync } = useSignTypedData();
+  // Per-row in-flight guard — synchronous, defeats double-click before
+  // useMutation flips its `isPending` flag. Same pattern as
+  // ApiKeyAutoBind's auto-bind ref.
+  const inFlight = useRef(false);
+  const [rowError, setRowError] = useState<string | null>(null);
+
+  async function onClose() {
+    if (inFlight.current) return;
+    // Confirm — closing is reversible only by opening again; force a
+    // deliberate click before signing.
+    if (
+      !window.confirm(
+        `Close ${pos.size} ${pos.asset} ${pos.side.toUpperCase()} on ` +
+          `${pos.venue === 'sodex_spot' ? 'Spot' : 'Perps'}? This requires one wallet signature.`,
+      )
+    ) {
+      return;
+    }
+    inFlight.current = true;
+    setRowError(null);
+    try {
+      const prep = await closePos.mutateAsync(pos.id);
+      const sig = await signTypedDataAsync(
+        prep.typed_data as unknown as Parameters<typeof signTypedDataAsync>[0],
+      );
+      const wireSig = toSodexTypedSignature(sig);
+      await submit.mutateAsync({ orderId: prep.order_id, signature: wireSig });
+    } catch (e) {
+      setRowError(formatError(e));
+    } finally {
+      inFlight.current = false;
+    }
+  }
+
+  const busy = closePos.isPending || submit.isPending;
   return (
     <tr className="border-t border-border-2">
       <td className="py-2">{pos.venue === 'sodex_spot' ? 'Spot' : 'Perps'}</td>
@@ -932,6 +1075,22 @@ function PositionRow({ pos }: { pos: PositionOut }) {
       <td>{pos.size}</td>
       <td>{pos.entry_price}</td>
       <td>{pos.leverage ?? '—'}</td>
+      <td className="text-right">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          aria-label={`Close ${pos.asset} ${pos.side} position`}
+          className="px-3 py-1 text-xs rounded-md border border-border-2 hover:bg-bg-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {busy ? 'Closing…' : 'Close'}
+        </button>
+        {rowError && (
+          <div className="mt-1 text-[11px] text-red-300 max-w-[200px] text-right">
+            {rowError}
+          </div>
+        )}
+      </td>
     </tr>
   );
 }

@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from etfpulse.adapters.sodex.schemas import (
     OrderSide as SodexOrderSide,
@@ -29,7 +29,7 @@ from etfpulse.adapters.sodex.schemas import (
 from etfpulse.adapters.sodex.schemas import (
     TriggerType as SodexTriggerType,
 )
-from etfpulse.models.order import Venue
+from etfpulse.models.order import StopType, Venue
 
 # ---------------------------------------------------------------------------
 # Wire enums (lowercase strings) + map to SoDEX IntEnums
@@ -63,6 +63,15 @@ class ApiTriggerType(StrEnum):
     MARK_PRICE = "mark_price"
     LAST_PRICE = "last_price"
     INDEX_PRICE = "index_price"
+
+
+class ApiStopType(StrEnum):
+    """Wire-side mirror of `models.order.StopType`. Values match the DB
+    CHECK literals exactly (`'stop_loss'` / `'take_profit'`) so the
+    schema can pass `Order.stop_type` round-trips without conversion."""
+
+    STOP_LOSS = StopType.STOP_LOSS.value
+    TAKE_PROFIT = StopType.TAKE_PROFIT.value
 
 
 # Single-source-of-truth maps. Adding a new wire-enum value: add to the
@@ -146,6 +155,24 @@ class PrepareNewRequest(BaseModel):
     is_conditional: bool = False
     # Optional linkage to a Signal that drove this order. NULL = ad-hoc.
     signal_id: int | None = Field(default=None, gt=0)
+    # PR P1 — stop-loss / take-profit attachment + reduce-only flag.
+    # `stop_price` and `stop_type` MUST co-occur (mirrors DB
+    # `ck_orders_stop_price_type_consistency`). `parent_order_id`
+    # links a child SL/TP to the entry order that opened the position;
+    # the risk gate (P1.3) enforces venue + reduce_only consistency.
+    stop_price: Decimal | None = Field(default=None, gt=0)
+    stop_type: ApiStopType | None = None
+    reduce_only: bool = False
+    parent_order_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _stop_co_occurrence(self) -> PrepareNewRequest:
+        """Mirror `ck_orders_stop_price_type_consistency`: both NULL or
+        both set. Catching this at the API boundary turns a 500
+        (IntegrityError) into a clean 422 with a useful field path."""
+        if (self.stop_price is None) != (self.stop_type is None):
+            raise ValueError("stop_price and stop_type must be set together or both be null")
+        return self
 
 
 class SubmitRequest(BaseModel):

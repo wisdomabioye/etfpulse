@@ -101,6 +101,20 @@ class Venue(StrEnum):
     SODEX_PERPS = "sodex_perps"
 
 
+class StopType(StrEnum):
+    """Stop-order type, perps-only on SoDEX (P1 / `Order.stop_type`).
+
+    Persisted as a string column to match `OrderStatus` / `OrderSide` /
+    `Venue` (readable in `psql` without an enum lookup). The SoDEX wire
+    format uses integer enum values (`adapters.sodex.schemas.StopType`) —
+    conversion happens at the API boundary, same pattern as the other
+    enums above.
+    """
+
+    STOP_LOSS = "stop_loss"
+    TAKE_PROFIT = "take_profit"
+
+
 class Order(Base):
     __tablename__ = "orders"
 
@@ -240,6 +254,33 @@ class Order(Base):
         Boolean, default=False, nullable=False, server_default="false"
     )
 
+    # ---- PR P1 — stop / take-profit + reduce-only + parent linkage ----
+    #
+    # `stop_price` + `stop_type` are populated only for conditional orders
+    # (SL / TP legs on perps); spot orders MUST leave them NULL because
+    # SoDEX has no native stop on spot. Risk gate enforces.
+    #
+    # `reduce_only` is perps-only and, when True, prevents the order
+    # from opening a NEW position — it can only reduce an existing one.
+    # Used for SL/TP exit legs AND for the new POST /close-position
+    # route's market opposing-side order.
+    #
+    # `parent_order_id` links SL/TP legs back to their entry order so
+    # we can group them in the UI ("3 orders for one trade idea") and
+    # later cascade-cancel siblings if the entry is cancelled. The
+    # entry itself has parent_order_id NULL. ON DELETE SET NULL so an
+    # admin-side entry delete doesn't cascade SL/TP into oblivion.
+    #
+    # All four columns are NULL/False on pre-P1 rows.
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    stop_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reduce_only: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
+    parent_order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -301,10 +342,45 @@ class Order(Base):
             "cancel_eip712_payload_hash IS NULL OR cancel_eip712_payload_hash ~ '^0x[0-9a-f]{64}$'",
             name="ck_orders_cancel_payload_hash_format",
         ),
+        # PR P1 — stop_price positive when present.
+        CheckConstraint(
+            "stop_price IS NULL OR stop_price > 0",
+            name="ck_orders_stop_price_positive",
+        ),
+        # PR P1 — keep this literal list in sync with `StopType`.
+        # `test_order_status_enum.py` round-trips both `OrderStatus`
+        # and `StopType` against their respective CHECK constraints
+        # to catch enum-vs-CHECK drift on add/remove.
+        CheckConstraint(
+            "stop_type IS NULL OR stop_type IN ('stop_loss','take_profit')",
+            name="ck_orders_stop_type_enum",
+        ),
+        # PR P1 — stop_price ⇔ stop_type co-occurrence. Both set OR
+        # both NULL. A price without a type (or vice versa) would
+        # leave the gateway with ambiguous intent on a conditional
+        # order. Same shape as `ck_orders_nonce_consistency`.
+        CheckConstraint(
+            "(stop_price IS NULL) = (stop_type IS NULL)",
+            name="ck_orders_stop_price_type_consistency",
+        ),
+        # PR P1 — a row pointing at itself as parent is nonsense and
+        # would break any cascade-cancel reasoning. Cheap structural
+        # guard against an INSERT bug.
+        CheckConstraint(
+            "parent_order_id IS NULL OR parent_order_id <> id",
+            name="ck_orders_parent_not_self",
+        ),
         Index("ix_orders_user", "user_id"),
         Index("ix_orders_status", "status"),
         Index("ix_orders_exchange", "exchange_order_id"),
         Index("ix_orders_signal", "signal_id"),
+        # PR P1 — parent → SL/TP lookup. Partial because most rows
+        # (entries + paper trades + pre-P1) have NULL parent_order_id.
+        Index(
+            "ix_orders_parent",
+            "parent_order_id",
+            postgresql_where=text("parent_order_id IS NOT NULL"),
+        ),
         # Nonce reverse-lookup: reconciliation pulls a SoDEX webhook event
         # by (user wallet, nonce) — partial because pre-Stage-09 + paper
         # trade rows have NULL nonce, and indexing NULL is wasted space.

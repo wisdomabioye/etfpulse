@@ -33,6 +33,7 @@ from etfpulse.models import (
     Position,
     PositionSide,
     PositionStatus,
+    StopType,
     TimeInForce,
     Venue,
 )
@@ -436,6 +437,117 @@ class TestCancelLifecycleInvariants:
             cancel_eip712_signature=bad_sig,
         )
         db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# PR P1.1 — stop_price / stop_type / parent_order_id CHECKs
+# ---------------------------------------------------------------------------
+
+
+class TestStopTypeEnum:
+    """Every value in `StopType` MUST be accepted by `ck_orders_stop_type_enum`.
+    A bogus literal MUST be rejected. Catches model↔CHECK drift on the new
+    stop-attachment column added in PR P1.1."""
+
+    @pytest.mark.parametrize("stop_type", [s.value for s in StopType])
+    async def test_every_enum_value_accepted(self, db_session, stop_type):
+        kw = _base_order_kwargs(client_order_id=f"sp-{stop_type}")
+        order = Order(**kw, stop_price=Decimal("100"), stop_type=stop_type)
+        db_session.add(order)
+        await db_session.flush()
+        assert order.stop_type == stop_type
+
+    async def test_unknown_stop_type_rejected(self, db_session):
+        kw = _base_order_kwargs(client_order_id="sp-bad")
+        order = Order(**kw, stop_price=Decimal("100"), stop_type="trailing_stop")
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+class TestStopPricePositive:
+    """`ck_orders_stop_price_positive` — stop_price must be > 0 when set."""
+
+    async def test_positive_accepted(self, db_session):
+        kw = _base_order_kwargs(client_order_id="spp-1")
+        order = Order(**kw, stop_price=Decimal("0.00000001"), stop_type=StopType.STOP_LOSS.value)
+        db_session.add(order)
+        await db_session.flush()
+
+    @pytest.mark.parametrize("bad", [Decimal("0"), Decimal("-1")])
+    async def test_non_positive_rejected(self, db_session, bad):
+        kw = _base_order_kwargs(client_order_id=f"spp-{bad}")
+        order = Order(**kw, stop_price=bad, stop_type=StopType.STOP_LOSS.value)
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+class TestStopPriceTypeConsistency:
+    """`ck_orders_stop_price_type_consistency` — both NULL or both set."""
+
+    async def test_both_null_accepted(self, db_session):
+        kw = _base_order_kwargs(client_order_id="spt-null")
+        order = Order(**kw)
+        db_session.add(order)
+        await db_session.flush()
+        assert order.stop_price is None and order.stop_type is None
+
+    async def test_both_set_accepted(self, db_session):
+        kw = _base_order_kwargs(client_order_id="spt-both")
+        order = Order(**kw, stop_price=Decimal("100"), stop_type=StopType.TAKE_PROFIT.value)
+        db_session.add(order)
+        await db_session.flush()
+
+    async def test_price_without_type_rejected(self, db_session):
+        kw = _base_order_kwargs(client_order_id="spt-p-only")
+        order = Order(**kw, stop_price=Decimal("100"))
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+    async def test_type_without_price_rejected(self, db_session):
+        kw = _base_order_kwargs(client_order_id="spt-t-only")
+        order = Order(**kw, stop_type=StopType.STOP_LOSS.value)
+        db_session.add(order)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await db_session.rollback()
+
+
+class TestParentNotSelf:
+    """`ck_orders_parent_not_self` — parent_order_id MUST NOT equal id."""
+
+    async def test_null_parent_accepted(self, db_session):
+        kw = _base_order_kwargs(client_order_id="pn-null")
+        order = Order(**kw)
+        db_session.add(order)
+        await db_session.flush()
+        assert order.parent_order_id is None
+
+    async def test_distinct_parent_accepted(self, db_session):
+        parent = Order(**_base_order_kwargs(client_order_id="pn-parent"))
+        db_session.add(parent)
+        await db_session.flush()
+        child = Order(
+            **_base_order_kwargs(client_order_id="pn-child"),
+            parent_order_id=parent.id,
+        )
+        db_session.add(child)
+        await db_session.flush()
+        assert child.parent_order_id == parent.id
+
+    async def test_self_parent_rejected(self, db_session):
+        order = Order(**_base_order_kwargs(client_order_id="pn-self"))
+        db_session.add(order)
+        await db_session.flush()
+        order.parent_order_id = order.id
         with pytest.raises(IntegrityError):
             await db_session.flush()
         await db_session.rollback()

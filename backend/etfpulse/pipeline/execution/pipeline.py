@@ -83,6 +83,9 @@ from etfpulse.adapters.sodex.schemas import (
     OrderType as SodexOrderType,
 )
 from etfpulse.adapters.sodex.schemas import (
+    StopType as SodexStopType,
+)
+from etfpulse.adapters.sodex.schemas import (
     TimeInForce as SodexTimeInForce,
 )
 from etfpulse.adapters.sodex.spot_client import SodexSpotClient
@@ -98,6 +101,9 @@ from etfpulse.models.order import (
 )
 from etfpulse.models.order import (
     OrderType as DbOrderType,
+)
+from etfpulse.models.order import (
+    StopType as DbStopType,
 )
 from etfpulse.models.order import (
     TimeInForce as DbTimeInForce,
@@ -198,6 +204,15 @@ _SODEX_TO_DB_TIF: dict[int, str] = {
     SodexTimeInForce.IOC.value: DbTimeInForce.IOC.value,
     SodexTimeInForce.FOK.value: DbTimeInForce.FOK.value,
     SodexTimeInForce.GTX.value: DbTimeInForce.GTX.value,
+}
+
+# PR P1-fix.CRIT-1 — DB StopType string → SoDEX wire IntEnum. The
+# RiskRequest carries the DB string (`"stop_loss"`/`"take_profit"`) for
+# the perps stop legs; the signed payload needs the integer. The
+# `models.order.StopType` docstring documents this boundary explicitly.
+_DB_TO_SODEX_STOP_TYPE: dict[str, int] = {
+    DbStopType.STOP_LOSS.value: SodexStopType.STOP_LOSS.value,
+    DbStopType.TAKE_PROFIT.value: SodexStopType.TAKE_PROFIT.value,
 }
 
 # Signature regex. `0x01` (SoDEX type byte) + 65-byte ECDSA hex.
@@ -390,6 +405,16 @@ async def submit_new(
     # treated as instant + full; transition ACKED → FILLED in one step
     # and open/close the corresponding Position.
     if order.paper_trade:
+        # PR P1-fix.PAPER-1 — a conditional (stop) order MUST NOT
+        # instant-fill in paper mode: that would close the position the
+        # moment the user attaches a stop, instead of waiting for the
+        # trigger. Rest it ACKED ("trigger pending"), mirroring the real
+        # path, until the Phase-2 paper-watcher evaluates the trigger
+        # against live prices. Until that watcher ships, a paper stop
+        # rests but never fires — that's the honest V1 state (no
+        # protection), consistent with how a real stop would rest.
+        if order.is_conditional:
+            return await _ack_paper_conditional(session, order=order)
         return await _simulate_paper_fill(session, order=order)
 
     # Real branch — POST to the gateway.
@@ -720,6 +745,18 @@ def _build_new_order_bundle(
                 "_build_new_order_bundle: perps order requires position_side "
                 "(risk gate should have rejected)"
             )
+        # PR P1-fix.CRIT-1 — thread the protective-leg fields into the
+        # SIGNED payload. Pre-fix these were hardcoded `stopPrice=None`,
+        # `stopType=None`, `reduceOnly=False`, so a "stop-loss" was
+        # signed + submitted as a plain market order (fired instantly at
+        # signing, never at the trigger) and a "close" was NOT
+        # reduce-only (could oversell into opposite exposure). The
+        # PerpsOrderItem schema has carried these fields since D.1
+        # ("for TP/SL legs"); the orchestrator just never populated
+        # them. `stopType` maps DB string → SoDEX wire int.
+        sodex_stop_type = (
+            _DB_TO_SODEX_STOP_TYPE[request.stop_type] if request.stop_type is not None else None
+        )
         perps_req = PerpsNewOrderRequest.model_validate(
             {
                 "accountID": account_id,
@@ -734,10 +771,10 @@ def _build_new_order_bundle(
                         "price": _decimal_to_str(request.requested_price),
                         "quantity": _decimal_to_str(request.requested_size),
                         "funds": None,
-                        "stopPrice": None,
-                        "stopType": None,
+                        "stopPrice": _decimal_to_str(request.stop_price),
+                        "stopType": sodex_stop_type,
                         "triggerType": request.trigger_type,
-                        "reduceOnly": False,
+                        "reduceOnly": request.reduce_only,
                         "positionSide": request.position_side,
                     }
                 ],
@@ -892,6 +929,10 @@ async def _insert_order_with_clordid_retry(
             eip712_payload=bundle.payload_json,
             eip712_payload_hash=bundle.payload_hash,
             is_conditional=request.is_conditional,
+            stop_price=request.stop_price,
+            stop_type=request.stop_type,
+            reduce_only=request.reduce_only,
+            parent_order_id=request.parent_order_id,
         )
 
         try:
@@ -936,21 +977,70 @@ def _default_api_key_resolver(user, venue: str) -> str:
     return str(name)
 
 
+async def _ack_paper_conditional(session: AsyncSession, *, order: Order) -> SubmitResult:
+    """PR P1-fix.PAPER-1 — paper-trade conditional (stop) order: rest at
+    ACKED instead of instant-filling. No Position change (the trigger
+    hasn't fired). `ACKED + is_conditional=True` is the "trigger pending"
+    state the model documents; the Phase-2 paper-watcher will pick it up
+    and fill it when the stop price is breached."""
+    order.exchange_order_id = f"PAPER-{order.id}"
+    order.status = OrderStatus.ACKED.value
+    await session.flush()
+    log.info(
+        "execution_paper_conditional_acked",
+        order_id=order.id,
+        stop_type=order.stop_type,
+        stop_price=str(order.stop_price) if order.stop_price is not None else None,
+    )
+    return SubmitResult(
+        status=order.status,
+        order_id=order.id,
+        exchange_order_id=order.exchange_order_id,
+    )
+
+
 async def _simulate_paper_fill(session: AsyncSession, *, order: Order) -> SubmitResult:
     fill_price, fill_size = paper.simulate_fill(order)
     order.exchange_order_id = f"PAPER-{order.id}"
+
+    # Apply to the Position table FIRST so we can detect the
+    # PR P1-fix.RO-FILL-1 no-op: a reduce_only fill with nothing to reduce
+    # returns None (`perps_apply_fill` refuses to open/extend). `apply_fill`
+    # takes fill_price/fill_size as explicit kwargs and does NOT read
+    # `order.filled_*`, so applying before stamping the fill fields is safe.
+    if order.venue == Venue.SODEX_SPOT.value:
+        # Spot never carries reduce_only (risk gate is perps-only), so this
+        # always opens/extends/reduces and returns a Position.
+        position = await spot_apply_fill(
+            session, order=order, fill_price=fill_price, fill_size=fill_size
+        )
+    elif order.venue == Venue.SODEX_PERPS.value:
+        position = await perps_apply_fill(
+            session, order=order, fill_price=fill_price, fill_size=fill_size
+        )
+    else:
+        raise ValueError(f"_simulate_paper_fill: unknown venue {order.venue!r}")
+
+    if position is None and order.reduce_only:
+        # Reduce_only with no reducible position — mirror the real gateway
+        # and REJECT rather than record a phantom FILLED with no position
+        # effect. (Only reachable on perps; spot can't be reduce_only.)
+        order.status = OrderStatus.REJECTED.value
+        order.error_message = "paper: reduce_only order had no position to reduce"
+        await session.flush()
+        log.info("execution_paper_reduce_only_noop_rejected", order_id=order.id)
+        return SubmitResult(
+            status=order.status,
+            order_id=order.id,
+            exchange_order_id=order.exchange_order_id,
+            error_message=order.error_message,
+        )
+
     order.filled_price = fill_price
     order.filled_size = fill_size
     order.filled_value = fill_price * fill_size
     order.status = OrderStatus.FILLED.value
     await session.flush()
-
-    if order.venue == Venue.SODEX_SPOT.value:
-        await spot_apply_fill(session, order=order, fill_price=fill_price, fill_size=fill_size)
-    elif order.venue == Venue.SODEX_PERPS.value:
-        await perps_apply_fill(session, order=order, fill_price=fill_price, fill_size=fill_size)
-    else:
-        raise ValueError(f"_simulate_paper_fill: unknown venue {order.venue!r}")
 
     log.info(
         "execution_paper_fill",

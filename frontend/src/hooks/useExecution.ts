@@ -29,6 +29,7 @@ import {
   fetchSodexBootstrap,
   fetchSymbols,
   fetchWalletMe,
+  postClosePosition,
   postPrepareCancel,
   postPrepareNew,
   postRequestLive,
@@ -177,5 +178,14 @@ export function useSubmitCancel() {
       qc.invalidateQueries({ queryKey: KEY_ORDERS });
       qc.invalidateQueries({ queryKey: KEY_POSITIONS });
     },
+  });
+}
+
+/** PR P1.4 — build typed-data for closing an open position. Same
+ *  PrepareNew response shape; the caller still has to sign + submit
+ *  via `useSubmitNew` to land the order on the gateway. */
+export function useClosePosition() {
+  return useMutation<PrepareNewResponse, unknown, number>({
+    mutationFn: postClosePosition,
   });
 }

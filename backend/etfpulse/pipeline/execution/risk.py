@@ -60,6 +60,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.adapters.sodex.schemas import (
+    OrderSide as SodexOrderSide,
+)
+from etfpulse.adapters.sodex.schemas import (
     PositionSide,
     TimeInForce,
     TriggerType,
@@ -71,10 +74,22 @@ from etfpulse.models.order import (
     OrderStatus,
     Venue,
 )
-from etfpulse.models.regime import CircuitBreaker
+from etfpulse.models.order import (
+    OrderSide as DbOrderSide,
+)
+from etfpulse.models.regime import CircuitBreaker, CircuitBreakerTrigger
 from etfpulse.models.user import User
 
 logger = structlog.get_logger(__name__)
+
+# Side-comparison map for parent-link gate. `Order.side` persists as the
+# DB StrEnum value (e.g. `"buy"`); `RiskRequest.side` carries the SoDEX
+# IntEnum value (e.g. `1`). Cross-type equality always fails, so the
+# parent-vs-child opposite-side check needs an explicit map.
+_SODEX_TO_DB_SIDE: dict[int, str] = {
+    SodexOrderSide.BUY.value: DbOrderSide.BUY.value,
+    SodexOrderSide.SELL.value: DbOrderSide.SELL.value,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +124,15 @@ class RiskRequest:
     trigger_type: int | None = None  # `TriggerType.MARK_PRICE = 2` (only supported)
     leverage: Decimal | None = None  # 1..settings.execution_max_leverage on perps
     is_conditional: bool = False  # stop/trigger order
+    # PR P1 — stop-loss / take-profit + reduce-only fields. `stop_type`
+    # carries the `StopType` StrEnum value (`'stop_loss'`/`'take_profit'`)
+    # — DB string, NOT a SoDEX IntEnum (no wire-side mapping; stops
+    # ride on top of the entry order's typed-data in V1). All four
+    # default to None/False so existing callers don't break.
+    stop_price: Decimal | None = None
+    stop_type: str | None = None
+    reduce_only: bool = False
+    parent_order_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -263,16 +287,38 @@ async def check_order(
             user,
         )
 
+    # PR P1-fix.BREAKER-1 (+ BREAKER-2 refinement) — an AUTOMATED per-user
+    # breaker (e.g. daily_loss_limit, macro_event) is a RISK-MANAGEMENT
+    # trip: it stops the user taking on MORE exposure. A `reduce_only`
+    # order can only CLOSE/REDUCE — never open — so blocking it traps the
+    # user in the very position the breaker is worried about (a daily-loss
+    # trip that forbids closing is exactly backwards). Risk-reducing
+    # orders are therefore EXEMPT from automated per-user breakers.
+    #
+    # EXCEPTION: a MANUAL per-user halt is an admin INCIDENT-RESPONSE
+    # action (POST /api/admin/execution/halt {user_id}) — e.g. suspected
+    # manipulation. That is a TOTAL freeze of the user, same intent as the
+    # global breaker; reduce_only is NOT exempt, or the halted user could
+    # still close (locking in P&L) and partially defeat the halt.
+    #
+    # The GLOBAL breaker above is never exempt (operator emergency freeze;
+    # close pricing may be unreliable mid-incident). Spot closes are
+    # reduce_only=False (spot has no reduce-only) so the exemption only
+    # covers the dangerous leveraged-perps case; a blocked spot close
+    # during a per-user trip is benign (no liquidation risk on spot).
     per_user_trigger = await _find_active_breaker_trigger(session, user_id=user.id)
     if per_user_trigger is not None:
-        return (
-            _deny(
-                reason="per_user_breaker_active",
-                detail=f"User circuit breaker active: {per_user_trigger}",
-                breaker_trigger=per_user_trigger,
-            ),
-            user,
-        )
+        is_manual_halt = per_user_trigger == CircuitBreakerTrigger.MANUAL.value
+        reduce_only_exempt = request.reduce_only and not is_manual_halt
+        if not reduce_only_exempt:
+            return (
+                _deny(
+                    reason="per_user_breaker_active",
+                    detail=f"User circuit breaker active: {per_user_trigger}",
+                    breaker_trigger=per_user_trigger,
+                ),
+                user,
+            )
 
     # Gate 3 — pre-flight enum gates (cheap, in-memory).
     if request.time_in_force in _UNSUPPORTED_TIME_IN_FORCE:
@@ -311,11 +357,22 @@ async def check_order(
 
     # Gate 4 — caps (aggregate reads).
     #
+    # PR P1-fix.CAP-EXEMPT — a `reduce_only` order can only CLOSE/REDUCE a
+    # position, never open new exposure, so the EXPOSURE-LIMITING caps
+    # (leverage cap, open-order count, 24h + per-symbol notional) MUST NOT
+    # block it — otherwise a user at any cap is trapped in a position they
+    # can't close (same trap class as BREAKER-1). VALIDITY checks (perps
+    # requires positive leverage; non-conditional orders require a
+    # reference price) still apply. Mirrors the per-user-breaker exemption.
+    is_reduce_only = request.reduce_only
+    is_conditional = request.is_conditional
+
     # Per-venue: spot has no leverage concept; perps requires a positive
     # leverage value within the cap. Check leverage BEFORE the notional
     # aggregates so a misconfigured request fails on the cheaper gate.
     if request.venue == Venue.SODEX_PERPS.value:
         if request.leverage is None or request.leverage <= 0:
+            # Validity — applies to ALL perps orders, reduce_only included.
             return (
                 _deny(
                     reason="perps_leverage_missing",
@@ -323,7 +380,9 @@ async def check_order(
                 ),
                 user,
             )
-        if request.leverage > settings.execution_max_leverage:
+        if not is_reduce_only and request.leverage > settings.execution_max_leverage:
+            # Exposure cap — exempt for reduce_only. A position opened at
+            # 10x must remain closable after the cap is lowered to 5x.
             return (
                 _deny(
                     reason="leverage_above_cap",
@@ -343,28 +402,129 @@ async def check_order(
             user,
         )
 
-    open_count = await _count_open_orders(session, user_id=user.id)
-    if open_count >= settings.execution_max_open_orders_per_user:
+    # Gate 4b — PR P1: stop-attachment + reduce_only sanity. V1 supports
+    # SL/TP and reduce-only ONLY on perps. Spot stops would require a
+    # separate watcher (P2 paper-trade engine extends to live spot).
+    is_perps = request.venue == Venue.SODEX_PERPS.value
+    if request.stop_price is not None and not is_perps:
         return (
             _deny(
-                reason="open_order_cap_exceeded",
-                detail=(
-                    f"User has {open_count} non-terminal orders; cap is "
-                    f"{settings.execution_max_open_orders_per_user}"
-                ),
+                reason="stop_price_perps_only",
+                detail="Stop-loss / take-profit attachments are perps-only in V1",
             ),
             user,
         )
+    if request.reduce_only and not is_perps:
+        return (
+            _deny(
+                reason="reduce_only_perps_only",
+                detail="reduce_only is perps-only in V1",
+            ),
+            user,
+        )
+    # PR P1-fix.CRIT-1 — a stop order (stop_price set) MUST carry a
+    # trigger_type, else the gateway can't know what price feed arms
+    # the stop. Without this gate, a stop_price would be signed into
+    # the payload with `triggerType` omitted → the gateway either
+    # rejects it or (worse) treats it as an immediate order. The
+    # inverse — trigger_type set without stop_price — is allowed (a
+    # plain perps market order may legitimately omit both; the close
+    # path sets neither).
+    if request.stop_price is not None and request.trigger_type is None:
+        return (
+            _deny(
+                reason="stop_requires_trigger_type",
+                detail="A stop order (stop_price set) must also set trigger_type",
+            ),
+            user,
+        )
+    # Gate 4c — parent_order_id linkage. Child (SL/TP) MUST reference a
+    # real parent that belongs to the same user, same asset, same venue.
+    # Opposite-side is enforced too: a SL on a BUY entry must be a SELL.
+    # `reduce_only=True` is REQUIRED when parent is set — V1 children are
+    # always position-closing intents, not new exposure.
+    if request.parent_order_id is not None:
+        parent = await session.get(Order, request.parent_order_id)
+        if parent is None or parent.user_id != user.id:
+            return (
+                _deny(
+                    reason="parent_order_not_found",
+                    detail=(
+                        f"parent_order_id={request.parent_order_id} does not belong to this user"
+                    ),
+                ),
+                user,
+            )
+        if parent.venue != request.venue or parent.asset != request.asset:
+            return (
+                _deny(
+                    reason="parent_order_mismatch",
+                    detail="parent_order_id venue/asset must match this order",
+                ),
+                user,
+            )
+        # PR P1-fix.D1 — deny attaching a child to a parent that's
+        # already in a terminal-failure state. REJECTED/EXPIRED/
+        # CANCELLED parents never produced a position; SL/TP children
+        # would queue, consume cap slots + nonces, and never fire.
+        # FILLED + non-terminal in-flight states (PENDING, SUBMITTED,
+        # ACKED, PARTIALLY_FILLED) all admit attachment.
+        if parent.status in {
+            OrderStatus.REJECTED.value,
+            OrderStatus.EXPIRED.value,
+            OrderStatus.CANCELLED.value,
+        }:
+            return (
+                _deny(
+                    reason="parent_order_terminal",
+                    detail=(
+                        f"parent_order_id={request.parent_order_id} is in "
+                        f"terminal state {parent.status!r}; cannot attach"
+                    ),
+                ),
+                user,
+            )
+        if parent.side == _SODEX_TO_DB_SIDE.get(request.side):
+            return (
+                _deny(
+                    reason="parent_order_same_side",
+                    detail="SL/TP child MUST be opposite-side to parent entry",
+                ),
+                user,
+            )
+        if not request.reduce_only:
+            return (
+                _deny(
+                    reason="parent_requires_reduce_only",
+                    detail="Orders with parent_order_id must be reduce_only",
+                ),
+                user,
+            )
 
-    # Compute the notional that this prospective order would add. Use
-    # the explicit price when known (limit orders); fall back to a
-    # cheap conservative estimate for market orders (no spot ref here —
-    # caller should pre-resolve via prices.get_spot_price_with_source
-    # before calling check_order so this branch never hits with
-    # `requested_price=None`). If it does hit, we DENY: notional
-    # checks against an unknown ref price would silently let big
-    # orders through.
-    if request.requested_price is None:
+    # Open-order cap — exposure/resource limit; reduce_only exempt (a
+    # close must not be blocked because the user has too many open
+    # orders). `-1` sentinel in the log marks "not evaluated".
+    open_count = -1
+    if not is_reduce_only:
+        open_count = await _count_open_orders(session, user_id=user.id)
+        if open_count >= settings.execution_max_open_orders_per_user:
+            return (
+                _deny(
+                    reason="open_order_cap_exceeded",
+                    detail=(
+                        f"User has {open_count} non-terminal orders; cap is "
+                        f"{settings.execution_max_open_orders_per_user}"
+                    ),
+                ),
+                user,
+            )
+
+    # Reference price — required for any order that EXECUTES IMMEDIATELY.
+    # A CONDITIONAL order (SL/TP) rests until its trigger and legitimately
+    # carries no immediate price (it uses stop_price), so it's exempt —
+    # without this exemption the FE chain's market SL/TP legs (which carry
+    # requested_price=None) would be wrongly denied `missing_requested_price`.
+    if request.requested_price is None and not is_conditional:
         return (
             _deny(
                 reason="missing_requested_price",
@@ -376,48 +536,57 @@ async def check_order(
             ),
             user,
         )
-    new_notional = request.requested_size * request.requested_price
 
-    # 24h rolling window.
-    now = datetime.now(UTC)
-    window_start = now - timedelta(hours=24)
+    # Notional caps — exposure limits; reduce_only exempt. Also skipped
+    # when there's no price to size against (only happens for the
+    # conditional reduce_only legs already exempt above). Sentinels in
+    # the log mark "not evaluated".
+    new_notional = Decimal("0")
+    daily_notional_existing = Decimal("0")
+    per_symbol_existing = Decimal("0")
+    if not is_reduce_only and request.requested_price is not None:
+        new_notional = request.requested_size * request.requested_price
 
-    daily_notional_existing = await _sum_notional(
-        session,
-        user_id=user.id,
-        window_start=window_start,
-        asset=None,
-    )
-    if daily_notional_existing + new_notional > settings.execution_daily_notional_usd_cap:
-        return (
-            _deny(
-                reason="daily_notional_cap_exceeded",
-                detail=(
-                    f"Daily notional {daily_notional_existing + new_notional} "
-                    f"would exceed cap {settings.execution_daily_notional_usd_cap}"
-                ),
-            ),
-            user,
+        # 24h rolling window.
+        now = datetime.now(UTC)
+        window_start = now - timedelta(hours=24)
+
+        daily_notional_existing = await _sum_notional(
+            session,
+            user_id=user.id,
+            window_start=window_start,
+            asset=None,
         )
-
-    per_symbol_existing = await _sum_notional(
-        session,
-        user_id=user.id,
-        window_start=window_start,
-        asset=request.asset,
-    )
-    if per_symbol_existing + new_notional > settings.execution_per_symbol_notional_usd_cap:
-        return (
-            _deny(
-                reason="per_symbol_notional_cap_exceeded",
-                detail=(
-                    f"Per-symbol notional for {request.asset} "
-                    f"{per_symbol_existing + new_notional} would exceed cap "
-                    f"{settings.execution_per_symbol_notional_usd_cap}"
+        if daily_notional_existing + new_notional > settings.execution_daily_notional_usd_cap:
+            return (
+                _deny(
+                    reason="daily_notional_cap_exceeded",
+                    detail=(
+                        f"Daily notional {daily_notional_existing + new_notional} "
+                        f"would exceed cap {settings.execution_daily_notional_usd_cap}"
+                    ),
                 ),
-            ),
-            user,
+                user,
+            )
+
+        per_symbol_existing = await _sum_notional(
+            session,
+            user_id=user.id,
+            window_start=window_start,
+            asset=request.asset,
         )
+        if per_symbol_existing + new_notional > settings.execution_per_symbol_notional_usd_cap:
+            return (
+                _deny(
+                    reason="per_symbol_notional_cap_exceeded",
+                    detail=(
+                        f"Per-symbol notional for {request.asset} "
+                        f"{per_symbol_existing + new_notional} would exceed cap "
+                        f"{settings.execution_per_symbol_notional_usd_cap}"
+                    ),
+                ),
+                user,
+            )
 
     # All gates passed.
     logger.debug(
@@ -425,6 +594,7 @@ async def check_order(
         user_id=user.id,
         venue=request.venue,
         asset=request.asset,
+        reduce_only=is_reduce_only,
         new_notional=str(new_notional),
         daily_notional_existing=str(daily_notional_existing),
         per_symbol_existing=str(per_symbol_existing),

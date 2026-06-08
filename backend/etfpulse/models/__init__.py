@@ -8,6 +8,7 @@ from etfpulse.models.order import (
     OrderSide,
     OrderStatus,
     OrderType,
+    StopType,
     TimeInForce,
     Venue,
 )
@@ -76,6 +77,7 @@ __all__ = [
     "TERMINAL_ORDER_STATUSES",
     "OrderSide",
     "OrderType",
+    "StopType",
     "TimeInForce",
     "Venue",
     # SoDEX symbol cache (D.3)

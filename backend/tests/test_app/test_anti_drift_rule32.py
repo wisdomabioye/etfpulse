@@ -62,6 +62,7 @@ EXPECTED_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/execution/submit/{order_id}"),
         ("POST", "/api/execution/prepare-cancel/{order_id}"),
         ("POST", "/api/execution/submit-cancel/{order_id}"),
+        ("POST", "/api/execution/close-position/{position_id}"),
         ("GET", "/api/execution/orders"),
         ("GET", "/api/execution/orders/{order_id}"),
         ("GET", "/api/execution/positions"),

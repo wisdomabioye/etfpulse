@@ -36,6 +36,7 @@ async def _seed_order(
     client_order_id: str,
     nonce: int | None = None,
     filled_size: Decimal | None = None,
+    is_conditional: bool = False,
 ) -> Order:
     order = Order(
         user_id=user_id,
@@ -51,6 +52,7 @@ async def _seed_order(
         nonce=nonce,
         nonce_expires_at=nonce_expires_at,
         filled_size=filled_size,
+        is_conditional=is_conditional,
     )
     db_session.add(order)
     await db_session.flush()
@@ -62,11 +64,12 @@ async def _seed_order(
     [
         OrderStatus.PENDING.value,
         OrderStatus.SUBMITTED.value,
-        OrderStatus.ACKED.value,
-        OrderStatus.PARTIALLY_FILLED.value,
     ],
 )
-async def test_overdue_non_terminal_expires(db_session, status):
+async def test_never_accepted_overdue_expires(db_session, status):
+    """PENDING / SUBMITTED orders past the nonce window were never
+    venue-accepted — their signed payload can't be submitted anymore →
+    EXPIRE."""
     uid = await _seed_user(db_session)
     past = datetime.now(UTC) - timedelta(hours=1)
     nonce = int(past.timestamp() * 1000)
@@ -82,6 +85,39 @@ async def test_overdue_non_terminal_expires(db_session, status):
     assert summary["expired"] == 1
     await db_session.refresh(order)
     assert order.status == OrderStatus.EXPIRED.value
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        OrderStatus.ACKED.value,
+        OrderStatus.PARTIALLY_FILLED.value,
+    ],
+)
+@pytest.mark.parametrize("is_conditional", [False, True])
+async def test_venue_live_overdue_not_expired(db_session, status, is_conditional):
+    """PR P1-fix.REAP-2 — ACKED / PARTIALLY_FILLED orders are LIVE on the
+    venue; the nonce is spent. The reaper MUST NOT expire them, even past
+    the nonce window, regardless of conditionality — a local EXPIRE would
+    create DB/venue drift (the row drops out of reconcile) and break
+    GTC-limit / resting-stop semantics. They leave the active set only on
+    a real terminal transition (fill / cancel / reject)."""
+    uid = await _seed_user(db_session)
+    past = datetime.now(UTC) - timedelta(hours=1)
+    nonce = int(past.timestamp() * 1000)
+    order = await _seed_order(
+        db_session,
+        user_id=uid,
+        status=status,
+        nonce=nonce,
+        nonce_expires_at=past,
+        client_order_id=f"o-{status}-{is_conditional}",
+        is_conditional=is_conditional,
+    )
+    summary = await expire_overdue_orders(db_session)
+    assert summary["expired"] == 0
+    await db_session.refresh(order)
+    assert order.status == status  # untouched
 
 
 @pytest.mark.parametrize(
@@ -112,13 +148,15 @@ async def test_terminal_states_not_touched(db_session, status):
 
 
 async def test_future_nonce_not_touched(db_session):
+    """A never-accepted (PENDING) order whose nonce window is still open
+    must NOT be reaped — the signed payload is still submittable."""
     uid = await _seed_user(db_session)
     future = datetime.now(UTC) + timedelta(hours=1)
     nonce = int(datetime.now(UTC).timestamp() * 1000)
     order = await _seed_order(
         db_session,
         user_id=uid,
-        status=OrderStatus.ACKED.value,
+        status=OrderStatus.PENDING.value,
         nonce=nonce,
         nonce_expires_at=future,
         client_order_id="future-1",
@@ -126,7 +164,7 @@ async def test_future_nonce_not_touched(db_session):
     summary = await expire_overdue_orders(db_session)
     assert summary["expired"] == 0
     await db_session.refresh(order)
-    assert order.status == OrderStatus.ACKED.value
+    assert order.status == OrderStatus.PENDING.value
 
 
 async def test_null_nonce_expires_not_touched(db_session):
@@ -148,27 +186,6 @@ async def test_null_nonce_expires_not_touched(db_session):
     assert order.status == OrderStatus.PENDING.value
 
 
-async def test_partial_fill_preserved_on_expiry(db_session):
-    uid = await _seed_user(db_session)
-    past = datetime.now(UTC) - timedelta(hours=1)
-    nonce = int(past.timestamp() * 1000)
-    order = await _seed_order(
-        db_session,
-        user_id=uid,
-        status=OrderStatus.PARTIALLY_FILLED.value,
-        nonce=nonce,
-        nonce_expires_at=past,
-        client_order_id="partial-1",
-        filled_size=Decimal("0.005"),
-    )
-    summary = await expire_overdue_orders(db_session)
-    assert summary["expired"] == 1
-    await db_session.refresh(order)
-    # Filled portion preserved — only status moves to EXPIRED.
-    assert order.status == OrderStatus.EXPIRED.value
-    assert order.filled_size == Decimal("0.005")
-
-
 async def test_idempotent(db_session):
     uid = await _seed_user(db_session)
     past = datetime.now(UTC) - timedelta(hours=1)
@@ -176,7 +193,7 @@ async def test_idempotent(db_session):
     await _seed_order(
         db_session,
         user_id=uid,
-        status=OrderStatus.ACKED.value,
+        status=OrderStatus.PENDING.value,
         nonce=nonce,
         nonce_expires_at=past,
         client_order_id="idemp-1",
@@ -187,3 +204,37 @@ async def test_idempotent(db_session):
     # Second run is a no-op (already EXPIRED, falls out of predicate).
     second = await expire_overdue_orders(db_session)
     assert second["expired"] == 0
+
+
+# ---------------------------------------------------------------------------
+# PR P1-fix.REAP-2 — venue-live exemption (the ACKED/PARTIALLY_FILLED
+# not-reaped case is covered by test_venue_live_overdue_not_expired,
+# parametrized over is_conditional). This pins the COMPLEMENT: a
+# conditional order that is NOT yet venue-live IS still reaped.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status",
+    [OrderStatus.PENDING.value, OrderStatus.SUBMITTED.value],
+)
+async def test_unsubmitted_conditional_still_expired(db_session, status):
+    """A conditional order that is NOT yet venue-live (PENDING/SUBMITTED)
+    IS still reapable — its signed payload genuinely can't be submitted
+    past the nonce window, so it's a zombie, not a resting stop."""
+    uid = await _seed_user(db_session)
+    past = datetime.now(UTC) - timedelta(hours=1)
+    nonce = int(past.timestamp() * 1000)
+    order = await _seed_order(
+        db_session,
+        user_id=uid,
+        status=status,
+        nonce=nonce,
+        nonce_expires_at=past,
+        client_order_id=f"cond-unsub-{status}",
+        is_conditional=True,
+    )
+    summary = await expire_overdue_orders(db_session)
+    assert summary["expired"] == 1
+    await db_session.refresh(order)
+    assert order.status == OrderStatus.EXPIRED.value

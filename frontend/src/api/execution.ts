@@ -78,6 +78,16 @@ export type OrderType = 'limit' | 'market';
 export type TimeInForce = 'gtc' | 'ioc' | 'fok' | 'gtx';
 export type PositionSide = 'both' | 'long' | 'short';
 
+/** PR P1 — stop-attachment kinds. Mirrors the backend `StopType`
+ *  StrEnum (`'stop_loss'` / `'take_profit'`). Mirror invariant is
+ *  cross-language; the BE-side `ApiStopType` test pins it. */
+export type StopType = 'stop_loss' | 'take_profit';
+
+/** Price feed that arms a perps stop. Mirrors backend `ApiTriggerType`.
+ *  Only `mark_price` is supported for placement today (the risk gate
+ *  rejects the other two). */
+export type TriggerType = 'mark_price' | 'last_price' | 'index_price';
+
 export interface PrepareNewRequest {
   venue: Venue;
   asset: string;
@@ -87,8 +97,22 @@ export interface PrepareNewRequest {
   requested_size: string;
   requested_price?: string | null;
   position_side?: PositionSide | null;
+  trigger_type?: TriggerType | null;
+  is_conditional?: boolean;
   leverage?: string | null;
   signal_id?: number | null;
+  // PR P1 — stop-attachment + reduce-only + child linkage.
+  // `stop_price` and `stop_type` MUST co-occur (mirrors BE
+  // `ck_orders_stop_price_type_consistency`). A stop order MUST also
+  // carry `trigger_type` + `is_conditional` (PR P1-fix.CRIT-1) — the
+  // gateway needs the trigger feed and the signed payload carries the
+  // stop fields. `parent_order_id` links a child SL/TP to the entry
+  // order that opened the position. All perps-only in V1; spot rejects
+  // them at the risk gate.
+  stop_price?: string | null;
+  stop_type?: StopType | null;
+  reduce_only?: boolean;
+  parent_order_id?: number | null;
 }
 
 // EIP-712 typed-data envelope viem's `signTypedData` consumes. The
@@ -246,6 +270,12 @@ export function postPrepareCancel(orderId: number): Promise<PrepareCancelRespons
 
 export function postSubmitCancel(orderId: number, signature: string): Promise<SubmitResponse> {
   return apiPost<SubmitResponse>(`/api/execution/submit-cancel/${orderId}`, { signature });
+}
+
+/** PR P1.4 — close-position. Returns the same PrepareNew shape as
+ *  /prepare; the wallet still has to sign + submit via /submit. */
+export function postClosePosition(positionId: number): Promise<PrepareNewResponse> {
+  return apiPost<PrepareNewResponse>(`/api/execution/close-position/${positionId}`);
 }
 
 export function fetchOrders(params?: {

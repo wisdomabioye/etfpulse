@@ -23,6 +23,7 @@ HTTP — `submit_new` only calls one method per submit.
 from __future__ import annotations
 
 import dataclasses
+import json
 import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -45,7 +46,13 @@ from etfpulse.adapters.sodex import (
     SodexSpotClient,
 )
 from etfpulse.adapters.sodex import (
+    StopType as SodexStopType,
+)
+from etfpulse.adapters.sodex import (
     TimeInForce as SodexTimeInForce,
+)
+from etfpulse.adapters.sodex import (
+    TriggerType as SodexTriggerType,
 )
 from etfpulse.adapters.sodex.responses import OrderResponseItem
 from etfpulse.models import (
@@ -276,6 +283,107 @@ class TestPrepareNew:
 
 
 # ---------------------------------------------------------------------------
+# PR P1-fix.CRIT-1 — stop fields reach the SIGNED payload
+# ---------------------------------------------------------------------------
+
+
+def _perps_stop_request(
+    *,
+    stop_type: str = "stop_loss",
+    side: int = SodexOrderSide.SELL.value,
+    reduce_only: bool = True,
+) -> RiskRequest:
+    """A perps protective leg: MARKET reduce-only stop with a mark-price
+    trigger — the exact shape the FE order chain produces for SL/TP."""
+    return RiskRequest(
+        venue=Venue.SODEX_PERPS.value,
+        asset="BTC",
+        side=side,
+        order_type=SodexOrderType.MARKET.value,
+        time_in_force=SodexTimeInForce.IOC.value,
+        requested_size=Decimal("0.01"),
+        requested_price=Decimal("65000"),
+        position_side=PositionSide.BOTH.value,
+        trigger_type=SodexTriggerType.MARK_PRICE.value,
+        leverage=Decimal("3"),
+        is_conditional=True,
+        stop_price=Decimal("60000"),
+        stop_type=stop_type,
+        reduce_only=reduce_only,
+    )
+
+
+class TestStopFieldsReachSignedPayload:
+    """Regression for PR P1-fix.CRIT-1. Pre-fix, `_build_new_order_bundle`
+    hardcoded `stopPrice=None`, `stopType=None`, `reduceOnly=False`, so a
+    'stop-loss' was signed as a plain immediate market order. These tests
+    parse the byte-exact `Order.eip712_payload` (what the wallet signs +
+    the gateway re-hashes) and assert the stop semantics are actually
+    present."""
+
+    async def _prepared_order(self, db_session, request: RiskRequest) -> Order:
+        from sqlalchemy import select
+
+        await _seed_btc_perps_symbol(db_session)
+        uid = await _seed_user(db_session)
+        result = await prepare_new(db_session, user_id=uid, request=request)
+        return (
+            await db_session.execute(select(Order).where(Order.id == result.order_id))
+        ).scalar_one()
+
+    async def test_stop_loss_payload_carries_stop_fields(self, db_session):
+        order = await self._prepared_order(db_session, _perps_stop_request())
+        # DB row is correct (was already true pre-fix)...
+        assert order.stop_price == Decimal("60000")
+        assert order.stop_type == "stop_loss"
+        assert order.reduce_only is True
+        # ...and now the SIGNED payload carries them too.
+        payload = json.loads(order.eip712_payload)
+        item = payload["params"]["orders"][0]
+        assert item["stopPrice"] == "60000"
+        assert item["stopType"] == SodexStopType.STOP_LOSS.value  # 1
+        assert item["triggerType"] == SodexTriggerType.MARK_PRICE.value  # 2
+        assert item["reduceOnly"] is True
+
+    async def test_take_profit_maps_to_wire_int_two(self, db_session):
+        order = await self._prepared_order(db_session, _perps_stop_request(stop_type="take_profit"))
+        item = json.loads(order.eip712_payload)["params"]["orders"][0]
+        assert item["stopType"] == SodexStopType.TAKE_PROFIT.value  # 2
+
+    async def test_non_stop_perps_order_omits_stop_price(self, db_session):
+        """A plain perps order (no stop) must NOT carry stopPrice in the
+        payload — serialization excludes None, so the key is absent."""
+        order = await self._prepared_order(db_session, _perps_request())
+        item = json.loads(order.eip712_payload)["params"]["orders"][0]
+        assert "stopPrice" not in item
+        assert item["reduceOnly"] is False
+
+    async def test_reduce_only_close_payload_carries_reduce_only(self, db_session):
+        """PR P1-fix.TEST-GAP — a market reduce-only CLOSE (no stop) must
+        sign `reduceOnly:true` into the payload, else the gateway could
+        oversell past zero into opposite exposure. This is the exact
+        row-vs-payload divergence CRIT-1 was; pin it at the payload byte
+        level, not just on the DB row."""
+        close_req = RiskRequest(
+            venue=Venue.SODEX_PERPS.value,
+            asset="BTC",
+            side=SodexOrderSide.SELL.value,
+            order_type=SodexOrderType.MARKET.value,
+            time_in_force=SodexTimeInForce.IOC.value,
+            requested_size=Decimal("0.01"),
+            requested_price=Decimal("65000"),
+            position_side=PositionSide.BOTH.value,
+            leverage=Decimal("3"),
+            reduce_only=True,
+            is_conditional=False,
+        )
+        order = await self._prepared_order(db_session, close_req)
+        item = json.loads(order.eip712_payload)["params"]["orders"][0]
+        assert item["reduceOnly"] is True
+        assert "stopPrice" not in item  # a close is not a stop order
+
+
+# ---------------------------------------------------------------------------
 # submit_new — paper path
 # ---------------------------------------------------------------------------
 
@@ -338,6 +446,75 @@ class TestSubmitNewPaper:
         from etfpulse.models.position import PositionSide as DbPositionSide
 
         assert position.side == DbPositionSide.SHORT.value
+
+    async def test_paper_reduce_only_no_position_rejected(self, db_session):
+        """PR P1-fix.RO-FILL-1 — a paper reduce_only order with no position
+        to reduce must be REJECTED (mirroring the gateway), NOT recorded as
+        a phantom FILLED that opens exposure. Guards the CAP-EXEMPT
+        invariant: reduce_only can't create exposure even in paper."""
+        from sqlalchemy import select
+
+        await _seed_btc_perps_symbol(db_session)
+        uid = await _seed_user(db_session, paper_trade=True)
+        # A non-conditional reduce_only SELL with no open position.
+        req = _perps_stop_request(side=SodexOrderSide.SELL.value)
+        req = dataclasses.replace(req, stop_price=None, stop_type=None, is_conditional=False)
+        prepared = await prepare_new(db_session, user_id=uid, request=req)
+        result = await submit_new(
+            db_session,
+            order_id=prepared.order_id,
+            signature="0x01" + "ab" * 65,
+            spot_client=_make_mock_spot_client(response_items=[]),
+            perps_client=_make_mock_perps_client(response_items=[]),
+        )
+        assert result.status == OrderStatus.REJECTED.value
+        order = (
+            await db_session.execute(select(Order).where(Order.id == prepared.order_id))
+        ).scalar_one()
+        assert order.filled_size is None
+        # No position opened by the reduce_only no-op.
+        positions = (
+            (await db_session.execute(select(Position).where(Position.user_id == uid)))
+            .scalars()
+            .all()
+        )
+        assert positions == []
+
+    async def test_paper_conditional_rests_acked_no_position(self, db_session):
+        """PR P1-fix.PAPER-1 — a paper conditional (stop) order must NOT
+        instant-fill: it rests ACKED with no Position change, so attaching
+        a stop doesn't close the position. Mirrors the real-venue
+        trigger-pending state."""
+        from sqlalchemy import select
+
+        await _seed_btc_perps_symbol(db_session)
+        uid = await _seed_user(db_session, paper_trade=True)
+
+        prepared = await prepare_new(db_session, user_id=uid, request=_perps_stop_request())
+        result = await submit_new(
+            db_session,
+            order_id=prepared.order_id,
+            signature="0x01" + "ab" * 65,
+            spot_client=_make_mock_spot_client(response_items=[]),
+            perps_client=_make_mock_perps_client(response_items=[]),
+        )
+        # ACKED (trigger pending), NOT filled.
+        assert result.status == OrderStatus.ACKED.value
+        assert result.exchange_order_id == f"PAPER-{prepared.order_id}"
+
+        order = (
+            await db_session.execute(select(Order).where(Order.id == prepared.order_id))
+        ).scalar_one()
+        assert order.is_conditional is True
+        assert order.filled_size is None  # never filled
+
+        # No Position created — the stop hasn't triggered.
+        positions = (
+            (await db_session.execute(select(Position).where(Position.user_id == uid)))
+            .scalars()
+            .all()
+        )
+        assert positions == []
 
 
 # ---------------------------------------------------------------------------

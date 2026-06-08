@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
 from etfpulse.adapters.sodex.responses import OrderResponseItem
@@ -566,3 +566,361 @@ async def test_list_symbols_empty_returns_200(app_and_client, db_session):
     r = await client.get("/api/execution/symbols", headers=_auth(user))
     assert r.status_code == 200
     assert r.json()["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# PR P1.4 — close-position route
+# ---------------------------------------------------------------------------
+
+
+async def _seed_btc_perps_symbol(db_session) -> None:
+    db_session.add(
+        SodexSymbol(
+            venue=Venue.SODEX_PERPS.value,
+            symbol_id=2,
+            name="vBTC_vUSDC_PERP",
+            asset="BTC",
+            raw={"id": 2, "name": "vBTC_vUSDC_PERP"},
+            refreshed_at=datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+
+
+async def _open_position(
+    db_session,
+    *,
+    user: User,
+    venue: str,
+    side: str = "long",
+    size: Decimal = Decimal("0.01"),
+    entry_price: Decimal = Decimal("65000"),
+    leverage: Decimal | None = None,
+) -> Position:
+    p = Position(
+        user_id=user.id,
+        venue=venue,
+        asset="BTC",
+        side=side,
+        size=size,
+        entry_price=entry_price,
+        status=PositionStatus.OPEN.value,
+        leverage=leverage,
+    )
+    db_session.add(p)
+    await db_session.flush()
+    return p
+
+
+async def test_close_position_401_unauth(app_and_client):
+    _, client = app_and_client
+    r = await client.post("/api/execution/close-position/1")
+    assert r.status_code == 401
+
+
+async def test_close_position_404_nonexistent(app_and_client, db_session):
+    _, client = app_and_client
+    user = await _seed_user(db_session)
+    r = await client.post("/api/execution/close-position/999999", headers=_auth(user))
+    assert r.status_code == 404
+
+
+async def test_close_position_404_other_user(app_and_client, db_session):
+    _, client = app_and_client
+    owner = await _seed_user(db_session)
+    other = await _seed_user(db_session)
+    p = await _open_position(db_session, user=other, venue=Venue.SODEX_SPOT.value)
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(owner))
+    assert r.status_code == 404
+
+
+async def test_close_position_404_when_already_closed(app_and_client, db_session):
+    _, client = app_and_client
+    user = await _seed_user(db_session)
+    p = await _open_position(db_session, user=user, venue=Venue.SODEX_SPOT.value)
+    p.status = PositionStatus.CLOSED.value
+    await db_session.flush()
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(user))
+    assert r.status_code == 404
+
+
+async def test_close_position_happy_path_spot_long(app_and_client, db_session):
+    _, client = app_and_client
+    await _seed_btc_spot_symbol(db_session)
+    user = await _seed_user(db_session)
+    p = await _open_position(db_session, user=user, venue=Venue.SODEX_SPOT.value, side="long")
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(user))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["order_id"]
+    assert body["typed_data"]["primaryType"] == "ExchangeAction"
+    # Confirm the order was inserted as opposite-side SELL MARKET on spot.
+    order = await db_session.get(Order, body["order_id"])
+    assert order is not None
+    assert order.side == "sell"
+    assert order.order_type == "market"
+    assert order.reduce_only is False  # spot can't reduce_only
+    assert order.requested_size == p.size
+
+
+async def test_close_position_happy_path_perps_long(app_and_client, db_session):
+    _, client = app_and_client
+    await _seed_btc_perps_symbol(db_session)
+    user = await _seed_user(db_session)
+    p = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_PERPS.value,
+        side="long",
+        leverage=Decimal("3"),
+    )
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(user))
+    assert r.status_code == 200, r.text
+    order = await db_session.get(Order, r.json()["order_id"])
+    assert order is not None
+    assert order.side == "sell"
+    assert order.order_type == "market"
+    assert order.reduce_only is True
+    # Leverage forwards into EIP-712 typed-data via RiskRequest; the
+    # Order row doesn't persist leverage (lives on Position only).
+    assert order.venue == Venue.SODEX_PERPS.value
+
+
+async def test_close_position_happy_path_perps_short(app_and_client, db_session):
+    _, client = app_and_client
+    await _seed_btc_perps_symbol(db_session)
+    user = await _seed_user(db_session)
+    p = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_PERPS.value,
+        side="short",
+        leverage=Decimal("3"),
+    )
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(user))
+    assert r.status_code == 200, r.text
+    order = await db_session.get(Order, r.json()["order_id"])
+    assert order is not None
+    assert order.side == "buy"  # opposite of short
+    assert order.reduce_only is True
+
+
+async def test_close_position_503_when_price_unavailable(app_and_client, db_session, monkeypatch):
+    """When the spot-price oracle returns None, surface 503 with operator hint."""
+    _, client = app_and_client
+    await _seed_btc_spot_symbol(db_session)
+    user = await _seed_user(db_session)
+    p = await _open_position(db_session, user=user, venue=Venue.SODEX_SPOT.value)
+
+    async def _no_price(asset):
+        return None
+
+    monkeypatch.setattr("etfpulse.api.routes.execution.get_spot_price_with_source", _no_price)
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(user))
+    assert r.status_code == 503
+    assert "price unavailable" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# PR P1-fix.B2 — close-position perps dedupe
+# ---------------------------------------------------------------------------
+
+
+async def test_close_position_perps_409_when_close_already_in_flight(app_and_client, db_session):
+    """Two consecutive close-position POSTs on a perps position: the
+    2nd MUST 409 with the in-flight order_id rather than create a 2nd
+    reduce_only order that would queue indefinitely."""
+    _, client = app_and_client
+    await _seed_btc_perps_symbol(db_session)
+    user = await _seed_user(db_session)
+    pos = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_PERPS.value,
+        side="long",
+        leverage=Decimal("3"),
+    )
+    r1 = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    assert r1.status_code == 200, r1.text
+    first_close_id = r1.json()["order_id"]
+
+    r2 = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    assert r2.status_code == 409, r2.text
+    body = r2.json()
+    assert body["detail"]["reason"] == "close_already_in_flight"
+    assert body["detail"]["order_id"] == first_close_id
+
+
+async def test_close_position_perps_allowed_with_resting_sl(app_and_client, db_session):
+    """PR P1-fix.Issue-A: a resting SL/TP is `reduce_only=True` but
+    `is_conditional=True`. The B2 dedupe matches only IMMEDIATE closes
+    (`is_conditional=False`), so a manual close on a protected position
+    MUST still succeed (200), not 409."""
+    _, client = app_and_client
+    await _seed_btc_perps_symbol(db_session)
+    user = await _seed_user(db_session)
+    pos = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_PERPS.value,
+        side="long",
+        leverage=Decimal("3"),
+    )
+    # Insert a resting conditional SL: opposite-side, reduce_only,
+    # is_conditional, ACKED on the venue.
+    resting_sl = Order(
+        user_id=user.id,
+        client_order_id="resting-sl-1",
+        venue=Venue.SODEX_PERPS.value,
+        asset="BTC",
+        side="sell",
+        order_type="market",
+        time_in_force="ioc",
+        requested_size=Decimal("0.01"),
+        requested_price=Decimal("65000"),
+        status=OrderStatus.ACKED.value,
+        reduce_only=True,
+        is_conditional=True,
+        stop_price=Decimal("60000"),
+        stop_type="stop_loss",
+    )
+    db_session.add(resting_sl)
+    await db_session.flush()
+
+    r = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    assert r.status_code == 200, r.text
+    # And the immediate close just created IS picked up by the dedupe
+    # (is_conditional=False) — a 2nd close now 409s.
+    r2 = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    assert r2.status_code == 409, r2.text
+
+
+async def test_close_position_spot_does_not_dedupe(app_and_client, db_session):
+    """Spot SELLs are indistinguishable from regular trades (no
+    reduce_only marker on spot). The dedupe MUST be skipped — the
+    venue rejects oversell. Test pins the asymmetry so a future
+    "add spot dedupe" change is deliberate, not silent."""
+    _, client = app_and_client
+    await _seed_btc_spot_symbol(db_session)
+    user = await _seed_user(db_session)
+    pos = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_SPOT.value,
+        side="long",
+    )
+    r1 = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    assert r1.status_code == 200
+    r2 = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    # 2nd call succeeds (creates a 2nd close order); spot has no
+    # in-DB dedupe. Documented behavior — gateway oversell is the
+    # downstream guard.
+    assert r2.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PR P1-fix.F1 — true concurrency assertion on close-position
+# ---------------------------------------------------------------------------
+
+
+async def test_close_position_perps_concurrent_requests_exactly_one_wins(test_engine):
+    """Fire two close-position POSTs in true parallel (asyncio.gather)
+    with per-request DB sessions. The User-row FOR UPDATE lock should
+    serialise them: exactly one returns 200 (creating the close), the
+    other returns 409 (dedupe finds the first's close).
+
+    Without the F1 lock, both POSTs would pass the dedupe SELECT in
+    their own transactions before either commits, and both would
+    insert close orders — surfaceable as `assert sorted(codes) ==
+    [200, 200]` failing this test."""
+    import asyncio
+
+    from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
+    from etfpulse.adapters.sodex.spot_client import SodexSpotClient
+
+    # Seed user + position + symbol in a committed setup session so
+    # both racing requests can see them.
+    sessionmaker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with sessionmaker() as setup:
+        u = User(
+            wallet_address=_wallet(),
+            sodex_account_id=57436,
+            sodex_spot_api_key_name="default",
+            sodex_perps_api_key_name="default",
+            paper_trade=True,
+        )
+        setup.add(u)
+        await setup.flush()
+        user_id = u.id
+        setup.add(
+            SodexSymbol(
+                venue=Venue.SODEX_PERPS.value,
+                symbol_id=2,
+                name="vBTC_vUSDC_PERP",
+                asset="BTC",
+                raw={"id": 2, "name": "vBTC_vUSDC_PERP"},
+                refreshed_at=datetime.now(UTC),
+            )
+        )
+        p = Position(
+            user_id=user_id,
+            venue=Venue.SODEX_PERPS.value,
+            asset="BTC",
+            side="long",
+            size=Decimal("0.01"),
+            entry_price=Decimal("65000"),
+            status=PositionStatus.OPEN.value,
+            leverage=Decimal("3"),
+        )
+        setup.add(p)
+        await setup.commit()
+        position_id = p.id
+
+    # Build an app whose get_db_session yields a FRESH session per
+    # request (production-shaped, not the shared-session test default).
+    app = create_app()
+
+    async def _per_request_session() -> AsyncIterator[AsyncSession]:
+        async with sessionmaker() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = _per_request_session
+    ok_item = OrderResponseItem(code=0, orderID=12345, clOrdID="cli-xyz")
+    spot = AsyncMock(spec=SodexSpotClient)
+    spot.submit_batch_new_order = AsyncMock(return_value=[ok_item])
+    perps = AsyncMock(spec=SodexPerpsClient)
+    perps.submit_batch_new_order = AsyncMock(return_value=[ok_item])
+    app.state.sodex_spot_client = spot
+    app.state.sodex_perps_client = perps
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            headers = {"Authorization": f"Bearer {mint_jwt(user_id)}"}
+            url = f"/api/execution/close-position/{position_id}"
+            r1, r2 = await asyncio.gather(
+                client.post(url, headers=headers),
+                client.post(url, headers=headers),
+            )
+        codes = sorted([r1.status_code, r2.status_code])
+        assert codes == [200, 409], (
+            f"expected [200, 409] (lock serialises, dedupe blocks 2nd) — "
+            f"got {codes}. r1={r1.text} r2={r2.text}"
+        )
+        # The 409 carries the in-flight order_id from the 200 winner.
+        winner = r1 if r1.status_code == 200 else r2
+        loser = r2 if r1.status_code == 200 else r1
+        assert loser.json()["detail"]["reason"] == "close_already_in_flight"
+        assert loser.json()["detail"]["order_id"] == winner.json()["order_id"]
+    finally:
+        # Clean up the committed rows so they don't leak between tests.
+        async with sessionmaker() as cleanup:
+            await cleanup.execute(Order.__table__.delete().where(Order.user_id == user_id))
+            await cleanup.execute(Position.__table__.delete().where(Position.id == position_id))
+            await cleanup.execute(
+                SodexSymbol.__table__.delete().where(SodexSymbol.venue == Venue.SODEX_PERPS.value)
+            )
+            await cleanup.execute(User.__table__.delete().where(User.id == user_id))
+            await cleanup.commit()

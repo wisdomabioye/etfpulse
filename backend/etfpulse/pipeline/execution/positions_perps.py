@@ -101,6 +101,29 @@ async def perps_apply_fill(
     else:
         raise ValueError(f"perps_apply_fill: unknown order side {order.side!r}")
 
+    # PR P1-fix.RO-FILL-1 — a reduce_only order can ONLY reduce/close an
+    # existing position. It must never OPEN (no position) or EXTEND
+    # (same-side) — that would create/grow exposure, which is the exact
+    # thing reduce_only forbids AND the safety invariant CAP-EXEMPT relies
+    # on when it lets reduce_only bypass the exposure caps. The real
+    # gateway enforces this; for PAPER fills (and as a defensive belt on
+    # the reconcile fold) we enforce it locally. Without this guard, a
+    # paper reduce_only order with no position opens one, and a same-side
+    # one grows it — unbounded, since the caps no longer apply.
+    if order.reduce_only and (existing is None or existing.side == fill_side):
+        log.warning(
+            "perps_reduce_only_no_reducible_position",
+            user_id=order.user_id,
+            asset=order.asset,
+            order_id=order.id,
+            order_side=order.side,
+            has_position=existing is not None,
+            existing_side=existing.side if existing is not None else None,
+            paper=order.paper_trade,
+            note="reduce_only fill has nothing to reduce — no-op (would otherwise open/extend)",
+        )
+        return None
+
     if existing is None:
         return await _perps_open(
             session,

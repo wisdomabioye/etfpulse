@@ -11,6 +11,7 @@ import secrets
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from etfpulse.models import (
     Order,
@@ -55,6 +56,7 @@ async def _seed_order(
     asset: str = "BTC",
     client_order_id: str | None = None,
     paper_trade: bool = False,
+    reduce_only: bool = False,
 ) -> Order:
     co_id = client_order_id or f"o-{secrets.token_hex(4)}"
     o = Order(
@@ -69,6 +71,7 @@ async def _seed_order(
         requested_price=Decimal("65000"),
         status=OrderStatus.FILLED.value,
         paper_trade=paper_trade,
+        reduce_only=reduce_only,
     )
     db_session.add(o)
     await db_session.flush()
@@ -107,6 +110,73 @@ class TestPerpsOpen:
         )
         assert position is not None
         assert position.side == PositionSide.SHORT.value
+
+
+class TestPerpsReduceOnlyGuard:
+    """PR P1-fix.RO-FILL-1 — a reduce_only fill can ONLY reduce/close. It
+    must never open (no position) or extend (same-side), else it creates
+    exposure — defeating both reduce-only semantics and the CAP-EXEMPT
+    safety invariant (reduce_only bypasses the exposure caps)."""
+
+    async def test_reduce_only_no_position_is_noop(self, db_session):
+        uid = await _seed_user(db_session)
+        order = await _seed_order(
+            db_session, user_id=uid, side=OrderSide.SELL.value, reduce_only=True
+        )
+        position = await perps_apply_fill(
+            db_session, order=order, fill_price=Decimal("65000"), fill_size=Decimal("0.01")
+        )
+        assert position is None  # nothing opened
+        rows = (
+            (await db_session.execute(select(Position).where(Position.user_id == uid)))
+            .scalars()
+            .all()
+        )
+        assert rows == []
+
+    async def test_reduce_only_same_side_is_noop(self, db_session):
+        uid = await _seed_user(db_session)
+        # Open a LONG with a normal BUY.
+        open_order = await _seed_order(db_session, user_id=uid, client_order_id="open-1")
+        await perps_apply_fill(
+            db_session, order=open_order, fill_price=Decimal("60000"), fill_size=Decimal("0.02")
+        )
+        # reduce_only BUY (same side as the LONG) would EXTEND — must no-op.
+        ro_buy = await _seed_order(
+            db_session,
+            user_id=uid,
+            side=OrderSide.BUY.value,
+            reduce_only=True,
+            client_order_id="ro-1",
+        )
+        position = await perps_apply_fill(
+            db_session, order=ro_buy, fill_price=Decimal("70000"), fill_size=Decimal("0.01")
+        )
+        assert position is None
+        existing = (
+            await db_session.execute(select(Position).where(Position.user_id == uid))
+        ).scalar_one()
+        assert existing.size == Decimal("0.02")  # unchanged — not extended
+
+    async def test_reduce_only_opposite_side_reduces(self, db_session):
+        uid = await _seed_user(db_session)
+        open_order = await _seed_order(db_session, user_id=uid, client_order_id="open-1")
+        await perps_apply_fill(
+            db_session, order=open_order, fill_price=Decimal("60000"), fill_size=Decimal("0.02")
+        )
+        # reduce_only SELL (opposite the LONG) reduces normally.
+        ro_sell = await _seed_order(
+            db_session,
+            user_id=uid,
+            side=OrderSide.SELL.value,
+            reduce_only=True,
+            client_order_id="ro-2",
+        )
+        position = await perps_apply_fill(
+            db_session, order=ro_sell, fill_price=Decimal("65000"), fill_size=Decimal("0.01")
+        )
+        assert position is not None
+        assert position.size == Decimal("0.01")  # reduced from 0.02
 
 
 class TestPerpsExtend:
