@@ -167,3 +167,70 @@ describe('Authed-user bounce', () => {
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * SIG2X.3 — preserve the URL through the auth bounce.
+ *
+ * Tested at the pure-function level (the path resolver) since
+ * asserting on react-router's `<Navigate>` effect in a memory
+ * router is brittle. The resolver is the entire decision point;
+ * if it returns the right string, Navigate routes correctly.
+ */
+import type { Location } from 'react-router-dom';
+
+import { resolvePostLoginPath } from '../auth/postLoginPath';
+
+// Build a Location via cast — react-router's Location type carries
+// optional internal fields (`unstable_mask`, etc) that aren't worth
+// satisfying in test fixtures. We only read the four documented
+// fields, so a structural cast is safe.
+function makeLocation(over: Partial<Location> = {}): Location {
+  return {
+    pathname: '/login',
+    search: '',
+    hash: '',
+    state: null,
+    key: 'test',
+    ...over,
+  } as Location;
+}
+
+describe('resolvePostLoginPath', () => {
+  it('defaults to /execute when nothing was recorded', () => {
+    expect(resolvePostLoginPath(makeLocation())).toBe('/execute');
+  });
+
+  it('replays the recorded URL (pathname + search + hash)', () => {
+    expect(
+      resolvePostLoginPath(
+        makeLocation({
+          state: {
+            from: makeLocation({
+              pathname: '/execute',
+              search: '?signal_id=42',
+              hash: '#order-form',
+            }),
+          },
+        }),
+      ),
+    ).toBe('/execute?signal_id=42#order-form');
+  });
+
+  it('handles a from-location with missing search/hash fields', () => {
+    expect(
+      resolvePostLoginPath(
+        makeLocation({
+          state: {
+            from: {
+              pathname: '/signals/7',
+              search: '',
+              hash: '',
+              state: null,
+              key: 'x',
+            } as Location,
+          },
+        }),
+      ),
+    ).toBe('/signals/7');
+  });
+});

@@ -24,7 +24,9 @@
  */
 
 import { useRef, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
+
+import { resolvePostLoginPath } from '../auth/postLoginPath';
 import { useAccount, useDisconnect, useSignMessage } from 'wagmi';
 import { useAppKit } from '@reown/appkit/react';
 
@@ -34,10 +36,14 @@ import { isWalletConnectAvailable } from '../lib/wagmi';
 
 export function Login() {
   const { isAuthed } = useAuth();
+  const location = useLocation();
   if (isAuthed) {
-    // Already logged in — bounce to the Execute page. `replace` so
-    // back-button doesn't re-show /login after a refresh.
-    return <Navigate to="/execute" replace />;
+    // SIG2X.3 — replay the URL the user was bounced from (Execute
+    // sets `location.state.from` before redirecting). Falls back to
+    // /execute when no origin is recorded (direct visit to /login).
+    // `replace` so the back-button doesn't re-show /login after a
+    // refresh.
+    return <Navigate to={resolvePostLoginPath(location)} replace />;
   }
   if (!isWalletConnectAvailable) {
     // Deployment didn't set VITE_WALLETCONNECT_PROJECT_ID; AppKit isn't
@@ -47,6 +53,7 @@ export function Login() {
   }
   return <LoginWithWallet />;
 }
+
 
 function LoginUnavailable() {
   return (

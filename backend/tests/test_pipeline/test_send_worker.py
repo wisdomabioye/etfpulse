@@ -1155,3 +1155,92 @@ class TestBuildSignalKeyboard:
         kb = build_signal_keyboard(signal)
         assert kb is not None
         assert kb.inline_keyboard[0][0].url == "https://etfpulse.example.com/signals/7"
+
+
+# ---------------------------------------------------------------------------
+# SIG2X — "⚡ Execute" button gating on the inline keyboard
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSignalKeyboardExecuteGate:
+    """Mirrors `isExecutableSignal` rules from
+    `frontend/src/lib/signalExecute.ts`. Drift between the two sides
+    is a real product bug — keep both rule sets aligned."""
+
+    def test_includes_execute_button_for_actionable_signal(self, monkeypatch):
+        """BTC + consider-{long,short} → two-button row on the same line."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
+        signal = _signal_with_ai()  # defaults to BTC + "consider short"
+        signal.id = 99
+        kb = build_signal_keyboard(signal)
+        assert kb is not None
+        row = kb.inline_keyboard[0]
+        assert len(row) == 2, "actionable signal must surface both View AND Execute"
+        assert "View on web" in row[0].text
+        assert "Execute" in row[1].text
+        assert row[1].url == "https://etfpulse.example.com/execute?signal_id=99"
+
+    def test_no_execute_button_for_market_asset(self, monkeypatch):
+        """MARKET (regime_shift) signals describe BTC/ETH-wide moves, not
+        a specific trade — surfacing Execute would force a manual asset
+        pick downstream and muddy the message."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
+        signal = _signal_with_ai(asset="MARKET")
+        signal.id = 100
+        kb = build_signal_keyboard(signal)
+        assert kb is not None
+        row = kb.inline_keyboard[0]
+        assert len(row) == 1
+        assert "View on web" in row[0].text
+
+    def test_no_execute_button_for_wait_direction(self, monkeypatch):
+        """`suggested_action == "wait"` → there's nothing to execute.
+        Single-button keyboard."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
+        signal = _signal_with_ai(
+            ai_analysis={
+                "headline": "no clear direction",
+                "reasoning": [],
+                "confidence": 5,
+                "risks": [],
+                "suggested_action": "wait",
+                "time_horizon": "swing",
+            },
+        )
+        signal.id = 101
+        kb = build_signal_keyboard(signal)
+        assert kb is not None
+        assert len(kb.inline_keyboard[0]) == 1
+
+    def test_no_execute_button_when_ai_failed(self, monkeypatch):
+        """AI-failed signals (ai_analysis IS NULL) carry no
+        `suggested_action` → no Execute affordance."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "https://etfpulse.example.com")
+        signal = _signal_with_ai(ai_analysis=None)
+        signal.id = 102
+        kb = build_signal_keyboard(signal)
+        assert kb is not None
+        assert len(kb.inline_keyboard[0]) == 1
+
+    def test_no_keyboard_at_all_when_frontend_url_unset(self, monkeypatch):
+        """Sanity check: the existing `frontend_url`-empty → None
+        contract is unchanged by SIG2X."""
+        from etfpulse.config import settings
+        from etfpulse.pipeline.delivery import build_signal_keyboard
+
+        monkeypatch.setattr(settings, "frontend_url", "")
+        signal = _signal_with_ai()
+        signal.id = 1
+        assert build_signal_keyboard(signal) is None

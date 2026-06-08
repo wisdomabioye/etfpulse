@@ -23,6 +23,7 @@ import {
 import { ApiError } from '../api/client';
 import { formatAgo, truncateFingerprint } from '../lib/format';
 import { TELEGRAM_GROUP_URL } from '../lib/links';
+import { isExecutableSignal, signalExecuteHref } from '../lib/signalExecute';
 
 /**
  * /signals/:id — matches wireframe `src/screen-detail.jsx`.
@@ -127,6 +128,25 @@ function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
       <SpotAtSignal price={s.price_at_creation} source={s.price_source} />
 
       {analysis && <SuggestedActionPanel analysis={analysis} />}
+
+      {/* SIG2X — bridge from signal to trade execution. Visible only
+          when the signal is actionable (tradeable asset + concrete
+          direction). The CTA carries `signal_id` so the resulting
+          Order is attributable for per-signal P&L. */}
+      {isExecutableSignal(s) && (
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <Link
+            to={signalExecuteHref(s.id)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-bg-0 text-[13px] font-semibold hover:opacity-90"
+          >
+            ⚡ Execute this signal
+          </Link>
+          <span className="text-[12px] text-text-3">
+            Opens the order form prefilled with the suggested levels. You
+            sign in your wallet — ETFPulse never holds keys.
+          </span>
+        </div>
+      )}
 
       {s.confirmation_score !== null && s.factor_votes !== null && (
         <div className="mt-6">

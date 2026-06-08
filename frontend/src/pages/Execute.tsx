@@ -29,8 +29,8 @@
  * resolves locally (no wallet prompt needed; `local_only=true`).
  */
 
-import { useMemo, useRef, useState, type FormEvent } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAccount, useSignMessage, useSignTypedData } from 'wagmi';
 import { useAppKit } from '@reown/appkit/react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -43,9 +43,16 @@ import type {
   Venue,
   WalletMeResponse,
 } from '../api/execution';
+import type { AssetSymbol, SuggestedAction } from '../api/types';
 import { ApiKeySection } from '../components/execution/ApiKeySection';
 import { performSiweLogin } from '../auth/siwe';
 import { useAuth } from '../auth/useAuth';
+import { useSignal } from '../api/queries';
+import {
+  defaultVenueForSuggestedAction,
+  isExecutableSignal,
+  sideForSuggestedAction,
+} from '../lib/signalExecute';
 import {
   KEY_WALLET_ME,
   useOrders,
@@ -79,8 +86,13 @@ const NON_TERMINAL_STATUSES = new Set([
 
 export function Execute() {
   const { isAuthed } = useAuth();
+  const location = useLocation();
   if (!isAuthed) {
-    return <Navigate to="/login" replace />;
+    // SIG2X.3 — preserve the intended URL (incl. ?signal_id=N) across
+    // the auth bounce so /signals/N "Execute this signal" and Telegram
+    // alert deep-links land on the prefilled form after SIWE. The Login
+    // page reads `location.state.from` and navigates there on success.
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
   return <ExecuteInner />;
 }
@@ -449,6 +461,50 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
   const [flowError, setFlowError] = useState<string | null>(null);
   const [flowSuccess, setFlowSuccess] = useState<string | null>(null);
 
+  // SIG2X — bridge from /signals/:id. When the page is opened with
+  // `?signal_id=N`, fetch the signal and prefill the form fields ONCE
+  // (a useRef guard prevents a refetch from clobbering subsequent
+  // user edits). The signal_id is forwarded to the backend on prepare
+  // so Order.signal_id is set for downstream per-signal analytics.
+  const [searchParams] = useSearchParams();
+  const signalIdParam = searchParams.get('signal_id');
+  // Reject 0, negatives, leading-zero strings, and non-digits. The
+  // backend's `PrepareNewRequest.signal_id` has `gt=0`, so forwarding
+  // `0` would 422 the form submit; treat invalid URLs as no-signal.
+  const signalId = signalIdParam && /^[1-9]\d*$/.test(signalIdParam)
+    ? Number(signalIdParam)
+    : undefined;
+  const signalQuery = useSignal(signalId);
+  const prefilledRef = useRef<number | null>(null);
+  // The lint rule `react-hooks/set-state-in-effect` flags the setState
+  // calls below — the pattern here is the legitimate one-shot exception:
+  // sync local form state from an asynchronously-loaded source EXACTLY
+  // ONCE (useRef guard ensures idempotence), then let the user own the
+  // form. Multiple setX calls are batched by React 18+ into a single
+  // render commit, so cascading-renders concern doesn't apply.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const s = signalQuery.data;
+    if (!s) return;
+    if (prefilledRef.current === s.id) return;
+    if (!isExecutableSignal(s)) return; // tradeable + actionable gate
+    prefilledRef.current = s.id;
+    const action = s.ai_analysis!.suggested_action;
+    const nextVenue = defaultVenueForSuggestedAction(action);
+    const nextSide = sideForSuggestedAction(action);
+    if (nextVenue) setVenue(nextVenue);
+    if (nextSide) setSide(nextSide);
+    setAsset(s.asset);
+    // Limit order with the AI's suggested entry, when present.
+    // Falls through to whatever the user enters when null.
+    if (s.ai_analysis!.entry_price != null) {
+      setOrderType('limit');
+      setPrice(String(s.ai_analysis!.entry_price));
+    }
+    // Size: AI doesn't suggest one; leave the field blank for the user.
+  }, [signalQuery.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   // Pre-filter the asset dropdown to assets that have a symbol on this
   // venue. Empty list → backend would 503 with SymbolNotResolved; render
   // an explanatory inline state instead of letting the user submit.
@@ -476,6 +532,9 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
       requested_price: orderType === 'limit' ? price : null,
       position_side: venue === 'sodex_perps' ? 'both' : null,
       leverage: venue === 'sodex_perps' && leverage ? leverage : null,
+      // SIG2X — attribute the order to the source signal when one was
+      // supplied via ?signal_id. NULL = ad-hoc trade.
+      signal_id: signalId ?? null,
     };
     try {
       const prepared = await prepare.mutateAsync(req);
@@ -507,6 +566,14 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
   return (
     <section className="rounded-xl border border-border-2 p-4 space-y-4">
       <h2 className="text-lg font-semibold">New order</h2>
+      {signalId !== undefined && (
+        <SignalDrivenBanner
+          signalId={signalId}
+          signalData={signalQuery.data}
+          isLoading={signalQuery.isLoading}
+          isError={signalQuery.isError}
+        />
+      )}
       <form onSubmit={onSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <label className="space-y-1">
           <span className="text-xs text-text-2 uppercase tracking-wide">Venue</span>
@@ -621,6 +688,81 @@ function OrderForm({ me }: { me: WalletMeResponse }) {
         </div>
       )}
     </section>
+  );
+}
+
+/** Banner shown above the order form when the user landed via
+ *  `?signal_id=N` from the SignalDetail "Execute this signal" CTA
+ *  or a Telegram alert button. Three render states:
+ *
+ *    - Loading: shows the id but no asset/direction yet.
+ *    - Error / non-executable signal: shows the id + a heads-up that
+ *      the form is NOT prefilled (user should double-check the asset
+ *      they choose lines up with the signal they remember).
+ *    - Loaded + executable: shows the id, asset, direction, and a
+ *      back-link to /signals/:id for the full analysis.
+ *
+ *  Component kept inline because it's specific to this page's layout
+ *  and only consumed here. */
+function SignalDrivenBanner({
+  signalId,
+  signalData,
+  isLoading,
+  isError,
+}: {
+  signalId: number;
+  // Narrowed shape — only the fields the banner reads. Matches what
+  // `isExecutableSignal` and the action-renderer need; avoids
+  // dragging the whole `SignalDetail` type into the prop signature.
+  signalData:
+    | {
+        asset: AssetSymbol;
+        ai_analysis: { suggested_action: SuggestedAction } | null;
+      }
+    | undefined;
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  const linkable = `/signals/${signalId}`;
+  if (isLoading) {
+    return (
+      <div className="text-[12px] text-text-3 border border-border-2 bg-bg-2 rounded-md px-3 py-2">
+        Loading signal #{signalId}…
+      </div>
+    );
+  }
+  if (isError || !signalData) {
+    return (
+      <div className="text-[12px] text-amber-200 border border-amber-500/30 bg-amber-500/5 rounded-md px-3 py-2">
+        Signal #{signalId} could not be loaded. Form will submit
+        with this id attached, but no prefill was applied — review
+        the fields before signing.
+      </div>
+    );
+  }
+  if (!isExecutableSignal(signalData)) {
+    return (
+      <div className="text-[12px] text-amber-200 border border-amber-500/30 bg-amber-500/5 rounded-md px-3 py-2">
+        Signal #{signalId} isn&apos;t actionable (asset {signalData.asset}{' '}
+        / direction {signalData.ai_analysis?.suggested_action ?? '—'}).
+        Form is NOT prefilled.
+      </div>
+    );
+  }
+  const action = signalData.ai_analysis!.suggested_action;
+  return (
+    <div className="text-[12px] text-text-2 border border-accent/30 bg-accent/5 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+      <span>
+        Driven by signal{' '}
+        <Link to={linkable} className="text-accent underline">
+          #{signalId}
+        </Link>{' '}
+        · {signalData.asset} · {action}
+      </span>
+      <span className="text-text-3">
+        Fields below were prefilled — adjust before signing.
+      </span>
+    </div>
   );
 }
 

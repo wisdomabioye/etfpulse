@@ -68,7 +68,7 @@ from etfpulse.adapters.telegram import (
     telegram_client,
 )
 from etfpulse.config import settings
-from etfpulse.constants import MARKET_ASSET
+from etfpulse.constants import MARKET_ASSET, SUPPORTED_ASSETS
 from etfpulse.models import (
     ChannelType,
     DeliveryStatus,
@@ -499,23 +499,62 @@ def _format_usd(d: Decimal) -> str:
     return f"${float(d):,.2f}"
 
 
+# SIG2X — assets we surface an Execute button for. Derived from the
+# single-source-of-truth `SUPPORTED_ASSETS` (BTC, ETH today) so that
+# adding a new asset to the universe automatically widens the gate.
+# MARKET (regime_shift) is intentionally NOT in `SUPPORTED_ASSETS`
+# so it's excluded for free — regime claims are not single-asset
+# trade calls.
+_EXECUTE_TRADEABLE_ASSETS = frozenset(SUPPORTED_ASSETS)
+
+# SIG2X — directions that map to a concrete order. `wait` hides the
+# button. Mirrors `ACTIONABLE_DIRECTIONS` in `src/lib/signalExecute.ts`
+# on the FE. If either side adds a new direction (e.g. `'hold'`), BOTH
+# must update — there's no compile-time linkage.
+_EXECUTE_ACTIONABLE_DIRECTIONS = frozenset({"consider long", "consider short"})
+
+
+def _signal_is_executable(signal: Signal) -> bool:
+    """Should the Telegram alert keyboard include a one-tap "⚡ Execute"
+    button for this signal? Mirrors `isExecutableSignal` in
+    `frontend/src/lib/signalExecute.ts`. Drift between the two is a
+    real product bug — keep both rule sets aligned."""
+    if signal.asset not in _EXECUTE_TRADEABLE_ASSETS:
+        return False
+    analysis = signal.ai_analysis
+    if not analysis:
+        return False
+    return analysis.get("suggested_action") in _EXECUTE_ACTIONABLE_DIRECTIONS
+
+
 def build_signal_keyboard(signal: Signal) -> InlineKeyboardMarkup | None:
     """Inline keyboard attached to a signal alert (issue #38).
 
-    Single "View on web" button deep-linking to `/signals/:id` on the
-    SPA. Returns None when `frontend_url` is unset → caller passes None
-    to the adapter, which sends the message without any reply_markup.
-    Telegram strips a None reply_markup cleanly.
+    "📊 View on web" deep-links to `/signals/:id`. For actionable
+    signals (tradeable asset + concrete direction — see
+    `_signal_is_executable`), a "⚡ Execute" button is added on the
+    same row deep-linking to `/execute?signal_id={id}`. In the
+    Telegram-WebApp context the Execute link triggers initData-based
+    auto-auth + form prefill — one tap from alert to signing prompt.
 
-    Lives in this module (not `bot/keyboards.py`) so `pipeline/` doesn't
-    have to import from `bot/` — delivery already owns the rest of the
-    outbound message rendering, and this keyboard is part of that.
+    Returns None when `frontend_url` is unset → adapter sends without
+    any reply_markup.
+
+    Lives in this module (not `bot/keyboards.py`) so `pipeline/`
+    doesn't have to import from `bot/` — delivery already owns the
+    rest of the outbound message rendering, and this keyboard is
+    part of that.
     """
     base = settings.frontend_url.rstrip("/")
     if not base:
         return None
-    url = f"{base}/signals/{signal.id}"
-    return InlineKeyboardMarkup([[InlineKeyboardButton("📊 View on web", url=url)]])
+    view_btn = InlineKeyboardButton("📊 View on web", url=f"{base}/signals/{signal.id}")
+    if _signal_is_executable(signal):
+        execute_btn = InlineKeyboardButton(
+            "⚡ Execute", url=f"{base}/execute?signal_id={signal.id}"
+        )
+        return InlineKeyboardMarkup([[view_btn, execute_btn]])
+    return InlineKeyboardMarkup([[view_btn]])
 
 
 def format_signal_message(
