@@ -68,11 +68,7 @@ def _make_spot_state(aid: int) -> SpotAccountState:
             "user": "0x" + "cd" * 20,
             "aid": aid,
             "uid": 1,
-            "B": [
-                BalanceEntry.model_validate(
-                    {"i": 1, "a": "USDT", "t": "0", "l": "0"}
-                )
-            ],
+            "B": [BalanceEntry.model_validate({"i": 1, "a": "USDT", "t": "0", "l": "0"})],
             "O": None,
         }
     )
@@ -359,9 +355,7 @@ async def test_bootstrap_503_on_envelope_error(app: FastAPI, authed_client):
     _install_clients(
         app,
         spot=_FakeSpotClient(
-            keys=SodexEnvelopeError(
-                "API key not found", code=-1, raw_error="API key not found"
-            ),
+            keys=SodexEnvelopeError("API key not found", code=-1, raw_error="API key not found"),
         ),
         perps=_FakePerpsClient(),
     )
