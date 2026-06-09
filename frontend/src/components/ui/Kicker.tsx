@@ -24,7 +24,7 @@ export function Kicker({
 }: KickerProps) {
   return (
     <div
-      className={`flex items-center gap-2.5 font-mono text-[10px] tracking-[0.12em] uppercase text-text-3 ${className}`}
+      className={`flex items-center gap-2.5 font-mono text-[11px] tracking-[0.14em] uppercase text-acc ${className}`}
     >
       {dot && <StatusDot color={dotColor} glow={dotGlow} />}
       <span>{children}</span>

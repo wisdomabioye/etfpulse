@@ -1,60 +1,27 @@
-import { Link, useParams } from 'react-router-dom';
-import { useSignal } from '../api/queries';
-import {
-  AssetBadge,
-  ConfidenceBadge,
-  ConfirmationChip,
-  FactorBreakdown,
-  NewsContextSection,
-  OutcomeCard,
-  SignalTypeBadge,
-  SpotAtSignal,
-  SuggestedActionPanel,
-  TriggerDataTable,
-} from '../components/signals';
-import {
-  Button,
-  Callout,
-  CTABanner,
-  EmptyState,
-  SectionLabel,
-  Skeleton,
-} from '../components/ui';
+import { useParams } from 'react-router-dom';
+
 import { ApiError } from '../api/client';
-import { formatAgo, truncateFingerprint } from '../lib/format';
-import { TELEGRAM_GROUP_URL } from '../lib/links';
-import { isExecutableSignal, signalExecuteHref } from '../lib/signalExecute';
+import { useSignal } from '../api/queries';
+import { SignalDetailBody } from '../components/signal-detail/SignalDetailBody';
+import { DetailLoading, NotFound } from '../components/signal-detail/SignalDetailStates';
+import { Button, EmptyState } from '../components/ui';
 
 /**
- * /signals/:id — matches wireframe `src/screen-detail.jsx`.
- *
- * Article max-w-[780px], single reading column. Null handling:
- *   - invalid ID            → "Signal not found"
- *   - 404 from API          → "Signal not found"
- *   - 5xx / network         → "Couldn't load" + retry
- *   - ai_analysis === null  → headline/panel/reasoning/risks hidden;
- *                             trigger data + outcome + CTA still render
- *   - outcome === null      → OutcomeCard renders "Pending · evaluates in Xh"
+ * /signals/:id — why → R:R → outcome → execute (R7 reskin of the prototype's
+ * detail screen). Preserves the real `useSignal` wiring, every null state, and
+ * the SIG2X "⚡ Execute this signal" CTA (link → `/execute?signal_id=…`). The
+ * data-heavy sections (outcome, trigger data, news, factor breakdown) reuse
+ * their existing, tested components under reskinned section labels.
  */
 export function SignalDetail() {
   const { id: idParam } = useParams<{ id: string }>();
   const id = idParam && /^\d+$/.test(idParam) ? Number(idParam) : undefined;
-
   const query = useSignal(id);
 
-  if (id === undefined) {
-    return <NotFound />;
-  }
+  if (id === undefined) return <NotFound />;
 
   return (
-    <article className="max-w-[780px] mx-auto px-6 sm:px-8 pt-8 pb-16">
-      <Link
-        to="/signals"
-        className="inline-block font-mono text-[11px] text-text-3 hover:text-text-1 mb-6"
-      >
-        ← all signals
-      </Link>
-
+    <article className="max-w-[840px] mx-auto px-6 pt-8 pb-12">
       {query.isLoading ? (
         <DetailLoading />
       ) : query.isError ? (
@@ -72,189 +39,8 @@ export function SignalDetail() {
           />
         )
       ) : query.data ? (
-        <Body signal={query.data} />
+        <SignalDetailBody signal={query.data} />
       ) : null}
     </article>
-  );
-}
-
-function Body({ signal: s }: { signal: import('../api/types').SignalDetail }) {
-  const analysis = s.ai_analysis;
-
-  // Sequential section numbering — drives the SectionLabel `n` so gaps
-  // never form when conditional sections (AI Reasoning, News Context,
-  // Risks) are absent. The closure is fresh per render — order of `next()`
-  // calls below maps 1:1 to render order. Don't reorder without rechecking.
-  let sectionN = 0;
-  const next = () => String(++sectionN).padStart(2, '0');
-
-  // News context is a Stage 7-P6 addition — older signals (built under
-  // the v1 prompt before the gatherer existed) lack `trigger_data.news_context`
-  // entirely. The Array.isArray check distinguishes "key absent" from
-  // "empty list" so we only render the section heading when the gatherer ran.
-  const showNewsContext = Array.isArray(s.trigger_data.news_context);
-
-  return (
-    <>
-      <div className="flex items-center gap-2 mb-3.5">
-        <AssetBadge asset={s.asset} />
-        <SignalTypeBadge type={s.signal_type} />
-        <span className="flex-1" />
-        <ConfirmationChip score={s.confirmation_score} size="lg" />
-        <ConfidenceBadge value={s.confidence} size="lg" />
-      </div>
-
-      {analysis ? (
-        <h1
-          className="mt-2.5 mb-3.5 text-[32px] font-semibold text-text-1 leading-[1.15]"
-          style={{ letterSpacing: '-0.025em', textWrap: 'balance' }}
-        >
-          {analysis.headline}
-        </h1>
-      ) : (
-        <div className="mt-2.5 mb-3.5">
-          <EmptyState
-            title="AI analysis unavailable."
-            hint="Enrichment failed when this signal was generated. The trigger data below is still intact."
-          />
-        </div>
-      )}
-
-      <div className="font-mono text-[12px] text-text-3 mb-3.5 break-words">
-        Signal #{s.id} · Generated {formatAgo(s.created_at)} · Alerted to{' '}
-        {s.alerted_to.toLocaleString()} users · fp:{truncateFingerprint(s.fingerprint)}
-      </div>
-
-      <SpotAtSignal price={s.price_at_creation} source={s.price_source} />
-
-      {analysis && <SuggestedActionPanel analysis={analysis} />}
-
-      {/* SIG2X — bridge from signal to trade execution. Visible only
-          when the signal is actionable (tradeable asset + concrete
-          direction). The CTA carries `signal_id` so the resulting
-          Order is attributable for per-signal P&L. */}
-      {isExecutableSignal(s) && (
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Link
-            to={signalExecuteHref(s.id)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-bg-0 text-[13px] font-semibold hover:opacity-90"
-          >
-            ⚡ Execute this signal
-          </Link>
-          <span className="text-[12px] text-text-3">
-            Opens the order form prefilled with the suggested levels. You
-            sign in your wallet — ETFPulse never holds keys.
-          </span>
-        </div>
-      )}
-
-      {s.confirmation_score !== null && s.factor_votes !== null && (
-        <div className="mt-6">
-          <FactorBreakdown score={s.confirmation_score} votes={s.factor_votes} />
-        </div>
-      )}
-
-      {analysis && analysis.reasoning.length > 0 && (
-        <section className="mt-10">
-          <SectionLabel n={next()}>AI Reasoning</SectionLabel>
-          <ul className="m-0 p-0 list-none">
-            {analysis.reasoning.map((r, i) => (
-              <li
-                key={i}
-                className={`grid gap-3 py-3.5 items-baseline ${
-                  i === 0 ? 'border-t border-border-2' : 'border-t border-border-1'
-                }`}
-                style={{ gridTemplateColumns: '28px 1fr' }}
-              >
-                <span className="font-mono text-[11px] text-text-4 pt-0.5">
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <span
-                  className="text-[15px] leading-[1.6] text-text-1"
-                  style={{ textWrap: 'pretty' }}
-                >
-                  {r}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {showNewsContext && (
-        <section className="mt-10">
-          <SectionLabel n={next()}>News Context</SectionLabel>
-          <NewsContextSection triggerData={s.trigger_data} />
-        </section>
-      )}
-
-      <section className="mt-10">
-        <SectionLabel n={next()}>Trigger Data</SectionLabel>
-        <TriggerDataTable data={s.trigger_data} />
-      </section>
-
-      {analysis && analysis.risks.length > 0 && (
-        <section className="mt-10">
-          <SectionLabel n={next()}>Risks</SectionLabel>
-          <div className="flex flex-col gap-2">
-            {analysis.risks.map((r, i) => (
-              <Callout key={i} tone="warn">
-                {r}
-              </Callout>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="mt-10">
-        <SectionLabel n={next()}>Outcome</SectionLabel>
-        <OutcomeCard outcome={s.outcome} expiresAt={s.expires_at} />
-      </section>
-
-      <CTABanner
-        className="mt-12"
-        title="Continue the discussion"
-        hint={`Deep-linked to signal #${s.id} in Telegram.`}
-        action={
-          <Button
-            as="a"
-            href={TELEGRAM_GROUP_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            variant="primary"
-            size="md"
-          >
-            Discuss on Telegram
-            <span className="font-mono opacity-70">↗</span>
-          </Button>
-        }
-      />
-    </>
-  );
-}
-
-function DetailLoading() {
-  return (
-    <div className="flex flex-col gap-4">
-      <Skeleton className="h-6 w-48" />
-      <Skeleton className="h-10 w-full" />
-      <Skeleton className="h-4 w-72" />
-      <Skeleton className="h-24 w-full" />
-      <Skeleton className="h-40 w-full" />
-    </div>
-  );
-}
-
-function NotFound() {
-  return (
-    <EmptyState
-      title="Signal not found."
-      hint="It may have been removed, or the link is incorrect."
-      action={
-        <Button as="link" to="/signals" variant="secondary" size="sm">
-          Back to feed
-        </Button>
-      }
-    />
   );
 }

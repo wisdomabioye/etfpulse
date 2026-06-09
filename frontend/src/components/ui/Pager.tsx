@@ -63,7 +63,7 @@ export function Pager({
         item === DOTS ? (
           <span
             key={`dots-${idx}`}
-            className="px-2 font-mono text-[12px] text-text-3 select-none"
+            className="px-2 font-mono text-[12px] text-t3 select-none"
             aria-hidden
           >
             {DOTS}
@@ -105,10 +105,10 @@ function PagerButton({ n, active, onClick }: PagerButtonProps) {
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       aria-label={`Page ${n}`}
-      className={`min-w-[34px] px-2.5 py-[6px] rounded-[5px] text-[12px] font-medium font-mono tracking-[0.02em] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+      className={`min-w-[34px] px-2.5 py-[6px] rounded-[5px] text-[12px] font-medium font-mono tracking-[0.02em] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc ${
         active
-          ? 'bg-accent text-bg-1 border-accent'
-          : 'bg-transparent text-text-2 border-border-2 hover:text-text-1 hover:border-border-3'
+          ? 'bg-acc text-bg-1 border-acc'
+          : 'bg-transparent text-t2 border-line-2 hover:text-t1 hover:border-line-3'
       }`}
     >
       {n}

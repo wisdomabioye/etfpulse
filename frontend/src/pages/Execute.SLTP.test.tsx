@@ -180,11 +180,25 @@ describe('OrderForm — perps-only SL/TP/reduce-only inputs', () => {
 
   it('shows SL / TP / reduce-only inputs after switching venue to perps', () => {
     renderAt('/execute');
-    const venueSelect = screen.getByDisplayValue('Spot') as HTMLSelectElement;
-    fireEvent.change(venueSelect, { target: { value: 'sodex_perps' } });
+    // Venue is a segmented toggle now — tap "Perps" to switch.
+    fireEvent.click(screen.getByRole('button', { name: 'Perps' }));
     expect(screen.getByLabelText(/stop loss price/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/take profit price/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/reduce only/i)).toBeInTheDocument();
+  });
+
+  it('side toggle is Buy/Sell on spot and Long/Short on perps', () => {
+    renderAt('/execute');
+    // Default venue is spot (first key offered) — spot has no shorting,
+    // so the side toggle reads Buy / Sell, not Long / Short.
+    expect(screen.getByRole('button', { name: 'Buy' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sell' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Long' })).not.toBeInTheDocument();
+    // Switch to perps → directional Long / Short.
+    fireEvent.click(screen.getByRole('button', { name: 'Perps' }));
+    expect(screen.getByRole('button', { name: 'Long' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Short' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Buy' })).not.toBeInTheDocument();
   });
 
   it('DBLSUB-1: two form submits start the entry chain exactly once', () => {
@@ -193,7 +207,7 @@ describe('OrderForm — perps-only SL/TP/reduce-only inputs', () => {
     mockPrepare.mockReturnValue(new Promise(() => {}));
     renderAt('/execute');
     fireEvent.change(screen.getByLabelText(/size/i), { target: { value: '0.01' } });
-    fireEvent.change(screen.getByLabelText(/^price$/i), { target: { value: '65000' } });
+    fireEvent.change(screen.getByLabelText(/limit price/i), { target: { value: '65000' } });
     // Submit the FORM directly, twice. This bypasses the disabled-button
     // path (jsdom flushes the disabled re-render synchronously, which
     // would otherwise mask the race), so ONLY the synchronous in-flight
@@ -220,21 +234,21 @@ describe('PositionRow — Close button', () => {
     expect(screen.getByLabelText(/close BTC long position/i)).toBeInTheDocument();
   });
 
-  it('confirm-cancelled click does NOT call closePosition', () => {
+  it('modal-cancelled close does NOT call closePosition', () => {
     mockUsePositions.mockReturnValue({
       data: { items: [OPEN_PERPS_POSITION] },
       isLoading: false,
       isError: false,
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderAt('/execute');
+    // Tapping the row Close button opens the confirm modal but signs
+    // nothing; dismissing it must NOT start the close chain.
     fireEvent.click(screen.getByLabelText(/close BTC long position/i));
-    expect(confirmSpy).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     expect(mockClosePosition).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
-  it('confirm-accepted click invokes closePosition with the position id', async () => {
+  it('modal-confirmed close invokes closePosition with the position id', async () => {
     mockUsePositions.mockReturnValue({
       data: { items: [OPEN_PERPS_POSITION] },
       isLoading: false,
@@ -252,13 +266,39 @@ describe('PositionRow — Close button', () => {
       },
     });
     mockSubmitNew.mockResolvedValue({ order_id: 555, status: 'filled' });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderAt('/execute');
     fireEvent.click(screen.getByLabelText(/close BTC long position/i));
+    // Confirm in the modal — this is what actually starts the chain.
+    fireEvent.click(screen.getByRole('button', { name: /close · sign 1×/i }));
     // microtask flush
     await Promise.resolve();
     await Promise.resolve();
     expect(mockClosePosition).toHaveBeenCalledWith(OPEN_PERPS_POSITION.id);
-    confirmSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SoDEX-setup gating — no empty trade panels before the wallet is provisioned
+// ---------------------------------------------------------------------------
+
+describe('Execute — SoDEX setup gating', () => {
+  it('hides the order form + positions/orders panels until the wallet is set up', () => {
+    mockUseWalletMe.mockReturnValue({
+      data: {
+        ...FULLY_BOUND_ME,
+        sodex_account_id: null,
+        sodex_spot_api_key_name: null,
+        sodex_perps_api_key_name: null,
+      },
+      isLoading: false,
+      isError: false,
+    });
+    renderAt('/execute');
+    // The trade grid must NOT render — no empty "Open positions"/order form.
+    expect(screen.queryByText('Open positions')).not.toBeInTheDocument();
+    expect(screen.queryByText('New order')).not.toBeInTheDocument();
+    // The compact setup notice is shown instead (bootstrap mock returns
+    // undefined → the "unavailable" guidance shell).
+    expect(screen.getByText(/sodex bootstrap unavailable/i)).toBeInTheDocument();
   });
 });

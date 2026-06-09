@@ -128,12 +128,12 @@ function ApiKeyAutoBind({
 
   return (
     <ApiKeyShell tone="pos" title={`Binding ${venueLabel(venue)} · ${keyName}`}>
-      <p className="text-text-2 text-sm">
+      <p className="text-t2 text-sm">
         Found one registered API key for {venueLabel(venue)} — binding
         automatically. The page refreshes once the key is saved.
       </p>
       {setKey.isError && (
-        <p className="text-[12px] text-neg mt-2">
+        <p className="text-[12px] text-loss mt-2">
           Could not bind:{' '}
           {setKey.error instanceof Error
             ? setKey.error.message
@@ -160,7 +160,7 @@ function ApiKeyMultiSelect({
 
   return (
     <ApiKeyShell tone="warn" title={`Choose your ${venueLabel(venue)} API key`}>
-      <p className="text-text-2 text-sm mb-3">
+      <p className="text-t2 text-sm mb-3">
         Multiple named API keys are registered for this wallet on{' '}
         {venueLabel(venue)}. Pick the one ETFPulse should sign with.
       </p>
@@ -168,7 +168,7 @@ function ApiKeyMultiSelect({
         <select
           value={selected}
           onChange={(e) => setSelected(e.target.value)}
-          className="px-3 py-2 rounded-lg bg-bg-0 border border-border-2 text-sm"
+          className="px-3 py-2 rounded-lg bg-bg-0 border border-line-2 text-sm"
           aria-label={`${venueLabel(venue)} API key`}
         >
           {keys.map((k) => (
@@ -187,13 +187,13 @@ function ApiKeyMultiSelect({
               sodex_account_id: accountId,
             })
           }
-          className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50"
+          className="px-4 py-2 rounded-lg bg-acc text-bg-0 font-medium disabled:opacity-50"
         >
           {setKey.isPending ? 'Saving…' : 'Bind key'}
         </button>
       </div>
       {setKey.isError && (
-        <p className="text-[12px] text-neg mt-2">
+        <p className="text-[12px] text-loss mt-2">
           Could not bind:{' '}
           {setKey.error instanceof Error
             ? setKey.error.message
@@ -209,7 +209,7 @@ function ApiKeyMultiSelect({
 function ApiKeyRegisterPrompt({ venue }: { venue: Venue }) {
   return (
     <ApiKeyShell tone="warn" title={`No ${venueLabel(venue)} API key registered`}>
-      <p className="text-text-2 text-sm">
+      <p className="text-t2 text-sm">
         Open the SoDEX {venueLabel(venue)} dashboard, register a named
         API key for this wallet, then refresh this page. ETFPulse signs
         every order in your wallet — the registered key only lets the
@@ -222,7 +222,7 @@ function ApiKeyRegisterPrompt({ venue }: { venue: Venue }) {
 function ApiKeyNoAccount() {
   return (
     <ApiKeyShell tone="warn" title="No SoDEX account for this wallet">
-      <p className="text-text-2 text-sm">
+      <p className="text-t2 text-sm">
         SoDEX doesn&apos;t recognise this wallet. Visit the SoDEX dashboard
         once to create your account (it&apos;s automatic — the first
         interaction provisions it), then refresh this page.
@@ -234,7 +234,7 @@ function ApiKeyNoAccount() {
 function ApiKeyBootstrapUnavailable() {
   return (
     <ApiKeyShell tone="warn" title="SoDEX bootstrap unavailable">
-      <p className="text-text-2 text-sm">
+      <p className="text-t2 text-sm">
         Could not auto-discover your API keys. The SoDEX gateway may be
         flaky right now — refresh in a moment, or contact the ETFPulse
         operator if the issue persists.
@@ -250,13 +250,13 @@ type Tone = 'pos' | 'warn' | 'info';
 const TONE_CLASS: Record<Tone, string> = {
   pos: 'border-emerald-500/30 bg-emerald-500/5',
   warn: 'border-amber-500/30 bg-amber-500/5',
-  info: 'border-border-2 bg-bg-2',
+  info: 'border-line-2 bg-bg-2',
 };
 
 const TONE_TITLE: Record<Tone, string> = {
   pos: 'text-emerald-200',
   warn: 'text-amber-200',
-  info: 'text-text-1',
+  info: 'text-t1',
 };
 
 function ApiKeyShell({

@@ -10,7 +10,7 @@ re-parse them — both worse than pass-through.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -62,3 +62,18 @@ class RegimeResponse(BaseModel):
 
     # `regime_snapshots.captured_at` — UTC, timezone-aware.
     classified_at: datetime
+
+
+class RegimeHistoryItem(BaseModel):
+    """One day of the regime-history strip — a snapshot's date + classified
+    regime. `regime` is null only for legacy pre-Stage-7 snapshot rows."""
+
+    date: date
+    regime: RegimeLiteral | None
+
+
+class RegimeHistoryResponse(BaseModel):
+    """Recent regime classifications (most-recent-first), one per snapshot,
+    for the `/regime` history strip. Bounded by the `days` query param."""
+
+    history: list[RegimeHistoryItem] = Field(default_factory=list)

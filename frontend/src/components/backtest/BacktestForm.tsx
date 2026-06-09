@@ -95,11 +95,11 @@ export function BacktestForm({
   return (
     <form
       onSubmit={handle}
-      className="border border-border-2 bg-bg-2 rounded-md p-5 space-y-5"
+      className="border border-line-2 bg-bg-2 rounded-md p-5 space-y-5"
     >
       <fieldset className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <label className="block">
-          <span className="block font-mono text-[10px] text-text-3 uppercase tracking-[0.1em] mb-1.5">
+          <span className="block font-mono text-[10px] text-t3 uppercase tracking-[0.1em] mb-1.5">
             Start date
           </span>
           <input
@@ -111,7 +111,7 @@ export function BacktestForm({
           />
         </label>
         <label className="block">
-          <span className="block font-mono text-[10px] text-text-3 uppercase tracking-[0.1em] mb-1.5">
+          <span className="block font-mono text-[10px] text-t3 uppercase tracking-[0.1em] mb-1.5">
             End date
           </span>
           <input
@@ -125,7 +125,7 @@ export function BacktestForm({
       </fieldset>
 
       <section className="space-y-3">
-        <h3 className="font-mono text-[11px] text-text-3 uppercase tracking-[0.1em]">
+        <h3 className="font-mono text-[11px] text-t3 uppercase tracking-[0.1em]">
           Detector overrides — leave blank to use production defaults
         </h3>
         {detectorsLoading || !detectors ? (
@@ -144,7 +144,7 @@ export function BacktestForm({
         )}
       </section>
 
-      <label className="flex items-start gap-3 text-[13px] text-text-2">
+      <label className="flex items-start gap-3 text-[13px] text-t2">
         <input
           type="checkbox"
           checked={allowAI}
@@ -153,7 +153,7 @@ export function BacktestForm({
         />
         <span>
           Allow live AI calls on cache miss.{' '}
-          <span className="text-text-4">
+          <span className="text-t4">
             Charged against the OpenRouter daily cap; today the live
             caller is unwired so this flag is a no-op.
           </span>
@@ -170,7 +170,7 @@ export function BacktestForm({
 }
 
 const INPUT_CLASS =
-  'w-full bg-bg-3 text-text-1 border border-border-3 rounded-[5px] px-3 py-2 text-[13px] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
+  'w-full bg-bg-3 text-t1 border border-line-3 rounded-[5px] px-3 py-2 text-[13px] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc';
 
 interface DetectorOverrideCardProps {
   detector: BacktestDetector;
@@ -184,14 +184,14 @@ function DetectorOverrideCard({
   onChange,
 }: DetectorOverrideCardProps) {
   return (
-    <div className="border border-border-2 rounded-md p-3.5 space-y-2.5">
-      <div className="font-medium text-text-1 text-[13px]">{detector.name}</div>
+    <div className="border border-line-2 rounded-md p-3.5 space-y-2.5">
+      <div className="font-medium text-t1 text-[13px]">{detector.name}</div>
       <div className="space-y-2">
         {detector.params.map((p) => (
           <label key={p.name} className="block">
-            <span className="block text-[11px] text-text-3 mb-1 font-mono">
+            <span className="block text-[11px] text-t3 mb-1 font-mono">
               {p.name}
-              <span className="text-text-4 ml-1">
+              <span className="text-t4 ml-1">
                 · {p.type_name}
                 {p.has_default && p.default !== null
                   ? ` · default ${String(p.default)}`

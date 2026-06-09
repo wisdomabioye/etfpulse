@@ -23,10 +23,10 @@ export function FilterPill({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`px-3 py-[7px] rounded-[5px] text-[12px] font-medium font-mono tracking-[0.02em] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+      className={`px-[11px] py-1.5 rounded-sm text-[12px] font-mono tracking-[0.02em] border transition-colors duration-[var(--dur-1)] ${
         active
-          ? 'bg-bg-3 text-text-1 border-border-3'
-          : 'bg-transparent text-text-2 border-border-2 hover:text-text-1 hover:border-border-3'
+          ? 'bg-acc-soft text-acc-hi border-acc-line'
+          : 'bg-transparent text-t2 border-line-2 hover:text-t1 hover:border-line-3'
       } ${className}`.trim()}
     >
       {children}

@@ -686,6 +686,30 @@ async def test_close_position_happy_path_perps_long(app_and_client, db_session):
     assert order.venue == Venue.SODEX_PERPS.value
 
 
+async def test_close_position_perps_null_leverage_is_closable(app_and_client, db_session):
+    # Regression: a perps position opened before leverage was mandatory
+    # carries NULL leverage. The close route must still succeed — leverage
+    # is immaterial to a reduce-only close, so it falls back to 1× rather
+    # than failing the `perps_leverage_missing` risk gate (which would make
+    # the held position permanently un-closable).
+    _, client = app_and_client
+    await _seed_btc_perps_symbol(db_session)
+    user = await _seed_user(db_session)
+    p = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_PERPS.value,
+        side="long",
+        leverage=None,
+    )
+    r = await client.post(f"/api/execution/close-position/{p.id}", headers=_auth(user))
+    assert r.status_code == 200, r.text
+    order = await db_session.get(Order, r.json()["order_id"])
+    assert order is not None
+    assert order.side == "sell"
+    assert order.reduce_only is True
+
+
 async def test_close_position_happy_path_perps_short(app_and_client, db_session):
     _, client = app_and_client
     await _seed_btc_perps_symbol(db_session)
@@ -749,6 +773,47 @@ async def test_close_position_perps_409_when_close_already_in_flight(app_and_cli
     body = r2.json()
     assert body["detail"]["reason"] == "close_already_in_flight"
     assert body["detail"]["order_id"] == first_close_id
+
+
+async def test_close_position_perps_abandoned_close_does_not_block(app_and_client, db_session):
+    """PR P1 review P1 fix — the dedupe is WINDOWED. An immediate close that
+    was prepared but never signed + submitted (an abandoned non-terminal
+    PENDING) older than `execution_close_dedupe_window_seconds` must NOT
+    block a fresh close — otherwise the position is un-closable for the full
+    24h nonce window. Such an order never reached the venue, so there's no
+    double-execution risk."""
+    _, client = app_and_client
+    await _seed_btc_perps_symbol(db_session)
+    user = await _seed_user(db_session)
+    pos = await _open_position(
+        db_session,
+        user=user,
+        venue=Venue.SODEX_PERPS.value,
+        side="long",
+        leverage=Decimal("3"),
+    )
+    # An abandoned immediate close from an hour ago — non-terminal,
+    # reduce_only, non-conditional, unsigned, well outside the 120s window.
+    abandoned = Order(
+        user_id=user.id,
+        client_order_id="abandoned-close-1",
+        venue=Venue.SODEX_PERPS.value,
+        asset="BTC",
+        side="sell",
+        order_type="market",
+        time_in_force="ioc",
+        requested_size=Decimal("0.01"),
+        requested_price=Decimal("65000"),
+        status=OrderStatus.PENDING.value,
+        reduce_only=True,
+        is_conditional=False,
+        created_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    db_session.add(abandoned)
+    await db_session.flush()
+
+    r = await client.post(f"/api/execution/close-position/{pos.id}", headers=_auth(user))
+    assert r.status_code == 200, r.text
 
 
 async def test_close_position_perps_allowed_with_resting_sl(app_and_client, db_session):

@@ -3,14 +3,21 @@ interface SkeletonProps {
 }
 
 /**
- * Base pulse block — a card-shaped placeholder that matches the bg-2
- * surface tone so loading states don't flash brighter than real content.
- * Compose with height/width utility classes in the caller.
+ * Base loading block — reskinned (R1) to the prototype's left-to-right
+ * shimmer (bg-3 → bg-4 → bg-3). The `shimmer` keyframe is defined under
+ * `prefers-reduced-motion: no-preference` in index.css, so the block sits
+ * still (no flashing) for motion-sensitive users. Compose height/width
+ * utility classes in the caller.
  */
 export function Skeleton({ className = '' }: SkeletonProps) {
   return (
     <div
-      className={`bg-bg-2 border border-border-2 rounded-lg animate-pulse ${className}`}
+      className={`rounded-lg ${className}`.trim()}
+      style={{
+        background: 'linear-gradient(90deg, var(--bg-3) 25%, var(--bg-4) 50%, var(--bg-3) 75%)',
+        backgroundSize: '200% 100%',
+        animation: 'shimmer 1.4s linear infinite',
+      }}
     />
   );
 }

@@ -41,10 +41,10 @@ export function BreakdownSection({
   const isEmpty = rows.length === 0;
 
   return (
-    <section className="bg-bg-2 border border-border-2 rounded-md p-5">
+    <section className="bg-bg-2 border border-line-2 rounded-md p-5">
       <header className="mb-3">
-        <h3 className="text-[15px] font-semibold text-text-1">{title}</h3>
-        {caption && <p className="mt-1 text-[12px] text-text-3">{caption}</p>}
+        <h3 className="text-[15px] font-semibold text-t1">{title}</h3>
+        {caption && <p className="mt-1 text-[12px] text-t3">{caption}</p>}
       </header>
       {isEmpty ? (
         <EmptyState

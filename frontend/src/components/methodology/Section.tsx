@@ -27,12 +27,12 @@ export function Section({ id, n, title, children }: SectionProps) {
     <section id={id} className="mt-10 scroll-mt-8">
       <SectionLabel n={n}>{title}</SectionLabel>
       <h2
-        className="text-[20px] font-semibold text-text-1"
+        className="text-[20px] font-semibold text-t1"
         style={{ letterSpacing: '-0.01em' }}
       >
         {title}
       </h2>
-      <div className="mt-3 text-text-2 leading-[1.65] space-y-3">
+      <div className="mt-3 text-t2 leading-[1.65] space-y-3">
         {children}
       </div>
     </section>

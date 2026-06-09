@@ -68,7 +68,7 @@ export function Histogram({ buckets, height = 160, ariaLabel }: HistogramProps) 
               className="flex-1 flex flex-col items-center justify-end"
             >
               <span
-                className="text-[11px] font-mono text-text-2 mb-1 leading-none"
+                className="text-[11px] font-mono text-t2 mb-1 leading-none"
                 style={{ visibility: bucket.count > 0 ? 'visible' : 'hidden' }}
               >
                 {bucket.count}
@@ -77,7 +77,7 @@ export function Histogram({ buckets, height = 160, ariaLabel }: HistogramProps) 
                   has `barHeight=0`; the div still renders but at zero
                   height, which is what we want (no visual artifact). */}
               <div
-                className="w-full bg-accent rounded-t-sm"
+                className="w-full bg-acc rounded-t-sm"
                 style={{ height: `${barHeight}px`, opacity: 0.85 }}
               />
             </div>
@@ -87,13 +87,13 @@ export function Histogram({ buckets, height = 160, ariaLabel }: HistogramProps) 
       {/* X-axis labels — separate flex row matching the bar gap so columns
           line up. Border-top on this row gives the chart its baseline rule. */}
       <div
-        className="flex gap-1.5 border-t border-border-2 pt-1.5"
+        className="flex gap-1.5 border-t border-line-2 pt-1.5"
         style={{ height: _AXIS_LABEL_HEIGHT }}
       >
         {buckets.map((bucket) => (
           <div
             key={bucket.label}
-            className="flex-1 text-center text-[11px] font-mono text-text-3 leading-none"
+            className="flex-1 text-center text-[11px] font-mono text-t3 leading-none"
           >
             {bucket.label}
           </div>

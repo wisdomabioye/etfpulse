@@ -25,7 +25,7 @@ export function Methodology() {
         title="Methodology"
       />
 
-      <p className="mt-4 text-text-2 leading-[1.6] max-w-[700px]">
+      <p className="mt-4 text-t2 leading-[1.6] max-w-[700px]">
         Eight short sections covering where the data comes from, how
         signals are produced, how they're scored, and the specific
         things our published numbers do not mean.
@@ -33,19 +33,19 @@ export function Methodology() {
 
       <nav
         aria-label="On this page"
-        className="mt-6 rounded-lg border border-border-2 bg-bg-2 px-5 py-4"
+        className="mt-6 rounded-lg border border-line-2 bg-bg-2 px-5 py-4"
       >
-        <div className="font-mono text-[10px] text-text-3 uppercase tracking-[0.12em] mb-2.5">
+        <div className="font-mono text-[10px] text-t3 uppercase tracking-[0.12em] mb-2.5">
           On this page
         </div>
-        <ol className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 gap-x-6 text-[13px] text-text-2">
+        <ol className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 gap-x-6 text-[13px] text-t2">
           {METHODOLOGY_SECTIONS.map((s, i) => (
             <li key={s.id}>
               <a
                 href={`#${s.id}`}
-                className="hover:text-text-1 transition-colors"
+                className="hover:text-t1 transition-colors"
               >
-                <span className="font-mono text-text-4 mr-2">
+                <span className="font-mono text-t4 mr-2">
                   {formatN(i + 1)}
                 </span>
                 {s.title}

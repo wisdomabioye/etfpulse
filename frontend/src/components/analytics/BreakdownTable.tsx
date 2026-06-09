@@ -35,7 +35,7 @@ export function BreakdownTable({
     <div className="overflow-x-auto">
       <table className="w-full text-[13px] tabular-nums">
         <thead>
-          <tr className="text-text-3 text-left font-mono text-[11px] uppercase tracking-[0.08em] border-b border-border-2">
+          <tr className="text-t3 text-left font-mono text-[11px] uppercase tracking-[0.08em] border-b border-line-2">
             <th className="py-2 pr-3 font-normal">{labelHeader}</th>
             <th className="py-2 px-3 font-normal text-right">n</th>
             <th className="py-2 px-3 font-normal text-right">Hits / Targeted</th>
@@ -68,11 +68,11 @@ function BreakdownRow({ row }: { row: BreakdownStat }) {
   const hitsTargetedDisplay = row.targeted === 0 ? '—' : `${row.hits} / ${row.targeted}`;
 
   return (
-    <tr className="border-b border-border-2/60 last:border-b-0">
-      <td className="py-2.5 pr-3 text-text-1">{row.label}</td>
-      <td className="py-2.5 px-3 text-right text-text-2">{row.total}</td>
-      <td className="py-2.5 px-3 text-right text-text-2">{hitsTargetedDisplay}</td>
-      <td className="py-2.5 pl-3 text-right text-text-1 font-medium">{hitRateDisplay}</td>
+    <tr className="border-b border-line-2/60 last:border-b-0">
+      <td className="py-2.5 pr-3 text-t1">{row.label}</td>
+      <td className="py-2.5 px-3 text-right text-t2">{row.total}</td>
+      <td className="py-2.5 px-3 text-right text-t2">{hitsTargetedDisplay}</td>
+      <td className="py-2.5 pl-3 text-right text-t1 font-medium">{hitRateDisplay}</td>
     </tr>
   );
 }

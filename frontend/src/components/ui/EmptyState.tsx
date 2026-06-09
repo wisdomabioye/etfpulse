@@ -19,11 +19,17 @@ interface EmptyStateProps {
 export function EmptyState({ title, hint, action, className = '' }: EmptyStateProps) {
   return (
     <div
-      className={`border border-border-2 bg-bg-2 rounded-lg px-6 py-10 text-center ${className}`}
+      className={`border border-dashed border-line-3 bg-bg-1 rounded-lg px-6 py-12 text-center ${className}`.trim()}
     >
-      <div className="text-[14px] text-text-2 mb-1">{title}</div>
-      {hint && <div className="text-[12px] font-mono text-text-3">{hint}</div>}
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
+      <div className="text-[14px] font-semibold text-t1 mb-1.5">{title}</div>
+      {hint && (
+        <div
+          className={`text-[13px] text-t3 max-w-[360px] mx-auto leading-[1.5] ${action ? 'mb-4' : ''}`.trim()}
+        >
+          {hint}
+        </div>
+      )}
+      {action && <div className="flex justify-center">{action}</div>}
     </div>
   );
 }

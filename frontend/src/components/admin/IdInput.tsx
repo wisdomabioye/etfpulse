@@ -40,9 +40,9 @@ export function IdInput({
       aria-label={ariaLabel}
       disabled={disabled}
       className={
-        `${width} bg-bg-3 text-text-1 border border-border-3 rounded-[5px] ` +
+        `${width} bg-bg-3 text-t1 border border-line-3 rounded-[5px] ` +
         'px-3 py-2 text-[13px] font-mono focus-visible:outline-none ' +
-        'focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50'
+        'focus-visible:ring-2 focus-visible:ring-acc disabled:opacity-50'
       }
     />
   );

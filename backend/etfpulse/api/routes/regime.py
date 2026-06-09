@@ -16,13 +16,20 @@ No auth (Phase 1 scope per open_issues #43, same as /api/signals).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.api.deps import get_db_session
-from etfpulse.api.schemas.regime import RegimeResponse
-from etfpulse.models import REGIME_MACRO_EVENTS_KEY
+from etfpulse.api.schemas.regime import (
+    RegimeHistoryItem,
+    RegimeHistoryResponse,
+    RegimeResponse,
+)
+from etfpulse.models import REGIME_MACRO_EVENTS_KEY, RegimeSnapshot
 from etfpulse.pipeline.regime_monitor import get_latest_regime
 
 log = structlog.get_logger()
@@ -84,3 +91,36 @@ async def get_regime(session: AsyncSession = Depends(get_db_session)) -> RegimeR
         macro_events_nearby=macro_events_nearby,
         classified_at=snapshot.captured_at,
     )
+
+
+@router.get("/history", response_model=RegimeHistoryResponse)
+async def get_regime_history(
+    days: int = Query(8, ge=1, le=30),
+    session: AsyncSession = Depends(get_db_session),
+) -> RegimeHistoryResponse:
+    """Recent regime classifications, one per calendar day (most recent
+    snapshot wins on days with multiple), newest-first — for the /regime
+    history strip. Empty list when no snapshots exist (no 503; the strip
+    is supplementary, not the page's primary content)."""
+    # Bound by time, not row count, so the dedupe is correct regardless of
+    # how many intra-day snapshots the cycle wrote. `+2` buffers gaps.
+    cutoff = datetime.now(UTC) - timedelta(days=days + 2)
+    stmt = (
+        select(RegimeSnapshot)
+        .where(RegimeSnapshot.captured_at >= cutoff)
+        .order_by(RegimeSnapshot.captured_at.desc())
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+
+    history: list[RegimeHistoryItem] = []
+    seen: set[object] = set()
+    for row in rows:
+        day = row.captured_at.date()
+        if day in seen:
+            continue
+        seen.add(day)
+        history.append(RegimeHistoryItem(date=day, regime=row.regime))  # type: ignore[arg-type]
+        if len(history) >= days:
+            break
+
+    return RegimeHistoryResponse(history=history)

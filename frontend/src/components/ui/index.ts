@@ -13,3 +13,20 @@ export { SectionLabel } from './SectionLabel';
 export { Skeleton, SkeletonCard, SkeletonGrid } from './Skeleton';
 export { StatTile } from './StatTile';
 export { StatusDot } from './StatusDot';
+
+// Redesign (R1) — new prototype primitives.
+export { Logo } from './Logo';
+export { Card } from './Card';
+export { AssetBadge } from './AssetBadge';
+export { DetectorBadge } from './DetectorBadge';
+export { DetectorIcon } from './DetectorIcon';
+export { ConfidenceBadge } from './ConfidenceBadge';
+export { ConfirmationPips } from './ConfirmationPips';
+export { ActionTag } from './ActionTag';
+export { Tabs } from './Tabs';
+export type { TabItem } from './Tabs';
+export { LiveDot } from './LiveDot';
+export { Field } from './Field';
+export { FieldGroup } from './FieldGroup';
+export { Seg } from './Seg';
+export { BigToggle } from './BigToggle';

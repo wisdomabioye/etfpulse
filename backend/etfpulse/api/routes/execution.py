@@ -47,6 +47,8 @@ tx discarded).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import cast
 
 import structlog
@@ -87,6 +89,7 @@ from etfpulse.api.schemas.execution import (
     api_tif_to_sodex,
     api_trigger_type_to_sodex,
 )
+from etfpulse.config import settings
 from etfpulse.models.order import TERMINAL_ORDER_STATUSES, Order, OrderStatus, Venue
 from etfpulse.models.position import Position, PositionSide, PositionStatus
 from etfpulse.models.sodex_symbol import SodexSymbol
@@ -381,7 +384,20 @@ async def post_close_position(
     # is the audit trail). 409 with the extant order_id so the FE can
     # surface "close already pending — wait or cancel" instead of
     # silently creating a second perps close.
-    if position.venue == Venue.SODEX_PERPS.value:
+    #
+    # PR P1 review P1 fix — the dedupe is WINDOWED to recent closes only
+    # (`execution_close_dedupe_window_seconds`, default 120s). The original
+    # cut matched ANY non-terminal close, which trapped the user: a close
+    # that was prepared but never signed + submitted (an abandoned
+    # PENDING) blocked EVERY future close for the full 24h nonce window.
+    # An unsigned/unsubmitted close can never reach the venue, so it can't
+    # cause a double-execution — only a RECENT in-flight close (a genuine
+    # double-click / double-POST) is worth blocking on. Outside the window
+    # the abandoned order is ignored here and terminalised by the
+    # nonce-expiry reaper. Window=0 disables the dedupe entirely.
+    window_s = settings.execution_close_dedupe_window_seconds
+    if position.venue == Venue.SODEX_PERPS.value and window_s > 0:
+        cutoff = datetime.now(UTC) - timedelta(seconds=window_s)
         inflight_stmt = (
             select(Order.id)
             .where(Order.user_id == user.id)
@@ -390,6 +406,7 @@ async def post_close_position(
             .where(Order.reduce_only.is_(True))
             .where(Order.is_conditional.is_(False))
             .where(Order.status.notin_([s.value for s in TERMINAL_ORDER_STATUSES]))
+            .where(Order.created_at >= cutoff)
             .limit(1)
         )
         existing_close = (await session.execute(inflight_stmt)).scalar_one_or_none()
@@ -399,9 +416,10 @@ async def post_close_position(
                 detail={
                     "reason": "close_already_in_flight",
                     "detail": (
-                        f"a close order ({existing_close}) is already in-flight for "
-                        f"{position.asset} on {position.venue}; cancel or wait for "
-                        "it before issuing a new close."
+                        f"a close order ({existing_close}) was just issued for "
+                        f"{position.asset} on {position.venue}; wait for it to "
+                        "settle, or cancel it from the orders list, before "
+                        "issuing another close."
                     ),
                     "order_id": existing_close,
                 },
@@ -454,7 +472,14 @@ async def post_close_position(
         # stop_price. (PR P1-fix.CRIT-1: trigger_type is now meaningful
         # in the signed payload, so we must not set it spuriously here.)
         trigger_type=None,
-        leverage=position.leverage if is_perps else None,
+        # A close is reduce-only — it adds no exposure, so leverage is
+        # immaterial to risk. But the perps risk gate still requires a
+        # POSITIVE leverage value (validity check, not a cap). Positions
+        # opened before leverage was mandatory carry NULL leverage; without
+        # this fallback such a position could never be closed
+        # (`perps_leverage_missing` DENY). Fall back to 1× so any held
+        # position is always closable.
+        leverage=(position.leverage or Decimal("1")) if is_perps else None,
         is_conditional=False,
         reduce_only=is_perps,
     )

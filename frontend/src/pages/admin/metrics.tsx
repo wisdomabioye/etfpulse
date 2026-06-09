@@ -159,10 +159,10 @@ function SchedulerTable({ jobs }: { jobs: SchedulerJobInfo[] | null }) {
     );
   }
   return (
-    <div className="border border-border-2 bg-bg-2 rounded-md overflow-hidden">
+    <div className="border border-line-2 bg-bg-2 rounded-md overflow-hidden">
       <table className="w-full text-[13px]">
         <thead>
-          <tr className="bg-bg-3 text-text-3 font-mono text-[10px] uppercase tracking-[0.1em]">
+          <tr className="bg-bg-3 text-t3 font-mono text-[10px] uppercase tracking-[0.1em]">
             <th className="text-left px-4 py-2">Job ID</th>
             <th className="text-left px-4 py-2">Trigger</th>
             <th className="text-left px-4 py-2">Next run (UTC)</th>
@@ -171,13 +171,13 @@ function SchedulerTable({ jobs }: { jobs: SchedulerJobInfo[] | null }) {
         </thead>
         <tbody>
           {jobs.map((job) => (
-            <tr key={job.id} className="border-t border-border-2">
-              <td className="px-4 py-2 font-mono text-text-1">{job.id}</td>
-              <td className="px-4 py-2 font-mono text-[11px] text-text-2">{job.trigger}</td>
-              <td className="px-4 py-2 font-mono tabular-nums text-text-2">
+            <tr key={job.id} className="border-t border-line-2">
+              <td className="px-4 py-2 font-mono text-t1">{job.id}</td>
+              <td className="px-4 py-2 font-mono text-[11px] text-t2">{job.trigger}</td>
+              <td className="px-4 py-2 font-mono tabular-nums text-t2">
                 {job.next_run_at ?? '—'}
               </td>
-              <td className="px-4 py-2 text-text-3">
+              <td className="px-4 py-2 text-t3">
                 {job.pending ? 'pending first dispatch' : 'scheduled'}
               </td>
             </tr>
@@ -189,6 +189,6 @@ function SchedulerTable({ jobs }: { jobs: SchedulerJobInfo[] | null }) {
 }
 
 function Hint({ warn, children }: { warn?: boolean; children: ReactNode }) {
-  const color = warn ? 'text-warn' : 'text-text-3';
+  const color = warn ? 'text-warn' : 'text-t3';
   return <div className={`text-[12px] font-mono ${color}`}>{children}</div>;
 }

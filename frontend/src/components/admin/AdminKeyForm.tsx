@@ -44,10 +44,10 @@ export function AdminKeyForm({
   return (
     <form
       onSubmit={handle}
-      className="flex flex-wrap items-end gap-3 border border-border-2 bg-bg-2 rounded-md p-4"
+      className="flex flex-wrap items-end gap-3 border border-line-2 bg-bg-2 rounded-md p-4"
     >
       <label className="flex-1 min-w-[240px]">
-        <div className="font-mono text-[10px] text-text-3 uppercase tracking-[0.1em] mb-2">
+        <div className="font-mono text-[10px] text-t3 uppercase tracking-[0.1em] mb-2">
           Admin Key
         </div>
         <input
@@ -56,7 +56,7 @@ export function AdminKeyForm({
           value={keyInput}
           onChange={(e) => onInputChange(e.target.value)}
           placeholder="X-Admin-Key header value"
-          className="w-full bg-bg-3 text-text-1 border border-border-3 rounded-[5px] px-3 py-2 text-[13px] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="w-full bg-bg-3 text-t1 border border-line-3 rounded-[5px] px-3 py-2 text-[13px] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc"
         />
       </label>
       <Button type="submit" variant="primary">

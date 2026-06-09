@@ -20,13 +20,13 @@ export function PageHeader({ title, meta, eyebrow, className = '' }: PageHeaderP
       {eyebrow && <div className="mb-3">{eyebrow}</div>}
       <div className="flex items-baseline justify-between gap-4 flex-wrap">
         <h1
-          className="text-[22px] font-semibold text-text-1"
+          className="text-[22px] font-semibold text-t1"
           style={{ letterSpacing: '-0.01em' }}
         >
           {title}
         </h1>
         {meta && (
-          <div className="font-mono text-[11px] text-text-3">{meta}</div>
+          <div className="font-mono text-[11px] text-t3">{meta}</div>
         )}
       </div>
     </div>

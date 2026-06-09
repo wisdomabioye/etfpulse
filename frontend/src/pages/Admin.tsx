@@ -90,19 +90,19 @@ export function Admin() {
       {activeKey && (
         <Link
           to="/admin/backtest"
-          className="block border border-border-2 bg-bg-2 rounded-md p-4 hover:border-accent transition-colors"
+          className="block border border-line-2 bg-bg-2 rounded-md p-4 hover:border-acc transition-colors"
         >
           <div className="flex items-center justify-between gap-4">
             <div>
-              <div className="text-text-1 font-medium text-[14px]">
+              <div className="text-t1 font-medium text-[14px]">
                 Run backtest
               </div>
-              <div className="text-text-3 text-[12px] mt-1">
+              <div className="text-t3 text-[12px] mt-1">
                 Replay detectors over a historical window with override
                 configs. Read-only, never writes signals.
               </div>
             </div>
-            <span className="text-accent text-[13px] font-mono">→</span>
+            <span className="text-acc text-[13px] font-mono">→</span>
           </div>
         </Link>
       )}

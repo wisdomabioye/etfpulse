@@ -31,10 +31,23 @@ from etfpulse.pipeline.symbols_refresh import (
         ("vbtc_vusdc", "btc"),  # lowercase-only — preserved after strip
         ("BTC_USDC", "BTC"),  # no leading v
         ("vvBTC_vUSDC", "BTC"),  # double-v stripped
+        # Perps `<BASE>-<QUOTE>` naming — the quote suffix MUST be stripped
+        # so the asset is the canonical base the oracle/scoring key on.
+        ("BTC-USD", "BTC"),
+        ("ETH-USD", "ETH"),
+        ("SOL-USD", "SOL"),
+        ("XAUT-USD", "XAUT"),  # multi-char base, no leading v
+        ("NATGAS-USD", "NATGAS"),
     ],
 )
 def test_extract_asset_from_symbol_name(name, expected):
     assert extract_asset_from_symbol_name(name) == expected
+
+
+def test_extract_asset_perps_dash_only_quote_raises():
+    # `-USD` has no base segment before the dash → malformed → raise.
+    with pytest.raises(ValueError):
+        extract_asset_from_symbol_name("-USD")
 
 
 def test_extract_asset_empty_raises():

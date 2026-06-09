@@ -99,19 +99,18 @@ afterEach(() => {
 });
 
 describe('Login CTA visibility (regression for invisible bg-accent-1 buttons)', () => {
-  it('Connect Wallet button uses bg-accent (resolves to a defined CSS variable)', () => {
+  it('Connect Wallet button uses the solid bg-acc accent (R9: amber tokens)', () => {
     mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
     renderLogin();
     const btn = screen.getByRole('button', { name: /connect wallet/i });
     expect(btn).toBeInTheDocument();
-    // The class string must contain `bg-accent` as a standalone token.
-    // We assert the exact substring with a trailing space-or-end boundary
-    // so `bg-accent-1` would NOT match — locking the regression.
-    expect(btn.className).toMatch(/\bbg-accent\b/);
-    expect(btn.className).not.toMatch(/bg-accent-1/);
+    // The CTA must carry the SOLID accent fill, not the faint `bg-acc-soft`
+    // tint (which would be near-invisible) — locks the visibility regression.
+    expect(btn.className).toMatch(/\bbg-acc\b/);
+    expect(btn.className).not.toMatch(/bg-acc-soft/);
   });
 
-  it('Sign in with Ethereum button uses bg-accent when wallet is connected', () => {
+  it('Sign in with Ethereum button uses bg-acc when wallet is connected', () => {
     mockUseAccount.mockReturnValue({
       address: '0xabc0000000000000000000000000000000000def',
       isConnected: true,
@@ -119,8 +118,8 @@ describe('Login CTA visibility (regression for invisible bg-accent-1 buttons)', 
     renderLogin();
     const btn = screen.getByRole('button', { name: /sign in with ethereum/i });
     expect(btn).toBeInTheDocument();
-    expect(btn.className).toMatch(/\bbg-accent\b/);
-    expect(btn.className).not.toMatch(/bg-accent-1/);
+    expect(btn.className).toMatch(/\bbg-acc\b/);
+    expect(btn.className).not.toMatch(/bg-acc-soft/);
   });
 });
 

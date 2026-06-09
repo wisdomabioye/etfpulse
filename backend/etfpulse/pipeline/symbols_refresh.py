@@ -38,26 +38,39 @@ log = structlog.get_logger(__name__)
 def extract_asset_from_symbol_name(name: str) -> str:
     """Extract the base asset from a SoDEX symbol name.
 
-    `vBTC_vUSDC` → `BTC`. Same rule applied across the codebase so
-    cache resolution and reconcile-side asset comparisons agree on
-    what `asset='BTC'` means.
+    Handles BOTH venue naming conventions, since the value is used as a
+    single canonical asset code across the system (detectors, the price
+    oracle, composite scoring all key on the bare base — `BTC`, never
+    `BTC-USD`):
 
-    Raises ValueError on empty input OR fully-empty output.
+      - **Spot** symbols are `v<BASE>_v<QUOTE>` (`vBTC_vUSDC` → `BTC`):
+        split on the first `_`, strip a leading `v`/`V`.
+      - **Perps** symbols are `<BASE>-<QUOTE>` (`BTC-USD` → `BTC`):
+        split on the first `-`, take the base.
 
-    PR D.3.4 docstring correction: the "fully-empty output" case is
-    only triggered when BOTH the leading-`v`-stripped result AND the
-    raw base segment are empty — i.e., an input like `"_USDC"` (no
-    base before the underscore). Inputs like `"v_USDC"` (base is
-    just `"v"`) DO NOT raise; the fallback returns `"v"`. The previous
-    docstring overpromised by listing `"v_USDC"` as a raise case.
-    Today's venue symbols never produce a pure-`v` base, so the
-    fallback never fires in practice — but if you need strict
-    fail-loud semantics for the pure-`v` case, REMOVE the
-    `if not result: result = base` fallback below.
+    The two splits compose so either shape resolves to the base:
+    `vBTC_vUSDC` → `vBTC` → `vBTC` → `BTC`; `BTC-USD` → `BTC-USD` →
+    `BTC` → `BTC`. (A perps base never contains an internal `-`, and a
+    spot base never contains a `-`, so taking the first segment is
+    correct for both.)
+
+    Same rule applied across the codebase so cache resolution and
+    reconcile-side asset comparisons agree on what `asset='BTC'` means
+    (`pipeline.execution.positions_perps._normalise_venue_position`
+    calls this directly — kept in lock-step here, not by copying).
+
+    Raises ValueError on empty input OR fully-empty output. The
+    fully-empty case triggers when both the stripped result AND the raw
+    base segment are empty — e.g. `"_USDC"` or `"-USD"` (no base before
+    the separator). Inputs like `"v_USDC"` (base is just `"v"`) DO NOT
+    raise; the fallback returns `"v"`. Today's venue symbols never
+    produce a pure-`v` base, so the fallback never fires in practice.
     """
     if not name:
         raise ValueError("extract_asset_from_symbol_name: empty name")
-    base = name.split("_", 1)[0]
+    # Spot quote is `_`-delimited (vBTC_vUSDC); perps quote is `-`-delimited
+    # (BTC-USD). Take the base segment ahead of whichever appears first.
+    base = name.split("_", 1)[0].split("-", 1)[0]
     result = base.lstrip("vV")
     # If after stripping we're empty, fall back to the raw base (e.g. a
     # purely-`v` segment) — but if THAT is empty too, raise.

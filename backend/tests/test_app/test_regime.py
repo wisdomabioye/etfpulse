@@ -167,3 +167,49 @@ class TestGetRegime:
             "macro_events_nearby",
             "classified_at",
         }
+
+
+class TestRegimeHistory:
+    async def test_empty_when_no_snapshots(self, db_session, client):
+        r = await client.get("/api/regime/history")
+        assert r.status_code == 200
+        assert r.json() == {"history": []}
+
+    async def test_one_row_per_day_most_recent_wins(self, db_session, client):
+        now = datetime.now(UTC)
+        start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Two snapshots TODAY (deterministic day boundary): `now` (latest)
+        # must win over `start_today`.
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=start_today,
+                regime=MarketRegime.ACCUMULATION.value,
+                signal_posture=SignalPosture.NORMAL.value,
+                confidence=5,
+            )
+        )
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=now,
+                regime=MarketRegime.MARKUP.value,
+                signal_posture=SignalPosture.AGGRESSIVE.value,
+                confidence=8,
+            )
+        )
+        # Yesterday
+        db_session.add(
+            RegimeSnapshot(
+                captured_at=start_today - timedelta(hours=1),
+                regime=MarketRegime.DISTRIBUTION.value,
+                signal_posture=SignalPosture.CAUTIOUS.value,
+                confidence=6,
+            )
+        )
+        await db_session.flush()
+
+        body = (await client.get("/api/regime/history?days=8")).json()
+        hist = body["history"]
+        assert len(hist) == 2  # 2 distinct days
+        assert hist[0]["regime"] == "markup"  # today, most-recent snapshot wins
+        assert hist[1]["regime"] == "distribution"  # yesterday
+        assert hist[0]["date"] > hist[1]["date"]  # newest first

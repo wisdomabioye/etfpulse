@@ -132,6 +132,18 @@ async function handleResponse<T>(res: Response): Promise<T> {
       const body = await res.json();
       if (body && typeof body.detail === 'string') {
         detail = body.detail;
+      } else if (body && body.detail && typeof body.detail === 'object') {
+        // Structured errors (e.g. the execution risk gate's 403 DENY:
+        // `{ reason, detail, breaker_trigger }`). Surface the human
+        // message, then the reason code, then a JSON fallback — never
+        // let a structured body collapse to a generic "Forbidden".
+        const d = body.detail as Record<string, unknown>;
+        detail =
+          typeof d.detail === 'string'
+            ? d.detail
+            : typeof d.reason === 'string'
+              ? d.reason
+              : JSON.stringify(d);
       }
     } catch {
       // ignore parse errors

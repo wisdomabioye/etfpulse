@@ -18,11 +18,11 @@ interface SectionLabelProps {
 export function SectionLabel({ n, children, className = '' }: SectionLabelProps) {
   return (
     <div
-      className={`flex items-center gap-2.5 mb-3.5 font-mono text-[10px] text-text-3 uppercase tracking-[0.12em] ${className}`.trim()}
+      className={`flex items-center gap-2.5 mb-3.5 font-mono text-[10px] text-t3 uppercase tracking-[0.12em] ${className}`.trim()}
     >
-      {n && <span className="text-accent">{n}</span>}
+      {n && <span className="text-acc">{n}</span>}
       <span>{children}</span>
-      <span className="flex-1 h-px bg-border-2" aria-hidden />
+      <span className="flex-1 h-px bg-line-2" aria-hidden />
     </div>
   );
 }

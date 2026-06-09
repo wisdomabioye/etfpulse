@@ -584,6 +584,18 @@ class Settings(BaseSettings):
     # retail order on a liquid pair. Zero is admitted (instantaneous
     # fill at exact spot — useful for unit tests).
     execution_paper_slippage_bps: int = Field(default=5, ge=0, le=10000)
+    # Close-position dedupe window. The close route 409s a new perps close
+    # when an IMMEDIATE close (reduce_only, non-conditional) for the same
+    # (user, venue, asset) is already in flight — but ONLY if that prior
+    # close was created within this window. This bounds the dedupe to the
+    # real concern (a near-simultaneous double-click / double-POST) without
+    # the failure mode where an ABANDONED close (prepared, never signed +
+    # submitted) blocks every future close until 24h nonce-expiry. Such an
+    # unsigned-PENDING order can never reach the venue, so it can't cause a
+    # double-execution; only a recent one is worth blocking on. 120s
+    # comfortably covers a slow MetaMask sign while staying far below the
+    # nonce window. Floor 0 disables the dedupe (every close allowed).
+    execution_close_dedupe_window_seconds: int = Field(default=120, ge=0)
 
     @model_validator(mode="after")
     def _validate_per_symbol_cap_le_daily(self) -> "Settings":

@@ -1,28 +1,18 @@
 /**
- * Wallet-connect + SIWE login page.
+ * Wallet-connect + SIWE login page (R-fix: ported to the prototype's centered
+ * card treatment, REAL connect→sign logic preserved exactly).
  *
  * Three states the page flips between:
+ *   1. Wallet not connected — "Connect Wallet" opens the AppKit modal.
+ *   2. Wallet connected, no JWT — "Sign in with Ethereum" runs SIWE.
+ *   3. Authed — redirect to /execute (or the bounced-from URL).
  *
- *   1. Wallet not connected — show "Connect Wallet" CTA that opens
- *      Reown AppKit modal.
- *   2. Wallet connected, no JWT — show "Sign in with Ethereum" CTA
- *      that runs the SIWE ceremony.
- *   3. Authed — redirect to /execute.
- *
- * Component split: `<Login>` checks `isWalletConnectAvailable` and
- * either renders `<LoginUnavailable>` OR `<LoginWithWallet>`. The
- * split is load-bearing: `useAppKit()` THROWS if `createAppKit` was
- * never called (no projectId path in `wagmi.ts`). Without the split,
- * the no-projectId deployment would crash the entire /login route
- * before any fallback UI can render. Rules of Hooks forbids
- * conditional hook calls inside one component; the standard pattern
- * is conditional rendering of two components, each of which calls
- * hooks unconditionally.
- *
- * Already-authed visitors get bounced immediately so the page isn't
- * sticky after a previous session.
+ * The `<LoginUnavailable>` / `<LoginWithWallet>` split is load-bearing:
+ * `useAppKit()` THROWS if `createAppKit` was never called (no-projectId
+ * deploy). Conditional rendering of two components keeps Rules of Hooks.
  */
 
+import type { ReactNode } from 'react';
 import { useRef, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 
@@ -32,49 +22,65 @@ import { useAppKit } from '@reown/appkit/react';
 
 import { performSiweLogin } from '../auth/siwe';
 import { useAuth } from '../auth/useAuth';
+import { Page } from '../components/layout';
+import { Button, Card, Logo } from '../components/ui';
 import { isWalletConnectAvailable } from '../lib/wagmi';
+import { TELEGRAM_BOT_URL } from '../lib/links';
+
+const WalletIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <path d="M21 12V7H5a2 2 0 010-4h14v4" />
+    <path d="M3 5v14a2 2 0 002 2h16v-5" />
+    <path d="M18 12a2 2 0 000 4h4v-4z" />
+  </svg>
+);
+
+/** Centered logo + card shell — the prototype's login chrome. */
+function LoginShell({ children }: { children: ReactNode }) {
+  return (
+    <Page>
+      <div className="max-w-[420px] mx-auto my-[60px]">
+        <div className="text-center mb-7 flex justify-center">
+          <Logo size={20} />
+        </div>
+        <Card className="p-7">{children}</Card>
+      </div>
+    </Page>
+  );
+}
 
 export function Login() {
   const { isAuthed } = useAuth();
   const location = useLocation();
   if (isAuthed) {
-    // SIG2X.3 — replay the URL the user was bounced from (Execute
-    // sets `location.state.from` before redirecting). Falls back to
-    // /execute when no origin is recorded (direct visit to /login).
-    // `replace` so the back-button doesn't re-show /login after a
-    // refresh.
     return <Navigate to={resolvePostLoginPath(location)} replace />;
   }
   if (!isWalletConnectAvailable) {
-    // Deployment didn't set VITE_WALLETCONNECT_PROJECT_ID; AppKit isn't
-    // initialised and `useAppKit()` would throw. Render the static
-    // fallback that explains what to fix without calling the hook.
     return <LoginUnavailable />;
   }
   return <LoginWithWallet />;
 }
 
-
 function LoginUnavailable() {
   return (
-    <div className="max-w-md mx-auto px-6 py-12">
-      <h1 className="text-2xl font-semibold mb-2">Sign in unavailable</h1>
-      <p className="text-text-2 mb-8">
-        Wallet Connect isn&apos;t configured on this deployment. The site administrator must set
-        <code className="mx-1 text-text-1">VITE_WALLETCONNECT_PROJECT_ID</code>
-        and redeploy. Get a free project ID at{' '}
-        <a className="text-accent underline" href="https://cloud.reown.com">
+    <LoginShell>
+      <h1 className="text-[22px] font-semibold tracking-[-0.02em] mb-1.5 text-center">
+        Sign in unavailable
+      </h1>
+      <p className="text-t3 text-[13px] text-center leading-[1.5]">
+        Wallet Connect isn&apos;t configured on this deployment. The administrator must set
+        <code className="mx-1 text-t1">VITE_WALLETCONNECT_PROJECT_ID</code> and redeploy. Get a free
+        project ID at{' '}
+        <a className="text-acc underline" href="https://cloud.reown.com">
           cloud.reown.com
         </a>
         .
       </p>
-    </div>
+    </LoginShell>
   );
 }
 
 function LoginWithWallet() {
-  // Safe to call unconditionally — this component only mounts when
-  // `isWalletConnectAvailable` is true, i.e. `createAppKit` did run.
   const { login } = useAuth();
   const { address, isConnected } = useAccount();
   const { open } = useAppKit();
@@ -83,19 +89,7 @@ function LoginWithWallet() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Synchronous in-flight guard. `busy` is React state — `setBusy(true)`
-  // doesn't update the DOM until next paint, so a fast double-click
-  // would slip past the `disabled` prop and fire `handleSiwe` twice
-  // (two nonces, two wallet sign prompts). A ref check at handler entry
-  // closes that window because refs are read/written synchronously.
   const inFlightRef = useRef(false);
-
-  // After connecting, we DO NOT auto-trigger the SIWE signature prompt.
-  // Surprise sign-prompts erode trust. The user clicks Connect → wallet
-  // picker → connect → THEN clicks "Sign in" → wallet sign prompt. Two
-  // explicit user-initiated steps. The stale-error case (switching
-  // accounts without retrying) is intentionally not auto-cleared —
-  // any new action via handleConnect/handleSiwe resets error first.
 
   async function handleConnect() {
     setError(null);
@@ -115,11 +109,7 @@ function LoginWithWallet() {
     try {
       const resp = await performSiweLogin({ address, signMessageAsync });
       login(resp.jwt);
-      // useAuth's isAuthed flips → parent <Login> returns <Navigate to="/execute">.
     } catch (e) {
-      // Distinguish user-rejected (common, expected) from genuine
-      // errors. wagmi/viem throws a `UserRejectedRequestError` with
-      // a stable message substring on user reject.
       const msg = e instanceof Error ? e.message : String(e);
       if (/rejected|denied/i.test(msg)) {
         setError('Signature rejected. Click "Sign in" to retry.');
@@ -133,59 +123,70 @@ function LoginWithWallet() {
   }
 
   return (
-    <div className="max-w-md mx-auto px-6 py-12">
-      <h1 className="text-2xl font-semibold mb-2">Sign in</h1>
-      <p className="text-text-2 mb-8">
-        Connect your wallet and sign a message to start trading on SoDEX. We never hold private
-        keys — every order is signed in your wallet.
+    <LoginShell>
+      <h1 className="text-[22px] font-semibold tracking-[-0.02em] mb-1.5 text-center">
+        Connect to ETFPulse
+      </h1>
+      <p className="text-t3 text-[13px] text-center mb-6 leading-[1.5]">
+        Public data needs no login. Connect a wallet only to trade — non-custodial, you sign
+        everything.
       </p>
 
-      {!isConnected && (
-        <button
-          type="button"
-          onClick={handleConnect}
-          className="w-full px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium"
-        >
-          Connect Wallet
-        </button>
-      )}
-
-      {isConnected && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3 text-sm text-text-2">
-            <span className="truncate">
-              Connected as <code className="text-text-1">{address}</code>
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                // Sync: also clear any in-flight signing state so the
-                // user can immediately reconnect a different wallet
-                // without a stale "Waiting for signature…" label.
-                setError(null);
-                disconnect();
-              }}
-              className="shrink-0 text-[12px] text-text-3 hover:text-text-1 underline"
-            >
-              Disconnect
-            </button>
-          </div>
-          <button
-            type="button"
+      <div className="flex flex-col gap-2.5">
+        {!isConnected ? (
+          <Button variant="primary" size="lg" full icon={WalletIcon} onClick={handleConnect}>
+            Connect Wallet
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            size="lg"
+            full
+            icon={WalletIcon}
             onClick={handleSiwe}
             disabled={busy || !address}
-            className="w-full px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy ? 'Waiting for signature…' : 'Sign in with Ethereum'}
+          </Button>
+        )}
+        <Button as="a" href={TELEGRAM_BOT_URL} target="_blank" rel="noopener noreferrer" variant="outline" size="lg" full>
+          Open via Telegram
+        </Button>
+      </div>
+
+      {isConnected && (
+        <div className="flex items-center justify-between gap-3 text-[12px] text-t3 mt-3">
+          <span className="truncate">
+            Connected as <code className="text-t1">{address}</code>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              disconnect();
+            }}
+            className="shrink-0 hover:text-t1 underline"
+          >
+            Disconnect
           </button>
         </div>
       )}
 
+      <div className="flex items-center gap-3 my-[22px]">
+        <span className="flex-1 h-px bg-line-2" />
+        <span className="font-mono text-[10px] text-t4">SIWE · EIP-4361</span>
+        <span className="flex-1 h-px bg-line-2" />
+      </div>
+      <p className="font-mono text-[10.5px] text-t4 text-center leading-[1.6]">
+        By connecting you agree these are information signals, not financial advice. New accounts
+        start in paper mode.
+      </p>
+
       {error && (
-        <div className="mt-6 p-4 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+        <div className="mt-6 p-4 rounded-lg border border-loss/30 bg-loss-soft text-[13px] text-loss">
           {error}
         </div>
       )}
-    </div>
+    </LoginShell>
   );
 }

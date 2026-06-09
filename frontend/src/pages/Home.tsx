@@ -1,187 +1,186 @@
-import { Link } from 'react-router-dom';
-import { useDashboardStats, useSignals } from '../api/queries';
-import { HeroHitRatePanel } from '../components/home/HeroHitRatePanel';
-import { HeroOutcomeRow } from '../components/home/HeroOutcomeRow';
-import { HowItWorks } from '../components/home/HowItWorks';
-import { RegimeTile } from '../components/home/RegimeTile';
-import { SignalTypesGrid } from '../components/home/SignalTypesGrid';
-import { SignalCard } from '../components/signals';
-import {
-  Button,
-  EmptyState,
-  Kicker,
-  SectionHeader,
-  SkeletonGrid,
-} from '../components/ui';
-import { narrowPosture, narrowRegime } from '../lib/format';
-import { TELEGRAM_BOT_URL } from '../lib/links';
+import { useNavigate } from 'react-router-dom';
 
-/** Home — HomeV3 (Data-forward) variant.
+import { useDashboardStats, useSignals } from '../api/queries';
+import { CalibrationTeaser } from '../components/home/CalibrationTeaser';
+import { DetectorsShowcase } from '../components/home/DetectorsShowcase';
+import { HeroProofCard } from '../components/home/HeroProofCard';
+import { LoopDiagram } from '../components/home/LoopDiagram';
+import { SignalCardMini } from '../components/signal';
+import { Page } from '../components/layout';
+import { Button, EmptyState, LiveDot, SectionHeader, SkeletonGrid } from '../components/ui';
+import { useLiveNumber } from '../hooks/useLiveNumber';
+import { formatConfidence } from '../lib/format';
+
+/**
+ * Home — proof-forward hero + the loop (R4 reskin of the prototype's
+ * `ScreenHome`).
  *
- * Five sections, dividers via border-b / border-t:
- *   1. Hero (split: copy left, hit-rate panel right)
- *   2. Regime tile (Stage 7-P8 — current Wyckoff phase + posture)
- *   3. Most recent (3-col signal grid)
- *   4. Signal types — 5-cell explainer (what each detector watches for)
- *   5. How it works (3-cell connected)
+ *   1. Hero: pitch + live proof-stats strip + the two latest real outcomes
+ *      (last target hit / last stop saved) as the headline proof.
+ *   2. Most recent — 3-up `SignalCardMini` from the real feed.
+ *   3. The disciplined loop (six-stage spine).
+ *   4. Five detectors, distinct identities.
+ *   5. Calibration teaser → the Proof surface.
  *
- * Order rationale: hero pitch → "what's happening right now" (regime +
- * recent) → "what kinds of alerts you'll get" (types) → "how the pipeline
- * works" (how-it-works). A first-time visitor sees current state before
- * marketing copy; a returning user can skip past the explainers.
- *
- * Horizontal padding is a single pattern: px-6 sm:px-8. No breakpoint chains.
+ * All numbers are real (`useDashboardStats` / `useSignals` / `useCalibration`);
+ * `hit_rate_global` is already a percent, so it feeds `useLiveNumber` directly.
  */
 export function Home() {
+  const navigate = useNavigate();
   const stats = useDashboardStats();
   const recent = useSignals({ limit: 3 });
 
-  // Defensive enum narrowing — see `narrowRegime`/`narrowPosture` in
-  // lib/format. RegimeTile renders its own "not yet classified" caption
-  // when both are null. Loading is treated as unavailable too — no shimmer
-  // in this slot, the caption fits both states honestly.
-  const currentRegime = narrowRegime(stats.data?.current_regime);
-  const currentPosture = narrowPosture(stats.data?.signal_posture);
-  const regimeUnavailable = stats.isError || (!stats.isLoading && currentRegime === null);
+  const hitRate = stats.data?.hit_rate_global ?? null;
+  const easedHitRate = useLiveNumber(hitRate ?? 0, { live: true });
+
+  const targetHit = stats.data?.last_target_hit ?? null;
+  const stopSaved = stats.data?.last_stop_saved ?? null;
+
+  const proofStats: Array<{ label: string; value: string; accent?: boolean }> = [
+    { label: '72h hit rate', value: hitRate === null ? '—' : `${easedHitRate.toFixed(1)}%`, accent: true },
+    { label: 'Signals scored', value: String(stats.data?.evaluated_count ?? '—') },
+    { label: 'Avg confidence', value: formatConfidence(stats.data?.avg_confidence ?? null) },
+  ];
 
   return (
     <>
-      <section className="border-b border-border-2 px-6 sm:px-8 py-14 md:py-20">
-        <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr] gap-10 md:gap-14 items-center">
-          <div>
-            <Kicker dot className="mb-6">
-              Signals intelligence · BTC &amp; ETH ETFs
-            </Kicker>
-            <h1
-              className="text-[44px] md:text-[52px] font-semibold leading-[1.05] mb-4"
-              style={{ letterSpacing: '-0.03em', textWrap: 'balance' }}
-            >
-              Know what the whales are doing.
-              <br />
-              <span className="text-text-3">Before they move.</span>
-            </h1>
-            <p className="text-[16px] leading-[1.5] text-text-2 mb-2 max-w-[520px] font-medium">
-              Bound the loss. Let the rest compound.
-            </p>
-            <p className="text-[14px] leading-[1.5] text-text-3 mb-7 max-w-[520px]">
-              Crypto ETF flow signals with published outcomes. AI-explained.
-              Delivered to Telegram.
-            </p>
-            <div className="flex flex-wrap gap-2.5">
-              <Button
-                as="a"
-                href={TELEGRAM_BOT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                variant="primary"
-              >
-                Open Telegram Bot
-                <span className="font-mono opacity-70">↗</span>
-              </Button>
-              <Button as="link" to="/signals" variant="secondary">
-                View feed
-              </Button>
-            </div>
+      {/* HERO */}
+      <section
+        className="border-b border-line-2"
+        style={{
+          background:
+            'radial-gradient(120% 100% at 50% -20%, color-mix(in oklab, var(--acc) 7%, transparent), transparent 60%)',
+        }}
+      >
+        <div className="max-w-[1200px] mx-auto px-6 pt-16 pb-[52px]">
+          <div className="flex items-center gap-2.5 mb-6">
+            <LiveDot />
+            <span className="font-mono text-[11px] text-t3 tracking-[0.1em] uppercase">
+              {stats.data?.signals_today ?? 0} signals today · {stats.data?.evaluated_count ?? 0}{' '}
+              scored vs real prices
+            </span>
           </div>
 
-          <HeroHitRatePanel
-            signalsToday={stats.data?.signals_today ?? (stats.isError ? null : 0)}
-            totalSignals={stats.data?.total_signals ?? (stats.isError ? null : 0)}
-            // PR B (#60) — read `hit_rate_global` (the v2 name) and fall
-            // back to `hit_rate_72h` for the one-cycle window where the
-            // backend is on the new code but a stale CDN served an older
-            // frontend (the fallback path means a half-rolled deploy
-            // doesn't show "—" while both fields carry the same value
-            // anyway). Drop the `??` fallback after the next release.
-            hitRateGlobal={
-              stats.data?.hit_rate_global ?? stats.data?.hit_rate_72h ?? null
-            }
-            evaluatedCount={stats.data?.evaluated_count ?? null}
-          />
+          <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-10 lg:gap-12 items-center">
+            <div>
+              <h1
+                className="text-[44px] sm:text-[56px] font-semibold leading-[1.02] mb-5"
+                style={{ letterSpacing: '-0.035em', textWrap: 'balance' }}
+              >
+                Bound the loss.
+                <br />
+                <span className="text-t3">Let the rest compound.</span>
+              </h1>
+              <p className="text-t2 text-[18px] leading-[1.5] mb-8 max-w-[520px]">
+                Calibrated crypto-ETF flow signals — AI-explained, confirmation-scored, and{' '}
+                <span className="text-t1">proven against real prices</span>. We publish our misses.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <Button as="link" to="/track-record" variant="primary" size="lg">
+                  See the track record
+                </Button>
+                <Button as="link" to="/signals" variant="outline" size="lg">
+                  Browse live signals
+                </Button>
+              </div>
+
+              <div className="flex mt-10 border border-line-2 rounded-lg overflow-hidden bg-bg-2">
+                {proofStats.map((s, i) => (
+                  <div
+                    key={s.label}
+                    className="flex-1 px-[18px] py-[15px]"
+                    style={{ borderRight: i < proofStats.length - 1 ? '1px solid var(--line-1)' : 'none' }}
+                  >
+                    <div className="font-mono text-[9.5px] text-t4 tracking-[0.1em] uppercase mb-[7px]">
+                      {s.label}
+                    </div>
+                    <div
+                      className={`tabular-nums text-[24px] font-semibold ${s.accent ? 'text-win' : 'text-t1'}`}
+                      style={{ letterSpacing: '-0.02em' }}
+                    >
+                      {s.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3.5">
+              {targetHit && <HeroProofCard outcome={targetHit} kind="target" />}
+              {stopSaved && <HeroProofCard outcome={stopSaved} kind="stop" />}
+              {!targetHit && !stopSaved && (
+                <div className="border border-dashed border-line-3 bg-bg-1 rounded-lg p-8 text-center text-t3 text-[13px] leading-[1.5]">
+                  Scored outcomes appear here once the first signals age past their validity window.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* PR E.2 — hero outcome cards. The whole <section> is wrapped in a
-          null-check so cold-start (no qualifying outcomes yet) doesn't
-          render an empty band between the hero and the regime tile. While
-          stats is loading we render skeletons (PR E.3) so the band doesn't
-          pop in after first paint. */}
-      {(stats.isLoading ||
-        stats.data?.last_target_hit ||
-        stats.data?.last_stop_saved) && (
-        <section className="border-b border-border-2 px-6 sm:px-8 py-8 md:py-10">
-          <HeroOutcomeRow
-            targetHit={stats.data?.last_target_hit ?? null}
-            stopSaved={stats.data?.last_stop_saved ?? null}
-            loading={stats.isLoading}
-          />
-        </section>
-      )}
-
-      <section className="border-b border-border-2 px-6 sm:px-8 py-10 md:py-12">
-        <RegimeTile
-          regime={currentRegime}
-          posture={currentPosture}
-          unavailable={regimeUnavailable}
-        />
-      </section>
-
-      <section className="px-6 sm:px-8 py-14 md:py-16">
-        <SectionHeader
-          title="Most recent"
-          action={
-            stats.data ? (
-              <Link
-                to="/signals"
-                className="text-accent text-[13px] font-medium hover:opacity-80"
-              >
-                All {stats.data.total_signals} signals →
-              </Link>
-            ) : null
-          }
-        />
-        {recent.isLoading ? (
-          <SkeletonGrid count={3} />
-        ) : recent.isError ? (
-          <EmptyState
-            title="Couldn't load recent signals."
-            hint="Check your connection and retry."
+      <Page>
+        {/* recent */}
+        <section className="mb-14">
+          <SectionHeader
+            kicker="Live feed"
+            title="Most recent signals"
             action={
-              <Button variant="secondary" size="sm" onClick={() => recent.refetch()}>
-                Retry
+              <Button as="link" to="/signals" variant="ghost" size="sm">
+                All {stats.data?.total_signals ?? ''} signals →
               </Button>
             }
           />
-        ) : recent.data?.items.length ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-            {recent.data.items.map((s) => (
-              <SignalCard key={s.id} signal={s} compact />
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            title="No signals yet."
-            hint="Check back shortly — new signals are picked up throughout the day."
+          {recent.isLoading ? (
+            <SkeletonGrid count={3} />
+          ) : recent.isError ? (
+            <EmptyState
+              title="Couldn't load recent signals."
+              hint="Check your connection and retry."
+              action={
+                <Button variant="secondary" size="sm" onClick={() => recent.refetch()}>
+                  Retry
+                </Button>
+              }
+            />
+          ) : recent.data?.items.length ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+              {recent.data.items.map((s) => (
+                <SignalCardMini key={s.id} signal={s} onClick={() => navigate(`/signals/${s.id}`)} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No signals yet."
+              hint="Check back shortly — new signals are picked up throughout the day."
+            />
+          )}
+        </section>
+
+        {/* the loop */}
+        <section className="mb-14">
+          <SectionHeader
+            kicker="The spine"
+            title="One disciplined loop"
+            sub="Every signal is delivered, executed under your signature, then scored against real prices — feeding the track record that earns the next signal's trust."
           />
-        )}
-      </section>
+          <LoopDiagram />
+        </section>
 
-      <section className="border-t border-border-2 px-6 sm:px-8 py-14 md:py-16">
-        <SectionHeader
-          title="Signal types"
-          action={
-            <span className="text-text-3 text-[13px]">
-              Five detectors, one composite regime read.
-            </span>
-          }
-        />
-        <SignalTypesGrid />
-      </section>
+        {/* detectors */}
+        <section className="mb-14">
+          <SectionHeader
+            kicker="Intelligence"
+            title="Five detectors, distinct identities"
+            sub="Each catches a different structure in the flow data. Per-detector precision is published on the track record."
+          />
+          <DetectorsShowcase />
+        </section>
 
-      <section className="border-t border-border-2 px-6 sm:px-8 py-14 md:py-16">
-        <SectionHeader title="How it works" />
-        <HowItWorks />
-      </section>
+        {/* proof teaser */}
+        <section>
+          <CalibrationTeaser />
+        </section>
+      </Page>
     </>
   );
 }

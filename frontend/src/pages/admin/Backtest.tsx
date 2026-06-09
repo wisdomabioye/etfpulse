@@ -105,7 +105,7 @@ function RunningTimer() {
     return () => clearInterval(t);
   }, []);
   return (
-    <span className="font-mono text-[11px] text-text-3">
+    <span className="font-mono text-[11px] text-t3">
       Running · {seconds}s elapsed
     </span>
   );

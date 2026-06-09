@@ -204,9 +204,9 @@ describe('Execute — signal-driven prefill', () => {
       error: null,
     });
     renderAt('/execute?signal_id=99');
-    expect(screen.getByText(/driven by signal/i)).toBeInTheDocument();
+    expect(screen.getByText(/prefilled from/i)).toBeInTheDocument();
     // Confirm the deep-back-link points at /signals/99.
-    const backLink = screen.getByRole('link', { name: /#99/i });
+    const backLink = screen.getByRole('link', { name: /view signal/i });
     expect(backLink).toHaveAttribute('href', '/signals/99');
   });
 
@@ -241,12 +241,16 @@ describe('Execute — signal-driven prefill', () => {
       error: null,
     });
     renderAt('/execute?signal_id=99');
-    // The venue select should be on Perps post-prefill.
-    const venueSelect = screen.getByLabelText(/venue/i) as HTMLSelectElement;
-    expect(venueSelect.value).toBe('sodex_perps');
-    // And side should be 'sell' (the short mapping).
-    const sideSelect = screen.getByLabelText(/side/i) as HTMLSelectElement;
-    expect(sideSelect.value).toBe('sell');
+    // The venue Seg should be on Perps post-prefill (aria-pressed).
+    expect(screen.getByRole('button', { name: 'Perps' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    // And the Short side toggle should be active (the short mapping → 'sell').
+    expect(screen.getByRole('button', { name: 'Short' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('renders the not-actionable warning for MARKET signals', () => {

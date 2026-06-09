@@ -139,3 +139,18 @@ if (isWalletConnectAvailable) {
 }
 
 export const wagmiConfig = wagmiAdapter.wagmiConfig;
+
+/**
+ * Imperatively disconnect the connected wallet — usable OUTSIDE a
+ * `WagmiProvider` (the provider only wraps /login + /execute, but the
+ * account chip in the global TopNav needs to disconnect from anywhere).
+ * Calls the `wagmi/actions` core `disconnect` against the module-level
+ * config. No-op when WalletConnect isn't configured or no wallet is
+ * connected. Callers reach this via a DYNAMIC import so the wagmi bundle
+ * stays out of the main chunk.
+ */
+export async function disconnectWallet(): Promise<void> {
+  if (!isWalletConnectAvailable) return;
+  const { disconnect } = await import('wagmi/actions');
+  await disconnect(wagmiConfig);
+}

@@ -1,104 +1,192 @@
 /* ETFPulse — design tokens + global reset.
  *
- * Tokens lifted from the wireframe spec (UI-mock-preview), with the accent
- * flipped to amber per the chosen design direction. Dark-mode-default —
- * the entire product runs on the dark surface; no light-mode toggle for MVP.
+ * Tailwind v4: `@import "tailwindcss"` pulls the framework; `@theme` exposes
+ * tokens as utilities (`bg-bg-2`, `text-t2`, `border-line-2`, `text-acc`, …).
+ * Components consume TOKENS, never hex literals.
  *
- * Surfaces are tiered (--bg-0 darkest → --bg-4 lightest) so cards-on-cards
- * still have visual separation. Same with borders and text. Don't reach
- * for a hex literal in a component — pick from the token set.
- *
- * Tailwind v4 integration: `@import "tailwindcss"` pulls in the framework;
- * `@theme` exposes our tokens as Tailwind utilities so `bg-bg-2`,
- * `text-accent`, `border-border-2` all "just work" — single source of truth.
+ * === REDESIGN PORT (amber-locked) ===
+ * Two token sets coexist during the incremental reskin (R0→R10):
+ *   - NEW design system (the `Soso-redesign` prototype): `--acc*`, `--t1..4`,
+ *     `--line-1..3`, `--win/--loss`, `--det-*`, `--reg-*`, radius/shadow/motion.
+ *     Accent is LOCKED to amber.
+ *   - LEGACY tokens still referenced by not-yet-ported screens: `--accent`,
+ *     `--text-1..4`, `--border-1..3`, `--pos`, `--neg`. REMOVED at R10 once every
+ *     screen is ported. Do NOT use them in new components.
+ * `--bg-0..4`, `--warn`, `--info` are shared names; the new (target) values win
+ * — the shift on legacy screens is ≤2 RGB (bg) / a minor amber shade (warn) and
+ * is temporary.
  */
 
 @import "tailwindcss";
 
 @theme {
-  /* Surfaces — spread out for more visual separation than the mock's values.
-   * Mock's bg-1→bg-2 was only 3 RGB points apart; cards merged into the page.
-   * Bumping contrast makes the card/page boundary read cleanly. */
-  --color-bg-0: #050506;
-  --color-bg-1: #0a0a0b;
-  --color-bg-2: #141417;
-  --color-bg-3: #1b1b1f;
-  --color-bg-4: #23232a;
+  /* ---- Surfaces (new design values; legacy screens absorb the ≤2 RGB shift) ---- */
+  --color-bg-0: #08080a;
+  --color-bg-1: #0c0c0f;
+  --color-bg-2: #121217;
+  --color-bg-3: #18181f;
+  --color-bg-4: #1f1f28;
 
-  /* Borders — same direction, a hair brighter for visible card outlines. */
+  /* ---- Lines (NEW; legacy uses --color-border-*) ---- */
+  --color-line-1: #1b1b22;
+  --color-line-2: #28282f;
+  --color-line-3: #3a3a45;
+
+  /* ---- Text (NEW; legacy uses --color-text-*) ---- */
+  --color-t1: #f5f5f7;
+  --color-t2: #a2a2ad;
+  --color-t3: #70707c;
+  --color-t4: #4c4c57;
+
+  /* ---- Accent — AMBER LOCKED (NEW; legacy uses --color-accent) ---- */
+  --color-acc: #fbbf24;
+  --color-acc-hi: #fcd34d;
+  --color-acc-press: #f59e0b;
+  --color-acc-ink: #0a0a12;
+  --color-acc-soft: color-mix(in oklab, var(--color-acc) 16%, transparent);
+  --color-acc-line: color-mix(in oklab, var(--color-acc) 38%, transparent);
+
+  /* ---- Semantic ---- */
+  --color-win: #34d399;
+  --color-loss: #fb7185;
+  --color-warn: #fbbf24;
+  --color-info: #60a5fa;
+  --color-conf-mid: #7dd3a8; /* confidence ramp 6–7 (tokenised — prototype hardcoded #7dd3a8) */
+  --color-win-soft: color-mix(in oklab, var(--color-win) 14%, transparent);
+  --color-loss-soft: color-mix(in oklab, var(--color-loss) 14%, transparent);
+  --color-warn-soft: color-mix(in oklab, var(--color-warn) 14%, transparent);
+
+  /* ---- Asset brand ---- */
+  --color-btc: #f7931a;
+  --color-eth: #627eea;
+  --color-market: #94a3b8;
+
+  /* ---- Ink — near-black text on a BRIGHT chip (asset badges). Distinct from
+   * --acc-ink (#0a0a12, text on the amber accent) by the prototype's design. ---- */
+  --color-ink: #0a0a0b;
+
+  /* ---- Detector identity (det-accel FIXED to #fb923c — was #fbbf24 == amber accent) ---- */
+  --color-det-flow: #38bdf8;
+  --color-det-mag: #c084fc;
+  --color-det-accel: #fb923c;
+  --color-det-div: #fb7185;
+  --color-det-regime: #818cf8;
+
+  /* ---- Regime states ---- */
+  --color-reg-accum: #34d399;
+  --color-reg-markup: #22c55e;
+  --color-reg-dist: #fbbf24;
+  --color-reg-markdown: #fb7185;
+  --color-reg-uncertain: #94a3b8;
+
+  /* ---- Radii ---- */
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* ---- Type ---- */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ---- Custom breakpoints — the prototype's exact 4 reflow points. These
+   * REMAP Tailwind's sm/md/lg (640/768/1024 → 768/900/1100) and ADD xs:560 so
+   * `xs:`/`sm:`/`md:`/`lg:` utilities fire at the design's points. The unused
+   * Tailwind defaults (xl/2xl) stay latent — components use only these four. ---- */
+  --breakpoint-xs: 560px;
+  --breakpoint-sm: 768px;
+  --breakpoint-md: 900px;
+  --breakpoint-lg: 1100px;
+
+  /* ============== LEGACY (removed at R10 — do not use in new components) ============== */
   --color-border-1: #222226;
   --color-border-2: #2d2d33;
   --color-border-3: #45454d;
-
-  /* Text */
   --color-text-1: #fafafa;
   --color-text-2: #a1a1aa;
   --color-text-3: #71717a;
   --color-text-4: #52525b;
-
-  /* Accent + semantic */
   --color-accent: rgb(245, 158, 11);
   --color-pos: #22c55e;
   --color-neg: #ef4444;
-  --color-warn: #f59e0b;
-  --color-info: #64748b;
-
-  /* Asset brand */
-  --color-btc: #f7931a;
-  --color-eth: #627eea;
-
-  /* Type stacks */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 :root {
   color-scheme: dark;
 
-  /* Surfaces — darkest to lightest. Use --bg-1 as page background. */
-  --bg-0: #09090a;
-  --bg-1: #0a0a0b;
-  --bg-2: #111113;
-  --bg-3: #17171a;
-  --bg-4: #1c1c1f;
+  /* Bare CSS vars for SVG attributes + the colorMix() helper (cannot be Tailwind
+   * utilities). Names mirror the @theme tokens above. */
+  --bg-0: #08080a;
+  --bg-1: #0c0c0f;
+  --bg-2: #121217;
+  --bg-3: #18181f;
+  --bg-4: #1f1f28;
+  --line-1: #1b1b22;
+  --line-2: #28282f;
+  --line-3: #3a3a45;
+  --t1: #f5f5f7;
+  --t2: #a2a2ad;
+  --t3: #70707c;
+  --t4: #4c4c57;
+  --acc: #fbbf24;
+  --acc-hi: #fcd34d;
+  --acc-press: #f59e0b;
+  --acc-ink: #0a0a12;
+  --acc-soft: color-mix(in oklab, var(--acc) 16%, transparent);
+  --acc-line: color-mix(in oklab, var(--acc) 38%, transparent);
+  --win: #34d399;
+  --loss: #fb7185;
+  --warn: #fbbf24;
+  --info: #60a5fa;
+  --conf-mid: #7dd3a8;
+  --win-soft: color-mix(in oklab, var(--win) 14%, transparent);
+  --loss-soft: color-mix(in oklab, var(--loss) 14%, transparent);
+  --warn-soft: color-mix(in oklab, var(--warn) 14%, transparent);
+  --btc: #f7931a;
+  --eth: #627eea;
+  --market: #94a3b8;
+  --ink: #0a0a0b;
+  --det-flow: #38bdf8;
+  --det-mag: #c084fc;
+  --det-accel: #fb923c;
+  --det-div: #fb7185;
+  --det-regime: #818cf8;
+  --reg-accum: #34d399;
+  --reg-markup: #22c55e;
+  --reg-dist: #fbbf24;
+  --reg-markdown: #fb7185;
+  --reg-uncertain: #94a3b8;
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  --shadow-2: 0 20px 60px -16px rgba(0, 0, 0, 0.7);
+  /* Density: warm/comfortable defaults (D4 — no density tweak panel shipped). */
+  --pad-card: 20px;
+  --row-h: 52px;
+  --gap: 14px;
+  --dur-1: 0.14s;
+  --dur-2: 0.3s;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
-  /* Borders — same direction as surfaces. */
+  /* ---- LEGACY bare vars (removed at R10) ---- */
   --border-1: #1f1f23;
   --border-2: #27272a;
   --border-3: #3f3f46;
-
-  /* Text — primary to muted. */
   --text-1: #fafafa;
   --text-2: #a1a1aa;
   --text-3: #71717a;
   --text-4: #52525b;
-
-  /* Accent — amber (chosen direction). Soft + line derived via color-mix. */
   --accent: rgb(245, 158, 11);
   --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
   --accent-line: color-mix(in oklab, var(--accent) 40%, transparent);
-
-  /* Semantic — confidence + signal direction. */
-  --pos: #22c55e;   /* hit / inflow / confidence ≥ 7 */
-  --neg: #ef4444;   /* miss / outflow / confidence < 4 */
-  --warn: #f59e0b;  /* mid confidence 4–6 */
-  --info: #64748b;  /* neutral metadata */
-
-  /* Asset brand colors — match BTC orange + ETH blue. */
-  --btc: #f7931a;
-  --eth: #627eea;
-
-  /* Type stacks. Inter loaded via Google Fonts in index.html. */
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --pos: #22c55e;
+  --neg: #ef4444;
 }
 
-/* Global reset + element defaults live in @layer base so Tailwind's utility
- * layer (which comes after base in @layer order) can override them. Without
- * the layer, the universal `margin: 0` is unlayered and silently beats
- * `.mx-auto { margin-inline: auto }` — centering would fail at every
- * viewport regardless of max-width. Per CSS Cascade Level 5, unlayered
- * rules take precedence over layered rules. */
 @layer base {
   *,
   *::before,
@@ -110,15 +198,14 @@
 
   html,
   body {
-    /* bg-0 is the outer "desktop" surface; the app frame (bg-1) floats above
-     * it. Two-layer surface gives the terminal-window feel per mock's
-     * DesktopFrame on bg-0 → inner page on bg-1 layering. */
     background: var(--bg-0);
-    color: var(--text-1);
+    color: var(--t1);
     font-family: var(--sans);
     font-size: 14px;
     line-height: 1.5;
     letter-spacing: -0.005em;
+    /* ss01/cv11 = Inter stylistic sets; tnum = tabular figures by default. */
+    font-feature-settings: 'ss01', 'cv11', 'tnum';
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -131,7 +218,7 @@
   }
 
   a {
-    color: var(--accent);
+    color: var(--acc);
     text-decoration: none;
   }
 
@@ -159,5 +246,80 @@
   ul,
   ol {
     list-style: none;
+  }
+
+  ::selection {
+    background: var(--acc-soft);
+  }
+
+  /* Global focus ring — amber, matches the prototype. Components that ship
+   * their own ring (e.g. Button) override locally; this is the safety net so
+   * every focusable element is keyboard-visible. */
+  :focus-visible {
+    outline: 2px solid var(--acc);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* Custom scrollbar — matches the prototype's dark, thin treatment. */
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-2);
+    border-radius: 6px;
+    border: 3px solid var(--bg-0);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--line-3);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Animations — gated by prefers-reduced-motion (D4: motion driven by the OS
+ * setting, not a tweak toggle). Under reduced-motion they collapse to no-op. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes pulseIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.25;
+    }
+  }
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+  @keyframes sweep {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+  @keyframes flowDash {
+    to {
+      stroke-dashoffset: -100;
+    }
   }
 }

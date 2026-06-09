@@ -1,31 +1,28 @@
 import { useSpotPrices } from '../../api/queries';
+import { AssetBadge } from '../ui';
 
 /**
- * Live BTC + ETH spot price strip, pinned to the right edge of the TopNav
- * (next to `LivePulse`). One backend call serves both prices via the
- * `/api/prices/spot` cache; this hook refetches every 60s so the strip
- * stays fresh enough for a glance without putting load on SoSoValue.
+ * Live BTC + ETH spot price strip in the TopNav status row. Ported to the
+ * prototype's treatment: a colored coin `AssetBadge` + the price per asset,
+ * with a hairline divider between them (no fake direction arrow — the spot
+ * feed carries no per-tick direction).
  *
  * Visibility rules:
- *   - Loading (first paint): subtle dash placeholder — no shimmer, this is
- *     a 12px strip, a skeleton would draw more attention than the value.
- *   - Both prices null (provider outage) OR query error: the strip hides
- *     itself entirely. It's a nice-to-have surface; failing closed beats
- *     a "$—" eyesore.
+ *   - Loading: dim badge + "—" placeholder.
+ *   - Both prices null (provider outage) OR error: the strip hides itself.
  *   - One asset null: the surviving asset still renders.
  *
- * Format choice: `$83,142` (no decimals). Mobile-skim density. The detail
- * pages render full precision; the nav strip is for orientation.
+ * Format: `$83,142` (no decimals) — mobile-skim density.
  */
 export function PriceStrip() {
   const { data, isLoading, isError } = useSpotPrices();
 
   if (isLoading) {
     return (
-      <span className="inline-flex items-center gap-2 font-mono text-[12px] text-text-4 select-none">
-        <span>BTC —</span>
-        <span className="text-text-4">·</span>
-        <span>ETH —</span>
+      <span className="inline-flex items-center gap-3 select-none">
+        <PriceItem asset="BTC" price={null} />
+        <span className="w-px h-3.5 bg-line-2" aria-hidden />
+        <PriceItem asset="ETH" price={null} />
       </span>
     );
   }
@@ -33,28 +30,20 @@ export function PriceStrip() {
   if (isError || !data) return null;
   if (data.btc === null && data.eth === null) return null;
 
-  // Show a small provenance label when source is anything other than the
-  // happy-path primary (sosovalue). "binance" means SoSoValue failed and we
-  // fell over; "mixed" means one asset came from each. Both are operationally
-  // interesting and easy to miss in a tooltip-only surface.
+  // Provenance hint when the source isn't the happy-path primary.
   const showSource = data.source !== null && data.source !== 'sosovalue';
 
   return (
     <span
-      className="inline-flex items-center gap-2 font-mono text-[12px] text-text-2 select-none tabular-nums"
+      className="inline-flex items-center gap-3 select-none"
       title={data.source ? `Source: ${data.source}` : undefined}
       aria-label={`Live spot prices${data.source ? ` (source: ${data.source})` : ''}`}
     >
-      {data.btc !== null && <span>BTC ${formatCompactUsd(data.btc)}</span>}
-      {data.btc !== null && data.eth !== null && (
-        <span className="text-text-4">·</span>
-      )}
-      {data.eth !== null && <span>ETH ${formatCompactUsd(data.eth)}</span>}
+      {data.btc !== null && <PriceItem asset="BTC" price={data.btc} />}
+      {data.btc !== null && data.eth !== null && <span className="w-px h-3.5 bg-line-2" aria-hidden />}
+      {data.eth !== null && <PriceItem asset="ETH" price={data.eth} />}
       {showSource && (
-        <span
-          className="text-[10px] text-warn uppercase tracking-[0.08em]"
-          aria-hidden
-        >
+        <span className="font-mono text-[10px] text-warn uppercase tracking-[0.08em]" aria-hidden>
           · {data.source}
         </span>
       )}
@@ -62,8 +51,20 @@ export function PriceStrip() {
   );
 }
 
-/** No decimals, comma thousands. Frontend `lib/format.formatUsdPrice` gives
- *  2 decimals — keep this local for the nav strip's tighter density. */
+function PriceItem({ asset, price }: { asset: 'BTC' | 'ETH'; price: number | null }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <AssetBadge asset={asset} size="sm" />
+      <span
+        className={`font-mono tabular-nums text-[12px] font-semibold ${price === null ? 'text-t4' : 'text-t1'}`}
+      >
+        {price === null ? '—' : `$${formatCompactUsd(price)}`}
+      </span>
+    </span>
+  );
+}
+
+/** No decimals, comma thousands — the nav strip's tight density. */
 function formatCompactUsd(n: number): string {
   return Math.round(n).toLocaleString('en-US');
 }

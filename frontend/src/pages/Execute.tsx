@@ -1,99 +1,45 @@
 /**
  * Execute page — place + manage SoDEX orders.
  *
- * Sections (all conditional on user state):
+ * This file is the slim composition shell; the feature pieces live under
+ * `components/execution/`:
+ *   - TradeHeader / ModePill / RequestLiveBlock — header + mode + go-live.
+ *   - WalletGate — missing-wallet onboarding + wallet/session mismatch banner.
+ *   - ApiKeySection — SoDEX account/key setup.
+ *   - OrderForm — prepare → sign → submit ceremony (incl. SL/TP chain).
+ *   - PositionsPanel / OrdersPanel — live positions + orders with close/cancel.
  *
- *   1. AccountStrip      — wallet, paper-trade badge, account_id status
- *   2. ApiKeyForm        — shown when at least one venue lacks an api_key
- *   3. OrderForm         — new order ceremony (prepare → sign → submit)
- *   4. OrdersTable       — open orders, polled, with Cancel
- *   5. PositionsList     — open positions, polled
- *
- * Auth-gating: `<RequireAuth>` redirects to /login if isAuthed=false.
- * The Execute route in App.tsx wraps the page in this guard so a
- * direct URL hit doesn't render an empty unauthed shell.
- *
- * Signing flow (new order):
- *   1. User fills the form, clicks Place Order.
- *   2. `usePrepareNew()` POSTs `/api/execution/prepare` → backend
- *      returns `{ order_id, client_order_id, nonce, typed_data }`.
- *   3. wagmi `useSignTypedData()` opens the wallet's signing prompt
- *      with the backend-supplied EIP-712 envelope.
- *   4. Wallet returns a 65-byte ECDSA signature.
- *   5. `toSodexTypedSignature()` normalises `v` and prepends `0x01`.
- *   6. `useSubmitNew()` POSTs the normalised signature; backend
- *      forwards to the SoDEX gateway (or paper-fills).
- *
- * Cancel flow mirrors this with `prepare-cancel` + `submit-cancel`,
- * plus a short-circuit branch for PENDING orders that the backend
- * resolves locally (no wallet prompt needed; `local_only=true`).
+ * The backend NEVER holds keys or auto-trades — every order is prepared by the
+ * backend, signed in the user's wallet (wagmi/viem), and submitted.
  */
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import { useAccount, useSignMessage, useSignTypedData } from 'wagmi';
-import { useAppKit } from '@reown/appkit/react';
-import { useQueryClient } from '@tanstack/react-query';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
-import { ApiError } from '../api/client';
-import type {
-  OrderOut,
-  PositionOut,
-  PrepareNewRequest,
-  Venue,
-  WalletMeResponse,
-} from '../api/execution';
-import type { AssetSymbol, SuggestedAction } from '../api/types';
 import { ApiKeySection } from '../components/execution/ApiKeySection';
-import { performSiweLogin } from '../auth/siwe';
+import { ErrorBanner } from '../components/execution/ErrorBanner';
+import { OrderFormSection } from '../components/execution/OrderForm';
+import { OrdersTableSection } from '../components/execution/OrdersPanel';
+import { PositionsSection } from '../components/execution/PositionsPanel';
+import { SignalPrefillBanner } from '../components/execution/SignalPrefillBanner';
+import { TradeHeader } from '../components/execution/TradeHeader';
+import { WalletMissingNotice } from '../components/execution/WalletGate';
+import { Breadcrumb } from '../components/layout';
 import { useAuth } from '../auth/useAuth';
 import { useSignal } from '../api/queries';
-import {
-  defaultVenueForSuggestedAction,
-  isExecutableSignal,
-  sideForSuggestedAction,
-} from '../lib/signalExecute';
-import {
-  KEY_WALLET_ME,
-  useClosePosition,
-  useOrders,
-  usePositions,
-  usePrepareCancel,
-  usePrepareNew,
-  useRequestLive,
-  useSubmitCancel,
-  useSubmitNew,
-  useSymbols,
-  useWalletMe,
-} from '../hooks/useExecution';
-import { executeOrderChain, type ChainProgress } from '../lib/orderChain';
-import { toSodexTypedSignature } from '../lib/sodex-sig';
-import { isWalletConnectAvailable } from '../lib/wagmi';
+import { useWalletMe } from '../hooks/useExecution';
 
-// Order statuses that can be cancelled. Anything else either has no
-// venue presence yet (PENDING is a local cancel) or is already
-// terminal (FILLED, CANCELLED, REJECTED, EXPIRED).
-const CANCELABLE_STATUSES = new Set([
-  'pending',
-  'acked',
-  'partially_filled',
-]);
-
-const NON_TERMINAL_STATUSES = new Set([
-  'pending',
-  'submitted',
-  'acked',
-  'partially_filled',
-]);
+// Re-exported for the #78.4 / WalletMissing regression tests, which import
+// these from `pages/Execute` (the components now live in WalletGate).
+export { WalletMissingNotice, WalletMissingUnavailable } from '../components/execution/WalletGate';
 
 export function Execute() {
   const { isAuthed } = useAuth();
   const location = useLocation();
   if (!isAuthed) {
-    // SIG2X.3 — preserve the intended URL (incl. ?signal_id=N) across
-    // the auth bounce so /signals/N "Execute this signal" and Telegram
-    // alert deep-links land on the prefilled form after SIWE. The Login
-    // page reads `location.state.from` and navigates there on success.
+    // SIG2X.3 — preserve the intended URL (incl. ?signal_id=N) across the
+    // auth bounce so /signals/N "Execute this signal" and Telegram alert
+    // deep-links land on the prefilled form after SIWE. The Login page reads
+    // `location.state.from` and navigates there on success.
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
   return <ExecuteInner />;
@@ -102,7 +48,21 @@ export function Execute() {
 function ExecuteInner() {
   const me = useWalletMe();
 
-  if (me.isLoading) return <PageShell><p className="text-text-2">Loading…</p></PageShell>;
+  // SIG2X — read `?signal_id=N` at the page level so the prefill banner can
+  // render full-width above the trade grid and the same fetched signal feeds
+  // the form's prefill effect. Reject 0, negatives, leading-zero, non-digits.
+  const [searchParams] = useSearchParams();
+  const signalIdParam = searchParams.get('signal_id');
+  const signalId =
+    signalIdParam && /^[1-9]\d*$/.test(signalIdParam) ? Number(signalIdParam) : undefined;
+  const signalQuery = useSignal(signalId);
+
+  if (me.isLoading)
+    return (
+      <PageShell>
+        <p className="text-t2">Loading…</p>
+      </PageShell>
+    );
   if (me.error) {
     return (
       <PageShell>
@@ -111,1013 +71,69 @@ function ExecuteInner() {
     );
   }
   if (!me.data) return null;
+  const account = me.data;
+
+  // Trade-ready = SoDEX recognises this wallet (account_id) AND at least one
+  // venue's API key is bound. Until then there's nothing to trade, so we DON'T
+  // render the order form or the (empty) positions/orders panels — just the
+  // compact setup notice.
+  const tradeReady = !!(
+    account.sodex_account_id &&
+    (account.sodex_spot_api_key_name || account.sodex_perps_api_key_name)
+  );
 
   return (
     <PageShell>
-      <AccountStrip me={me.data} />
-      {/* Telegram-WebApp users land here with a JWT but no bound wallet.
-          Surface a CTA that explains the gap before the page renders the
-          form sections — without a wallet, prepare_new would 403 with
-          `wallet_not_bound` and the user has no idea why. */}
-      {me.data.wallet_address === null && <WalletMissingNotice />}
-      <ApiKeySection me={me.data} />
-      <OrderFormSection me={me.data} />
-      <OrdersTableSection />
-      <PositionsSection />
-    </PageShell>
-  );
-}
+      <TradeHeader me={account} />
 
-// Exported for #78.4 regression test. Internal callers within this file
-// can still use them via the same local name — `export function X` does
-// not change in-module references.
-export function WalletMissingNotice() {
-  // Telegram-WebApp users land here with a JWT but `wallet_address=null`.
-  // Run SIWE inline — the backend (`/api/wallet/verify`) honors the
-  // inbound Authorization header and BINDS the wallet to the existing
-  // user instead of creating a duplicate row (D.5 Option A).
-  //
-  // Inside Telegram's WebView there's no `window.ethereum` provider —
-  // wallet connect goes through WalletConnect v2 deep links (Reown
-  // AppKit modal). On mobile that means: tap Connect → wallet app
-  // opens → approve → back to Telegram → tap Sign → wallet app opens
-  // → sign → back to Telegram. Friction-y but functional.
-  //
-  // Component split: `useAppKit()` THROWS at render time if
-  // `createAppKit` was never called (no `VITE_WALLETCONNECT_PROJECT_ID`
-  // path in `wagmi.ts`). Without the split, an Execute-page visit
-  // with `wallet_address=null` on a no-projectId deploy would crash
-  // the page. Same pattern as `<Login>` (D.4.5) — render conditional
-  // BEFORE calling AppKit hooks.
-  if (!isWalletConnectAvailable) {
-    return <WalletMissingUnavailable />;
-  }
-  return <WalletMissingWithWallet />;
-}
+      {/* Telegram-WebApp users land here with a JWT but no bound wallet. */}
+      {account.wallet_address === null && <WalletMissingNotice />}
 
-export function WalletMissingUnavailable() {
-  return (
-    <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-2">
-      <h2 className="text-lg font-semibold text-amber-200">Wallet not bound</h2>
-      <p className="text-text-2 text-sm">
-        Wallet Connect isn&apos;t configured on this deployment, so wallet binding can&apos;t
-        run here. The site administrator must set{' '}
-        <code className="text-text-1">VITE_WALLETCONNECT_PROJECT_ID</code> and redeploy. Until
-        then, trading is disabled.
-      </p>
-    </section>
-  );
-}
+      {tradeReady ? (
+        <>
+          {/* A not-yet-bound venue surfaces a bind prompt; null once bound. */}
+          <ApiKeySection me={account} />
 
-function WalletMissingWithWallet() {
-  // Safe to call AppKit hooks unconditionally — this component only
-  // mounts when `isWalletConnectAvailable` is true (verified by the
-  // parent <WalletMissingNotice>).
-  const { login, jwt } = useAuth();
-  const { address, isConnected } = useAccount();
-  const { open } = useAppKit();
-  const { signMessageAsync } = useSignMessage();
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Synchronous in-flight guard. `busy` is React state — `setBusy(true)`
-  // doesn't update the DOM until next paint, so a fast double-click
-  // would slip past the `disabled` prop and fire `handleSign` twice
-  // (two nonces, two wallet sign prompts). Same fix as D.4.5 Login.
-  const inFlightRef = useRef(false);
+          {signalId !== undefined && (
+            <SignalPrefillBanner
+              signalId={signalId}
+              signal={signalQuery.data}
+              isLoading={signalQuery.isLoading}
+              isError={signalQuery.isError}
+            />
+          )}
 
-  async function handleConnect() {
-    setError(null);
-    try {
-      await open();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to open wallet picker.');
-    }
-  }
-
-  async function handleSign() {
-    if (!address) return;
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      // performSiweLogin uses apiPost, which auto-attaches the current
-      // JWT as Authorization. Backend route detects it and binds the
-      // verified wallet to the existing User row.
-      const resp = await performSiweLogin({ address, signMessageAsync });
-      login(resp.jwt);
-      // /me query result must refetch — the user.wallet_address column
-      // just flipped from null to bound. Use the canonical key from
-      // useExecution to avoid drift if the key shape ever changes.
-      qc.invalidateQueries({ queryKey: KEY_WALLET_ME });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (/rejected|denied/i.test(msg)) {
-        setError('Signature rejected. Tap "Sign in" to retry.');
-      } else {
-        setError(msg);
-      }
-    } finally {
-      inFlightRef.current = false;
-      setBusy(false);
-    }
-  }
-
-  // Defensive — should never see this section if not authed (parent
-  // <Execute> redirects on !isAuthed), but the JWT must be present
-  // for the bind-to-existing path to work on the backend.
-  if (!jwt) return null;
-
-  return (
-    <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
-      <h2 className="text-lg font-semibold text-amber-200">Bind a wallet to start trading</h2>
-      <p className="text-text-2 text-sm">
-        You&apos;re signed in via Telegram, but no SoDEX-trading wallet is connected yet.
-        Connect a wallet and sign a one-time message — your Telegram session stays the
-        same, we just attach your wallet to it. We never hold private keys; every order
-        is signed in your wallet.
-      </p>
-      {!isConnected ? (
-        <button
-          type="button"
-          onClick={handleConnect}
-          className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium"
-        >
-          Connect Wallet
-        </button>
-      ) : (
-        <div className="space-y-2">
-          <div className="text-xs text-text-2">
-            Connected as <code className="text-text-1">{address}</code>
+          {/* Prototype 2-column trade layout: order form left (sticky), live
+              positions + orders right. */}
+          <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-6 items-start">
+            <div className="lg:sticky lg:top-[96px]">
+              <OrderFormSection me={account} signalId={signalId} signal={signalQuery.data} />
+            </div>
+            <div className="space-y-6 min-w-0">
+              <PositionsSection />
+              <OrdersTableSection />
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={handleSign}
-            disabled={busy}
-            className="px-4 py-2 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50"
-          >
-            {busy ? 'Waiting for signature…' : 'Sign in with Ethereum'}
-          </button>
-        </div>
+        </>
+      ) : (
+        // Not set up on SoDEX yet — compact setup notice only (no empty
+        // order/position panels). ApiKeySection renders the account/key
+        // guidance, or null when the wallet itself isn't bound.
+        account.wallet_address !== null && (
+          <div className="max-w-[460px]">
+            <ApiKeySection me={account} />
+          </div>
+        )
       )}
-      {error && (
-        <div className="p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-    </section>
+    </PageShell>
   );
 }
 
 function PageShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="max-w-5xl mx-auto px-6 py-8 space-y-8">
-      <header>
-        <h1 className="text-2xl font-semibold">Execute</h1>
-        <p className="text-text-2 text-sm">Trade BTC + ETH on SoDEX from your bound wallet.</p>
-      </header>
+    <div className="max-w-[1280px] mx-auto px-6 pt-8 pb-12 space-y-6">
+      <Breadcrumb items={[{ label: 'ETFPulse', path: '/' }, { label: 'Trade' }]} />
       {children}
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// 1. AccountStrip
-// ---------------------------------------------------------------------------
-
-function AccountStrip({ me }: { me: WalletMeResponse }) {
-  return (
-    <section className="rounded-xl border border-border-2 p-4 space-y-3 text-sm">
-      <div className="flex flex-wrap items-center gap-4">
-        <div>
-          <div className="text-text-2 text-xs uppercase tracking-wide">Wallet</div>
-          <code className="text-text-1">{me.wallet_address ?? '—'}</code>
-        </div>
-        <div>
-          <div className="text-text-2 text-xs uppercase tracking-wide">SoDEX account</div>
-          <code className="text-text-1">{me.sodex_account_id ?? '—'}</code>
-        </div>
-        <div className="ml-auto">
-          {me.paper_trade ? (
-            <span className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-medium">
-              PAPER TRADE
-            </span>
-          ) : (
-            <span className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-medium">
-              REAL FUNDS
-            </span>
-          )}
-        </div>
-      </div>
-      {me.paper_trade && <RequestLiveBlock />}
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 1b. RequestLiveBlock (#185)
-// ---------------------------------------------------------------------------
-// Rendered inside AccountStrip ONLY when `me.paper_trade === true`. Gives
-// paper-trade users a breadcrumb to the operator instead of a dead-end
-// badge. Does NOT flip paper_trade itself — operator action via the
-// admin route is the only switch. Errors are inline (no toast system in
-// the codebase yet); the 503 path tells users to contact the operator
-// directly.
-
-function RequestLiveBlock() {
-  const mutation = useRequestLive();
-  const [note, setNote] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  // Synchronous in-flight guard — same pattern as the Sign button on
-  // WalletMissingWithWallet. `useMutation`'s `isPending` updates on
-  // React's schedule; a fast double-click can slip past it before the
-  // disabled prop lands.
-  const inFlightRef = useRef(false);
-
-  async function handleSubmit() {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    try {
-      await mutation.mutateAsync({ note: note.trim() || undefined });
-      setShowForm(false);
-      setNote('');
-    } catch {
-      // mutation.error already carries the ApiError for inline render below.
-    } finally {
-      inFlightRef.current = false;
-    }
-  }
-
-  // Success state — user just submitted. Stay visible so they can
-  // re-read the message; the badge above still shows PAPER TRADE so
-  // there's no confusion about state.
-  if (mutation.isSuccess && mutation.data) {
-    return (
-      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-emerald-200 text-xs">
-        {mutation.data.message}
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-md border border-border-2 p-3 space-y-2">
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-text-2 text-xs flex-1 min-w-[200px]">
-          You&apos;re in paper-trade mode. Orders use simulated fills — no real
-          funds move. Ready to go live? Ask the operator to flip you over.
-        </p>
-        {!showForm && (
-          <button
-            type="button"
-            onClick={() => setShowForm(true)}
-            className="px-3 py-1.5 rounded-md bg-text-1 text-bg-1 text-xs font-medium hover:bg-text-2 transition-colors"
-          >
-            Request live trading
-          </button>
-        )}
-      </div>
-      {showForm && (
-        <div className="space-y-2 pt-1">
-          <label className="block text-text-2 text-xs">
-            Optional note for the operator (max 500 chars):
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value.slice(0, 500))}
-              maxLength={500}
-              rows={2}
-              className="mt-1 w-full rounded-md bg-bg-2 border border-border-2 text-text-1 text-xs p-2 resize-y"
-              placeholder="e.g. ran one paper order, ready for live"
-            />
-          </label>
-          {mutation.isError && (
-            <div className="text-amber-300 text-xs">
-              {mutation.error instanceof ApiError && mutation.error.status === 429
-                ? `Already sent recently. ${mutation.error.detail.replace(/^request_live_cooldown: /, '')}`
-                : "Couldn't send. Please contact the operator directly."}
-            </div>
-          )}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={mutation.isPending}
-              className="px-3 py-1.5 rounded-md bg-text-1 text-bg-1 text-xs font-medium hover:bg-text-2 transition-colors disabled:opacity-50"
-            >
-              {mutation.isPending ? 'Sending…' : 'Send request'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowForm(false);
-                setNote('');
-                mutation.reset();
-              }}
-              disabled={mutation.isPending}
-              className="px-3 py-1.5 rounded-md text-text-2 hover:text-text-1 text-xs disabled:opacity-50"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 2. ApiKeySection (SDXB) — moved to components/execution/ApiKeySection.tsx
-//    Auto-fetches the wallet's account_id + named keys from SoDEX
-//    instead of asking the operator to copy-paste them. Imported above.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// 3. OrderForm
-// ---------------------------------------------------------------------------
-
-function OrderFormSection({ me }: { me: WalletMeResponse }) {
-  // Hide the form until at least one venue is bound + an account id exists;
-  // without these the backend would 403 on prepare with `api_key_not_registered`
-  // or `sodex_account_not_cached`.
-  const hasAnyKey = !!(me.sodex_spot_api_key_name || me.sodex_perps_api_key_name);
-  if (!hasAnyKey || !me.sodex_account_id) return null;
-  return <OrderForm me={me} />;
-}
-
-function OrderForm({ me }: { me: WalletMeResponse }) {
-  const [venue, setVenue] = useState<Venue>(
-    me.sodex_spot_api_key_name ? 'sodex_spot' : 'sodex_perps',
-  );
-  const symbols = useSymbols(venue);
-  const prepare = usePrepareNew();
-  const submit = useSubmitNew();
-  const { signTypedDataAsync } = useSignTypedData();
-
-  const [asset, setAsset] = useState('BTC');
-  const [side, setSide] = useState<'buy' | 'sell'>('buy');
-  const [orderType, setOrderType] = useState<'limit' | 'market'>('limit');
-  const [tif, setTif] = useState<'gtc' | 'ioc' | 'gtx'>('gtc');
-  const [size, setSize] = useState('');
-  const [price, setPrice] = useState('');
-  const [leverage, setLeverage] = useState('');
-  // PR P1.5/1.6 — perps-only SL/TP/reduce_only inputs + sequential
-  // chain progress. `chainProgress=null` while the form is idle; an
-  // active `{step,total,label}` drives the "Signing X of Y…" UX.
-  const [stopLoss, setStopLoss] = useState('');
-  const [takeProfit, setTakeProfit] = useState('');
-  const [reduceOnly, setReduceOnly] = useState(false);
-  const [chainProgress, setChainProgress] = useState<ChainProgress | null>(null);
-  // PR P1-fix.DBLSUB-1 — synchronous in-flight guard. The `submitting`
-  // derived state + disabled button isn't enough: React re-renders the
-  // disabled attribute asynchronously, so a fast double-click can fire
-  // onSubmit twice before the button disables → two chains → duplicate
-  // entry orders (real duplicate exposure). Same guard pattern as
-  // PositionRow.onClose + ApiKeyAutoBind.
-  const submitInFlightRef = useRef(false);
-  const [flowError, setFlowError] = useState<string | null>(null);
-  const [flowSuccess, setFlowSuccess] = useState<string | null>(null);
-
-  // SIG2X — bridge from /signals/:id. When the page is opened with
-  // `?signal_id=N`, fetch the signal and prefill the form fields ONCE
-  // (a useRef guard prevents a refetch from clobbering subsequent
-  // user edits). The signal_id is forwarded to the backend on prepare
-  // so Order.signal_id is set for downstream per-signal analytics.
-  const [searchParams] = useSearchParams();
-  const signalIdParam = searchParams.get('signal_id');
-  // Reject 0, negatives, leading-zero strings, and non-digits. The
-  // backend's `PrepareNewRequest.signal_id` has `gt=0`, so forwarding
-  // `0` would 422 the form submit; treat invalid URLs as no-signal.
-  const signalId = signalIdParam && /^[1-9]\d*$/.test(signalIdParam)
-    ? Number(signalIdParam)
-    : undefined;
-  const signalQuery = useSignal(signalId);
-  const prefilledRef = useRef<number | null>(null);
-  // The lint rule `react-hooks/set-state-in-effect` flags the setState
-  // calls below — the pattern here is the legitimate one-shot exception:
-  // sync local form state from an asynchronously-loaded source EXACTLY
-  // ONCE (useRef guard ensures idempotence), then let the user own the
-  // form. Multiple setX calls are batched by React 18+ into a single
-  // render commit, so cascading-renders concern doesn't apply.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const s = signalQuery.data;
-    if (!s) return;
-    if (prefilledRef.current === s.id) return;
-    if (!isExecutableSignal(s)) return; // tradeable + actionable gate
-    prefilledRef.current = s.id;
-    const action = s.ai_analysis!.suggested_action;
-    const nextVenue = defaultVenueForSuggestedAction(action);
-    const nextSide = sideForSuggestedAction(action);
-    if (nextVenue) setVenue(nextVenue);
-    if (nextSide) setSide(nextSide);
-    setAsset(s.asset);
-    // Limit order with the AI's suggested entry, when present.
-    // Falls through to whatever the user enters when null.
-    if (s.ai_analysis!.entry_price != null) {
-      setOrderType('limit');
-      setPrice(String(s.ai_analysis!.entry_price));
-    }
-    // PR P1.5 / PR P1-fix.B3 — prefill SL / TP from the AI's levels
-    // unconditionally. The fields are perps-only in the form, but the
-    // *state* persists across venue switches — so a user who lands
-    // via a LONG signal (default venue spot) and switches to perps to
-    // use stops will see the AI's suggested levels already filled in.
-    // Without this, dominant-case LONG signals silently discard the
-    // AI's `stop_price` / `target_price`.
-    if (s.ai_analysis!.stop_price != null) setStopLoss(String(s.ai_analysis!.stop_price));
-    if (s.ai_analysis!.target_price != null) setTakeProfit(String(s.ai_analysis!.target_price));
-    // Size: AI doesn't suggest one; leave the field blank for the user.
-  }, [signalQuery.data]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  // Pre-filter the asset dropdown to assets that have a symbol on this
-  // venue. Empty list → backend would 503 with SymbolNotResolved; render
-  // an explanatory inline state instead of letting the user submit.
-  const assetOptions = useMemo(() => {
-    if (!symbols.data) return [];
-    const venueSymbols = symbols.data.items.filter((s) => s.venue === venue);
-    return Array.from(new Set(venueSymbols.map((s) => s.asset))).sort();
-  }, [symbols.data, venue]);
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    // PR P1-fix.DBLSUB-1 — bail synchronously if a chain is already
-    // running (defeats the double-click-before-disabled race).
-    if (submitInFlightRef.current) return;
-    setFlowError(null);
-    setFlowSuccess(null);
-    if (!size || (orderType === 'limit' && !price)) {
-      setFlowError('Size and (for limit orders) price are required.');
-      return;
-    }
-    submitInFlightRef.current = true;
-    const isPerps = venue === 'sodex_perps';
-    const entryReq: PrepareNewRequest = {
-      venue,
-      asset,
-      side,
-      order_type: orderType,
-      time_in_force: tif,
-      requested_size: size,
-      requested_price: orderType === 'limit' ? price : null,
-      position_side: isPerps ? 'both' : null,
-      leverage: isPerps && leverage ? leverage : null,
-      // SIG2X — attribute the order to the source signal when one was
-      // supplied via ?signal_id. NULL = ad-hoc trade.
-      signal_id: signalId ?? null,
-      // PR P1.5 — reduce-only is a standalone toggle (perps only,
-      // backend rejects on spot). SL/TP children get their own
-      // reduce_only=true set by the chain helper; this flag is for
-      // the ENTRY leg only (manual position-exit use case).
-      reduce_only: isPerps && reduceOnly ? true : undefined,
-    };
-    // Spot rejects stop attachments at the risk gate; ignore the
-    // input values when the active venue is spot so the user can't
-    // ship a 403-bound payload.
-    const slForChain = isPerps ? stopLoss : '';
-    const tpForChain = isPerps ? takeProfit : '';
-    try {
-      // viem's `signTypedData` validates the domain shape — backend
-      // MUST emit a complete `types.EIP712Domain` (D.1 guarantees).
-      const results = await executeOrderChain(
-        { entry: entryReq, stopLoss: slForChain, takeProfit: tpForChain },
-        {
-          prepare: (req) => prepare.mutateAsync(req),
-          sign: async (typed) => {
-            const sig = await signTypedDataAsync(
-              typed as unknown as Parameters<typeof signTypedDataAsync>[0],
-            );
-            return toSodexTypedSignature(sig);
-          },
-          submit: ({ orderId, signature }) => submit.mutateAsync({ orderId, signature }),
-          onStep: (p) => setChainProgress(p),
-        },
-      );
-      const entryResult = results[0];
-      const extras = results.length > 1 ? ` + ${results.length - 1} child leg(s)` : '';
-      setFlowSuccess(
-        `Order ${entryResult.order_id} → ${entryResult.status}${
-          entryResult.exchange_order_id ? ` (exchange ${entryResult.exchange_order_id})` : ''
-        }${extras}`,
-      );
-      setSize('');
-      setPrice('');
-      setStopLoss('');
-      setTakeProfit('');
-      setReduceOnly(false);
-    } catch (e) {
-      setFlowError(formatError(e));
-    } finally {
-      setChainProgress(null);
-      submitInFlightRef.current = false;
-    }
-  }
-
-  const submitting = prepare.isPending || submit.isPending || chainProgress !== null;
-
-  return (
-    <section className="rounded-xl border border-border-2 p-4 space-y-4">
-      <h2 className="text-lg font-semibold">New order</h2>
-      {signalId !== undefined && (
-        <SignalDrivenBanner
-          signalId={signalId}
-          signalData={signalQuery.data}
-          isLoading={signalQuery.isLoading}
-          isError={signalQuery.isError}
-        />
-      )}
-      <form onSubmit={onSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <label className="space-y-1">
-          <span className="text-xs text-text-2 uppercase tracking-wide">Venue</span>
-          <select
-            value={venue}
-            onChange={(e) => setVenue(e.target.value as Venue)}
-            className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-          >
-            {me.sodex_spot_api_key_name && <option value="sodex_spot">Spot</option>}
-            {me.sodex_perps_api_key_name && <option value="sodex_perps">Perps</option>}
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-text-2 uppercase tracking-wide">Asset</span>
-          <select
-            value={asset}
-            onChange={(e) => setAsset(e.target.value)}
-            disabled={assetOptions.length === 0}
-            className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-          >
-            {assetOptions.length === 0 && <option>— no symbols cached —</option>}
-            {assetOptions.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-text-2 uppercase tracking-wide">Side</span>
-          <select
-            value={side}
-            onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-            className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-          >
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-text-2 uppercase tracking-wide">Type</span>
-          <select
-            value={orderType}
-            onChange={(e) => setOrderType(e.target.value as 'limit' | 'market')}
-            className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-          >
-            <option value="limit">Limit</option>
-            <option value="market">Market</option>
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-text-2 uppercase tracking-wide">TIF</span>
-          <select
-            value={tif}
-            onChange={(e) => setTif(e.target.value as 'gtc' | 'ioc' | 'gtx')}
-            className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-          >
-            <option value="gtc">GTC</option>
-            <option value="ioc">IOC</option>
-            <option value="gtx">GTX (post-only)</option>
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-text-2 uppercase tracking-wide">Size</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={size}
-            onChange={(e) => setSize(e.target.value)}
-            placeholder="0.01"
-            required
-            className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-          />
-        </label>
-        {orderType === 'limit' && (
-          <label className="space-y-1">
-            <span className="text-xs text-text-2 uppercase tracking-wide">Price</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder="65000"
-              required
-              className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-            />
-          </label>
-        )}
-        {venue === 'sodex_perps' && (
-          <label className="space-y-1">
-            <span className="text-xs text-text-2 uppercase tracking-wide">Leverage</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={leverage}
-              onChange={(e) => setLeverage(e.target.value)}
-              placeholder="3"
-              className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-            />
-          </label>
-        )}
-        {/* PR P1.5 — perps-only SL / TP / reduce-only. Optional;
-            empty values skip the leg. Each non-empty leg adds ONE
-            extra wallet sign prompt (3 total when both SL + TP are
-            set). Spot hides these — the risk gate would reject. */}
-        {venue === 'sodex_perps' && (
-          <>
-            <label className="space-y-1">
-              <span className="text-xs text-text-2 uppercase tracking-wide">
-                Stop-loss (optional)
-              </span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={stopLoss}
-                onChange={(e) => setStopLoss(e.target.value)}
-                placeholder="—"
-                aria-label="Stop loss price"
-                className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="text-xs text-text-2 uppercase tracking-wide">
-                Take-profit (optional)
-              </span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={takeProfit}
-                onChange={(e) => setTakeProfit(e.target.value)}
-                placeholder="—"
-                aria-label="Take profit price"
-                className="w-full px-3 py-2 rounded-lg bg-bg-0 border border-border-2"
-              />
-            </label>
-            <label className="flex items-center gap-2 col-span-2 sm:col-span-4">
-              <input
-                type="checkbox"
-                checked={reduceOnly}
-                onChange={(e) => setReduceOnly(e.target.checked)}
-                aria-label="Reduce only (perps only)"
-                className="rounded border-border-2"
-              />
-              <span className="text-xs text-text-2">
-                Reduce only — order can only close, never open new exposure
-              </span>
-            </label>
-          </>
-        )}
-        <button
-          type="submit"
-          disabled={submitting || assetOptions.length === 0}
-          className="col-span-2 sm:col-span-4 px-4 py-3 rounded-lg bg-accent text-bg-0 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {chainProgress
-            ? `Signing ${chainProgress.step} of ${chainProgress.total} (${chainProgress.label.replace('_', ' ')})…`
-            : submitting
-              ? 'Working…'
-              : 'Place order'}
-        </button>
-      </form>
-      {flowError && <ErrorBanner error={flowError} fallback="Order failed." />}
-      {flowSuccess && (
-        <div className="p-3 rounded-lg border border-green-500/30 bg-green-500/10 text-sm text-green-300">
-          {flowSuccess}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/** Banner shown above the order form when the user landed via
- *  `?signal_id=N` from the SignalDetail "Execute this signal" CTA
- *  or a Telegram alert button. Three render states:
- *
- *    - Loading: shows the id but no asset/direction yet.
- *    - Error / non-executable signal: shows the id + a heads-up that
- *      the form is NOT prefilled (user should double-check the asset
- *      they choose lines up with the signal they remember).
- *    - Loaded + executable: shows the id, asset, direction, and a
- *      back-link to /signals/:id for the full analysis.
- *
- *  Component kept inline because it's specific to this page's layout
- *  and only consumed here. */
-function SignalDrivenBanner({
-  signalId,
-  signalData,
-  isLoading,
-  isError,
-}: {
-  signalId: number;
-  // Narrowed shape — only the fields the banner reads. Matches what
-  // `isExecutableSignal` and the action-renderer need; avoids
-  // dragging the whole `SignalDetail` type into the prop signature.
-  signalData:
-    | {
-        asset: AssetSymbol;
-        ai_analysis: { suggested_action: SuggestedAction } | null;
-      }
-    | undefined;
-  isLoading: boolean;
-  isError: boolean;
-}) {
-  const linkable = `/signals/${signalId}`;
-  if (isLoading) {
-    return (
-      <div className="text-[12px] text-text-3 border border-border-2 bg-bg-2 rounded-md px-3 py-2">
-        Loading signal #{signalId}…
-      </div>
-    );
-  }
-  if (isError || !signalData) {
-    return (
-      <div className="text-[12px] text-amber-200 border border-amber-500/30 bg-amber-500/5 rounded-md px-3 py-2">
-        Signal #{signalId} could not be loaded. Form will submit
-        with this id attached, but no prefill was applied — review
-        the fields before signing.
-      </div>
-    );
-  }
-  if (!isExecutableSignal(signalData)) {
-    return (
-      <div className="text-[12px] text-amber-200 border border-amber-500/30 bg-amber-500/5 rounded-md px-3 py-2">
-        Signal #{signalId} isn&apos;t actionable (asset {signalData.asset}{' '}
-        / direction {signalData.ai_analysis?.suggested_action ?? '—'}).
-        Form is NOT prefilled.
-      </div>
-    );
-  }
-  const action = signalData.ai_analysis!.suggested_action;
-  return (
-    <div className="text-[12px] text-text-2 border border-accent/30 bg-accent/5 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-      <span>
-        Driven by signal{' '}
-        <Link to={linkable} className="text-accent underline">
-          #{signalId}
-        </Link>{' '}
-        · {signalData.asset} · {action}
-      </span>
-      <span className="text-text-3">
-        Fields below were prefilled — adjust before signing.
-      </span>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 4. OrdersTable
-// ---------------------------------------------------------------------------
-
-function OrdersTableSection() {
-  // Open orders only — terminal statuses live in the (future) history page.
-  const orders = useOrders();
-  const open = useMemo(
-    () => orders.data?.items.filter((o) => NON_TERMINAL_STATUSES.has(o.status)) ?? [],
-    [orders.data],
-  );
-  return (
-    <section className="rounded-xl border border-border-2 p-4 space-y-3">
-      <h2 className="text-lg font-semibold">Open orders</h2>
-      {orders.error && <ErrorBanner error={orders.error} fallback="Failed to load orders." />}
-      {open.length === 0 && !orders.isLoading && (
-        <p className="text-text-2 text-sm">No open orders.</p>
-      )}
-      {open.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-text-2 uppercase tracking-wide">
-                <th className="py-2">Venue</th>
-                <th>Asset</th>
-                <th>Side</th>
-                <th>Size</th>
-                <th>Price</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {open.map((o) => (
-                <OrderRow key={o.id} order={o} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function OrderRow({ order }: { order: OrderOut }) {
-  const prepareCancel = usePrepareCancel();
-  const submitCancel = useSubmitCancel();
-  const { signTypedDataAsync } = useSignTypedData();
-  const [error, setError] = useState<string | null>(null);
-
-  async function onCancel() {
-    setError(null);
-    try {
-      const prepared = await prepareCancel.mutateAsync(order.id);
-      if (prepared.local_only || prepared.replayed) {
-        // PENDING or terminal — backend handled it without signing.
-        return;
-      }
-      if (!prepared.typed_data) {
-        setError('Backend did not return cancel typed-data.');
-        return;
-      }
-      const signature = await signTypedDataAsync(
-        prepared.typed_data as unknown as Parameters<typeof signTypedDataAsync>[0],
-      );
-      const wireSig = toSodexTypedSignature(signature);
-      await submitCancel.mutateAsync({ orderId: order.id, signature: wireSig });
-    } catch (e) {
-      setError(formatError(e));
-    }
-  }
-
-  const busy = prepareCancel.isPending || submitCancel.isPending;
-  const canCancel = CANCELABLE_STATUSES.has(order.status);
-
-  return (
-    <tr className="border-t border-border-2">
-      <td className="py-2">{order.venue === 'sodex_spot' ? 'Spot' : 'Perps'}</td>
-      <td>{order.asset}</td>
-      <td>{order.side}</td>
-      <td>{order.requested_size}</td>
-      <td>{order.requested_price ?? '—'}</td>
-      <td>
-        <StatusPill status={order.status} />
-      </td>
-      <td className="text-right">
-        {canCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="text-xs px-2 py-1 rounded border border-border-2 hover:bg-bg-0 disabled:opacity-50"
-          >
-            {busy ? 'Cancelling…' : 'Cancel'}
-          </button>
-        )}
-        {error && <div className="text-xs text-red-300 mt-1">{error}</div>}
-      </td>
-    </tr>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const tone: Record<string, string> = {
-    pending: 'bg-yellow-500/20 text-yellow-300',
-    submitted: 'bg-blue-500/20 text-blue-300',
-    acked: 'bg-blue-500/20 text-blue-300',
-    partially_filled: 'bg-purple-500/20 text-purple-300',
-    filled: 'bg-green-500/20 text-green-300',
-    cancelled: 'bg-gray-500/20 text-gray-300',
-    rejected: 'bg-red-500/20 text-red-300',
-    expired: 'bg-gray-500/20 text-gray-300',
-  };
-  const cls = tone[status] ?? 'bg-gray-500/20 text-gray-300';
-  return <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{status}</span>;
-}
-
-// ---------------------------------------------------------------------------
-// 5. Positions
-// ---------------------------------------------------------------------------
-
-function PositionsSection() {
-  const positions = usePositions();
-  return (
-    <section className="rounded-xl border border-border-2 p-4 space-y-3">
-      <h2 className="text-lg font-semibold">Open positions</h2>
-      {positions.error && (
-        <ErrorBanner error={positions.error} fallback="Failed to load positions." />
-      )}
-      {positions.data && positions.data.items.length === 0 && (
-        <p className="text-text-2 text-sm">No open positions.</p>
-      )}
-      {positions.data && positions.data.items.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-text-2 uppercase tracking-wide">
-                <th className="py-2">Venue</th>
-                <th>Asset</th>
-                <th>Side</th>
-                <th>Size</th>
-                <th>Entry</th>
-                <th>Leverage</th>
-                <th className="text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {positions.data.items.map((p) => (
-                <PositionRow key={p.id} pos={p} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function PositionRow({ pos }: { pos: PositionOut }) {
-  const closePos = useClosePosition();
-  const submit = useSubmitNew();
-  const { signTypedDataAsync } = useSignTypedData();
-  // Per-row in-flight guard — synchronous, defeats double-click before
-  // useMutation flips its `isPending` flag. Same pattern as
-  // ApiKeyAutoBind's auto-bind ref.
-  const inFlight = useRef(false);
-  const [rowError, setRowError] = useState<string | null>(null);
-
-  async function onClose() {
-    if (inFlight.current) return;
-    // Confirm — closing is reversible only by opening again; force a
-    // deliberate click before signing.
-    if (
-      !window.confirm(
-        `Close ${pos.size} ${pos.asset} ${pos.side.toUpperCase()} on ` +
-          `${pos.venue === 'sodex_spot' ? 'Spot' : 'Perps'}? This requires one wallet signature.`,
-      )
-    ) {
-      return;
-    }
-    inFlight.current = true;
-    setRowError(null);
-    try {
-      const prep = await closePos.mutateAsync(pos.id);
-      const sig = await signTypedDataAsync(
-        prep.typed_data as unknown as Parameters<typeof signTypedDataAsync>[0],
-      );
-      const wireSig = toSodexTypedSignature(sig);
-      await submit.mutateAsync({ orderId: prep.order_id, signature: wireSig });
-    } catch (e) {
-      setRowError(formatError(e));
-    } finally {
-      inFlight.current = false;
-    }
-  }
-
-  const busy = closePos.isPending || submit.isPending;
-  return (
-    <tr className="border-t border-border-2">
-      <td className="py-2">{pos.venue === 'sodex_spot' ? 'Spot' : 'Perps'}</td>
-      <td>{pos.asset}</td>
-      <td>{pos.side}</td>
-      <td>{pos.size}</td>
-      <td>{pos.entry_price}</td>
-      <td>{pos.leverage ?? '—'}</td>
-      <td className="text-right">
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={busy}
-          aria-label={`Close ${pos.asset} ${pos.side} position`}
-          className="px-3 py-1 text-xs rounded-md border border-border-2 hover:bg-bg-2 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {busy ? 'Closing…' : 'Close'}
-        </button>
-        {rowError && (
-          <div className="mt-1 text-[11px] text-red-300 max-w-[200px] text-right">
-            {rowError}
-          </div>
-        )}
-      </td>
-    </tr>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-function ErrorBanner({ error, fallback }: { error: unknown; fallback: string }) {
-  return (
-    <div className="p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
-      {formatError(error) || fallback}
-    </div>
-  );
-}
-
-function formatError(e: unknown): string {
-  if (e instanceof ApiError) {
-    // FastAPI structured errors (e.g. 403 risk DENY) carry a JSON
-    // detail object — `ApiError.detail` is the stringified statusText
-    // in that case. Surface the message + status for the operator's
-    // grep convenience.
-    return `[${e.status}] ${e.detail}`;
-  }
-  if (e instanceof Error) {
-    if (/rejected|denied/i.test(e.message)) return 'Wallet signature rejected.';
-    return e.message;
-  }
-  return String(e);
 }

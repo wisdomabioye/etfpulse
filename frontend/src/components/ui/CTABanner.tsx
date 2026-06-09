@@ -20,11 +20,11 @@ interface CTABannerProps {
 export function CTABanner({ title, hint, action, className = '' }: CTABannerProps) {
   return (
     <div
-      className={`border border-border-2 rounded-lg bg-bg-2 px-6 py-5 flex items-center justify-between gap-4 flex-wrap ${className}`.trim()}
+      className={`border border-line-2 rounded-lg bg-bg-2 px-6 py-5 flex items-center justify-between gap-4 flex-wrap ${className}`.trim()}
     >
       <div>
-        <div className="text-[14px] font-semibold text-text-1 mb-1">{title}</div>
-        {hint && <div className="text-[12px] text-text-3">{hint}</div>}
+        <div className="text-[14px] font-semibold text-t1 mb-1">{title}</div>
+        {hint && <div className="text-[12px] text-t3">{hint}</div>}
       </div>
       {action}
     </div>

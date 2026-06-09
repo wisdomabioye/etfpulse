@@ -48,12 +48,12 @@ export function ActionSection({
       <div
         className={
           'flex flex-wrap items-start gap-3' +
-          (withDivider ? ' border-t border-border-2 pt-4' : '')
+          (withDivider ? ' border-t border-line-2 pt-4' : '')
         }
       >
         <div className="flex-1 min-w-[260px]">
-          <div className="text-[14px] font-semibold text-text-1">{title}</div>
-          <div className="text-[12px] text-text-3">{description}</div>
+          <div className="text-[14px] font-semibold text-t1">{title}</div>
+          <div className="text-[12px] text-t3">{description}</div>
         </div>
         {controls}
       </div>

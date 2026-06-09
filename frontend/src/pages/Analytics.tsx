@@ -64,7 +64,7 @@ export function Analytics() {
         }
       />
 
-      <p className="mt-5 text-[14px] text-text-2 max-w-2xl leading-relaxed">
+      <p className="mt-5 text-[14px] text-t2 max-w-2xl leading-relaxed">
         Where does the track record come from? This page breaks the global hit
         rate down by detector, asset, confidence, and direction — plus the shape
         of how close near-misses got to target or stop.
@@ -100,12 +100,12 @@ export function Analytics() {
       </div>
 
       {/* Distribution histograms — full-width, stacked. */}
-      <section className="mt-8 bg-bg-2 border border-border-2 rounded-md p-5">
+      <section className="mt-8 bg-bg-2 border border-line-2 rounded-md p-5">
         <header className="mb-3">
-          <h3 className="text-[15px] font-semibold text-text-1">
+          <h3 className="text-[15px] font-semibold text-t1">
             Max favorable excursion (MFE)
           </h3>
-          <p className="mt-1 text-[12px] text-text-3">
+          <p className="mt-1 text-[12px] text-t3">
             How close did signals get to target? Big bars on the right = signals
             often ran far in our favor. Big bars on the left = entries didn't move.
           </p>
@@ -116,12 +116,12 @@ export function Analytics() {
         />
       </section>
 
-      <section className="mt-4 bg-bg-2 border border-border-2 rounded-md p-5">
+      <section className="mt-4 bg-bg-2 border border-line-2 rounded-md p-5">
         <header className="mb-3">
-          <h3 className="text-[15px] font-semibold text-text-1">
+          <h3 className="text-[15px] font-semibold text-t1">
             Max adverse excursion (MAE)
           </h3>
-          <p className="mt-1 text-[12px] text-text-3">
+          <p className="mt-1 text-[12px] text-t3">
             How close did signals get to stop? Big bars on the right = lots of
             near-stops, suggesting stops are too tight. Flat distribution = stops
             rarely tested.
@@ -134,11 +134,11 @@ export function Analytics() {
       </section>
 
       {/* Honest caveats. Read this if you're tempted to draw conclusions. */}
-      <section className="mt-10 bg-bg-2 border border-border-2 rounded-md px-7 py-6">
-        <h3 className="text-[12px] font-mono uppercase tracking-[0.1em] text-text-3 mb-4">
+      <section className="mt-10 bg-bg-2 border border-line-2 rounded-md px-7 py-6">
+        <h3 className="text-[12px] font-mono uppercase tracking-[0.1em] text-t3 mb-4">
           Caveats
         </h3>
-        <ul className="space-y-3 text-[13px] text-text-2 leading-relaxed list-disc pl-5">
+        <ul className="space-y-3 text-[13px] text-t2 leading-relaxed list-disc pl-5">
           <li>
             Hit rate divides <span className="font-mono">hits / targeted</span>,
             not <span className="font-mono">hits / total</span> — signals where

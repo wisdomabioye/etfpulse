@@ -10,13 +10,14 @@ interface StatusDotProps {
   className?: string;
 }
 
+// Reskinned to the new design tokens (R1): pos→win, neg→loss, muted→t4.
 const COLOR_VAR: Record<DotColor, string> = {
-  accent: 'var(--color-accent)',
-  pos: 'var(--color-pos)',
-  neg: 'var(--color-neg)',
-  warn: 'var(--color-warn)',
-  info: 'var(--color-info)',
-  muted: 'var(--color-text-4)',
+  accent: 'var(--acc)',
+  pos: 'var(--win)',
+  neg: 'var(--loss)',
+  warn: 'var(--warn)',
+  info: 'var(--info)',
+  muted: 'var(--t4)',
 };
 
 /**

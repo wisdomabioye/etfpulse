@@ -66,17 +66,17 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-bg-0 p-4 sm:p-6">
-          <div className="max-w-md mx-auto mt-20 rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-text-1 space-y-4">
+          <div className="max-w-md mx-auto mt-20 rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-t1 space-y-4">
             <h1 className="text-xl font-semibold text-amber-200">
               Something went wrong loading this page
             </h1>
-            <p className="text-text-2 text-sm">
+            <p className="text-t2 text-sm">
               The most common cause is a network blip while loading a code
               bundle. Refreshing the page usually fixes it.
             </p>
             {this.state.error && (
-              <details className="text-text-3 text-xs">
-                <summary className="cursor-pointer text-text-2">
+              <details className="text-t3 text-xs">
+                <summary className="cursor-pointer text-t2">
                   Technical details
                 </summary>
                 <pre className="mt-2 whitespace-pre-wrap break-words">
