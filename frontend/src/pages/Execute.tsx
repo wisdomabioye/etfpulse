@@ -16,7 +16,9 @@
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
 import { ApiKeySection } from '../components/execution/ApiKeySection';
+import { BalanceCard } from '../components/execution/BalanceCard';
 import { ErrorBanner } from '../components/execution/ErrorBanner';
+import { LimitsUsageCard } from '../components/execution/LimitsUsageCard';
 import { OrderFormSection } from '../components/execution/OrderForm';
 import { OrdersTableSection } from '../components/execution/OrdersPanel';
 import { PositionsSection } from '../components/execution/PositionsPanel';
@@ -103,13 +105,20 @@ function ExecuteInner() {
             />
           )}
 
-          {/* Prototype 2-column trade layout: order form left (sticky), live
-              positions + orders right. */}
+          {/* 2-column trade layout. The order-form column (left) is the tall
+              one — entry + SL/TP + cost preview + limits — so it scrolls with
+              the page; pinning it would overflow the viewport and defeat
+              sticky. The shorter live-state column (right) stays fixed in view
+              while you scroll the form. */}
           <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-6 items-start">
-            <div className="lg:sticky lg:top-[96px]">
+            <div className="space-y-6">
               <OrderFormSection me={account} signalId={signalId} signal={signalQuery.data} />
+              {/* P0 — caps + usage so the user sees headroom before a 403. */}
+              <LimitsUsageCard />
             </div>
-            <div className="space-y-6 min-w-0">
+            <div className="space-y-6 min-w-0 lg:sticky lg:top-[96px]">
+              {/* P1 — real spot wallet balances. */}
+              <BalanceCard paper={account.paper_trade} />
               <PositionsSection />
               <OrdersTableSection />
             </div>

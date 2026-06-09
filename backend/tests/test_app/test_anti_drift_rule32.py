@@ -67,6 +67,8 @@ EXPECTED_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/execution/orders/{order_id}"),
         ("GET", "/api/execution/positions"),
         ("GET", "/api/execution/symbols"),
+        ("GET", "/api/execution/limits"),
+        ("GET", "/api/execution/account-summary"),
     }
 )
 
@@ -95,6 +97,8 @@ EXPECTED_NON_AUTHED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/signals/{signal_id}"),
         ("GET", "/api/dashboard/stats"),
         ("GET", "/api/regime"),
+        # Public read — latest regime history strip; no user data (same as /regime).
+        ("GET", "/api/regime/history"),
         ("GET", "/api/track-record"),
         ("GET", "/api/track-record/calibration"),
         ("GET", "/api/track-record/per-detector"),

@@ -28,6 +28,7 @@ vi.mock('../auth/useAuth', () => ({
 
 vi.mock('../api/queries', () => ({
   useSignal: () => mockUseSignal(),
+  useSpotPrices: () => ({ data: { btc: 65000, eth: 3000 }, isLoading: false, isError: false }),
 }));
 
 vi.mock('wagmi', () => ({
@@ -74,6 +75,8 @@ vi.mock('../hooks/useExecution', async () => {
     }),
     usePrepareCancel: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useSubmitCancel: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useExecutionLimits: () => ({ data: undefined, isLoading: false, isError: false }),
+    useAccountSummary: () => ({ data: undefined, isLoading: false, isError: false }),
     useClosePosition: () => ({
       mutate: vi.fn(),
       mutateAsync: mockClosePosition,

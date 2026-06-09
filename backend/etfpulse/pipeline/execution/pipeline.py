@@ -723,7 +723,18 @@ def _build_new_order_bundle(
                         "side": request.side,
                         "type": request.order_type,
                         "timeInForce": request.time_in_force,
-                        "price": _decimal_to_str(request.requested_price),
+                        # SoDEX MARKET orders carry NO price (Go SDK golden
+                        # capture: market = quantity/funds only, no `price`
+                        # key). Only LIMIT serialises a price; a market payload
+                        # with a price diverges from the SDK-canonical shape
+                        # and the gateway's re-hash would reject the signature.
+                        # The risk gate's notional reference (resolved upstream
+                        # for market orders) deliberately never reaches the wire.
+                        "price": (
+                            _decimal_to_str(request.requested_price)
+                            if request.order_type == SodexOrderType.LIMIT.value
+                            else None
+                        ),
                         "quantity": _decimal_to_str(request.requested_size),
                         "funds": None,
                     }
@@ -768,7 +779,18 @@ def _build_new_order_bundle(
                         "side": request.side,
                         "type": request.order_type,
                         "timeInForce": request.time_in_force,
-                        "price": _decimal_to_str(request.requested_price),
+                        # SoDEX MARKET orders carry NO price (Go SDK golden
+                        # capture: market = quantity/funds only, no `price`
+                        # key). Only LIMIT serialises a price; a market payload
+                        # with a price diverges from the SDK-canonical shape
+                        # and the gateway's re-hash would reject the signature.
+                        # The risk gate's notional reference (resolved upstream
+                        # for market orders) deliberately never reaches the wire.
+                        "price": (
+                            _decimal_to_str(request.requested_price)
+                            if request.order_type == SodexOrderType.LIMIT.value
+                            else None
+                        ),
                         "quantity": _decimal_to_str(request.requested_size),
                         "funds": None,
                         "stopPrice": _decimal_to_str(request.stop_price),

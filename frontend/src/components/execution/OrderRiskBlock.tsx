@@ -15,8 +15,12 @@ interface OrderRiskBlockProps {
   setTakeProfit: (v: string) => void;
   reduceOnly: boolean;
   setReduceOnly: (v: boolean) => void;
-  maxLoss: number | null;
-  rr: number | null;
+  /** Entry price / size / leverage (raw form strings) — drive the live
+   *  max-loss + R:R readout. Co-located here so the risk math lives with the
+   *  risk UI. */
+  price: string;
+  size: string;
+  leverage: string;
 }
 
 export function OrderRiskBlock({
@@ -26,9 +30,20 @@ export function OrderRiskBlock({
   setTakeProfit,
   reduceOnly,
   setReduceOnly,
-  maxLoss,
-  rr,
+  price,
+  size,
+  leverage,
 }: OrderRiskBlockProps) {
+  const nPrice = Number(price);
+  const nStop = Number(stopLoss);
+  const nSize = Number(size);
+  const nLev = Number(leverage) || 1;
+  const ready = !!stopLoss && nPrice > 0 && nStop > 0 && nSize > 0;
+  const maxLoss = ready ? Math.abs((nPrice - nStop) * nSize) * nLev : null;
+  const rr =
+    ready && takeProfit && Number(takeProfit) > 0
+      ? Math.abs(Number(takeProfit) - nPrice) / (Math.abs(nPrice - nStop) || 1)
+      : null;
   return (
     <div className="p-3.5 bg-bg-1 border border-line-2 rounded-md">
       <div className="font-mono text-[10px] text-loss tracking-[0.1em] uppercase mb-3 flex items-center gap-[7px]">

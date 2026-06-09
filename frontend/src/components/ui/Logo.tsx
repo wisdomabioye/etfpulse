@@ -8,23 +8,26 @@ interface LogoProps {
 
 /**
  * Brand mark + "ETFPulse" wordmark, ported 1:1 from the prototype's `Logo`.
- * The amber square + pulse-line SVG uses `var(--acc)` so it tracks the
- * locked accent. Renders as a <button> when `onClick` is given (a11y — the
- * prototype used a clickable <div>), otherwise a presentational <span>.
+ * The real `eftpulse_icon.svg` (from /public) carries its own baked-in
+ * teal→blue gradient, so it's embedded as an <img> — an external SVG via
+ * <img> is colour-isolated (it can't inherit `currentColor`/`var(--acc)`),
+ * which is exactly what we want: the brand colours are fixed, not theme-
+ * tracked. The wordmark stays as themed text (`text-t1`). Renders as a
+ * <button> when `onClick` is given (a11y), otherwise a presentational <span>.
  */
 export function Logo({ size = 16, onClick, className = '' }: LogoProps) {
   const mark = (
     <>
-      <svg width={size + 4} height={size + 4} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="1" y="1" width="22" height="22" rx="6" stroke="var(--acc)" strokeWidth="1.5" />
-        <path
-          d="M5 14 L9 14 L11 7 L14 18 L16 11 L19 11"
-          stroke="var(--acc)"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
+      <img
+        src="/eftpulse_icon.svg"
+        alt=""
+        aria-hidden="true"
+        // Icon viewBox is 594×512 (wider than tall); fix the height and let
+        // width auto-scale so it never squishes. `+6` keeps the mark a touch
+        // taller than the cap height for optical balance.
+        style={{ height: size + 6, width: 'auto' }}
+        className="block shrink-0"
+      />
       <span className="font-semibold tracking-[-0.02em]" style={{ fontSize: size }}>
         ETFPulse
       </span>

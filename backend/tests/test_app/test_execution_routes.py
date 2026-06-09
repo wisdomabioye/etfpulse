@@ -169,6 +169,78 @@ async def test_prepare_happy_path_spot(app_and_client, db_session):
     assert body["typed_data"]["primaryType"] == "ExchangeAction"
 
 
+async def test_prepare_market_order_resolves_spot_reference(
+    app_and_client, db_session, monkeypatch
+):
+    """A MARKET order carries no wire price, but the gate needs a reference
+    to size notional. The route resolves a spot reference so the order is no
+    longer wrongly denied `missing_requested_price`."""
+    _, client = app_and_client
+    await _seed_btc_spot_symbol(db_session)
+    user = await _seed_user(db_session)
+
+    async def _fake_spot(_asset):
+        return (Decimal("65000"), "sosovalue")
+
+    monkeypatch.setattr(
+        "etfpulse.api.routes.execution.get_spot_price_with_source", _fake_spot
+    )
+    body = _spot_prepare_body(order_type="market", time_in_force="ioc", requested_price=None)
+    r = await client.post("/api/execution/prepare", json=body, headers=_auth(user))
+    assert r.status_code == 200, r.text
+    assert r.json()["order_id"]
+
+
+async def test_prepare_market_order_503_when_oracle_unavailable(
+    app_and_client, db_session, monkeypatch
+):
+    """If the spot oracle can't price the market order, the route 503s with an
+    operator-actionable detail rather than a confusing risk-deny."""
+    _, client = app_and_client
+    await _seed_btc_spot_symbol(db_session)
+    user = await _seed_user(db_session)
+
+    async def _no_price(_asset):
+        return None
+
+    monkeypatch.setattr(
+        "etfpulse.api.routes.execution.get_spot_price_with_source", _no_price
+    )
+    body = _spot_prepare_body(order_type="market", time_in_force="ioc", requested_price=None)
+    r = await client.post("/api/execution/prepare", json=body, headers=_auth(user))
+    assert r.status_code == 503
+    assert "market order" in r.json()["detail"]
+
+
+async def test_prepare_market_order_ignores_client_price_for_sizing(
+    app_and_client, db_session, monkeypatch
+):
+    """Cap-bypass guard: a market order's notional must be sized on the ORACLE
+    price, never a client-supplied `requested_price` (which never reaches the
+    wire). A 0.1 BTC market order at the oracle's 65000 = 6500 > 5000 per-symbol
+    cap → DENY, even though the client passed price "1" (which would size to
+    0.1 and slip under the cap)."""
+    _, client = app_and_client
+    await _seed_btc_spot_symbol(db_session)
+    user = await _seed_user(db_session)
+
+    async def _fake_spot(_asset):
+        return (Decimal("65000"), "sosovalue")
+
+    monkeypatch.setattr(
+        "etfpulse.api.routes.execution.get_spot_price_with_source", _fake_spot
+    )
+    body = _spot_prepare_body(
+        order_type="market",
+        time_in_force="ioc",
+        requested_price="1",  # hostile under-statement; must be ignored
+        requested_size="0.1",
+    )
+    r = await client.post("/api/execution/prepare", json=body, headers=_auth(user))
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["reason"] == "per_symbol_notional_cap_exceeded"
+
+
 async def test_prepare_503_on_missing_symbol(app_and_client, db_session):
     """No SodexSymbol row → SymbolNotResolved → 503 with operator hint."""
     _, client = app_and_client

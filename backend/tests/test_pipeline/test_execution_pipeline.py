@@ -381,6 +381,33 @@ class TestStopFieldsReachSignedPayload:
         item = json.loads(order.eip712_payload)["params"]["orders"][0]
         assert item["reduceOnly"] is True
         assert "stopPrice" not in item  # a close is not a stop order
+        # Finding B regression: a MARKET order must NOT carry `price` in the
+        # signed payload (golden capture: market = quantity-only). The close
+        # request sets requested_price for the risk gate's notional sizing,
+        # but the builder must omit it from the wire — else the signed bytes
+        # diverge from the SDK-canonical market shape.
+        assert "price" not in item
+
+    async def test_market_order_omits_price_despite_reference(self, db_session):
+        """A spot MARKET order with a reference price set (for the gate's
+        notional sizing) must omit `price` from the signed payload. Pins the
+        price=LIMIT-only builder rule (Finding B). The complementary
+        limit-carries-price case is pinned by the `spot_limit_buy` golden
+        fixture in test_sodex_typed_data.py."""
+        await _seed_btc_spot_symbol(db_session)
+        market_req = RiskRequest(
+            venue=Venue.SODEX_SPOT.value,
+            asset="BTC",
+            side=SodexOrderSide.BUY.value,
+            order_type=SodexOrderType.MARKET.value,
+            time_in_force=SodexTimeInForce.IOC.value,
+            requested_size=Decimal("0.01"),
+            requested_price=Decimal("65000"),  # reference for the gate only
+            is_conditional=False,
+        )
+        market = await self._prepared_order(db_session, market_req)
+        m_item = json.loads(market.eip712_payload)["params"]["orders"][0]
+        assert "price" not in m_item
 
 
 # ---------------------------------------------------------------------------

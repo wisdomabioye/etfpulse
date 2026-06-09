@@ -11,13 +11,12 @@ No auth (Phase 1 scope per open_issues #43).
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import structlog
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etfpulse.api.deps import get_db_session
@@ -43,7 +42,9 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
     hero fields (`last_target_hit`, `last_stop_saved`) are None when no
     outcome matches the strict selection rules.
 
-    Five roundtrips fired in parallel via `asyncio.gather`:
+    Five roundtrips, run SEQUENTIALLY on the shared request-scoped session
+    (a single AsyncSession cannot execute concurrently — see the gather note
+    at the call site):
         1. Aggregate over `signals` (count/today/avg/max-created-at)
         2. Single-row lookup on `regime_snapshots` (via `get_latest_regime`
            so this endpoint and `/api/regime` cannot drift on "latest")
@@ -54,8 +55,8 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
         5. PR E.1 — latest `SignalOutcome` with `hit_stop=True` + non-NULL
            levels + `max_adverse > 0`, joined the same way.
 
-    All five are independent — gather amortises the latency to the longest
-    single query rather than the sum of five.
+    All five share one connection, so they serialize regardless; sequential
+    awaits cost the same as a (correct) gather would and avoid the race.
     """
     now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -82,7 +83,7 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
 
     # PR E.1 — hero card queries. Two separate LIMIT-1 selects (one per
     # outcome bucket) rather than a CTE — clearer SQL, same plan at Phase 1
-    # scale, and `asyncio.gather` already amortises the round-trip cost.
+    # scale, and the per-query round-trip cost is negligible at this volume.
     # `evaluated_outcomes_predicate()` is explicit so a NULL never sorts
     # ahead of a real value regardless of Postgres default null-ordering,
     # AND the definition stays in lockstep with calibration / per-detector
@@ -126,19 +127,18 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
         .limit(1)
     )
 
-    (
-        signals_result,
-        snapshot,
-        outcomes_result,
-        target_hit_result,
-        stop_saved_result,
-    ) = await asyncio.gather(
-        session.execute(signals_stmt),
-        get_latest_regime(session),
-        session.execute(outcomes_stmt),
-        session.execute(target_hit_stmt),
-        session.execute(stop_saved_stmt),
-    )
+    # Run sequentially, NOT via asyncio.gather: these all share the one
+    # request-scoped AsyncSession, and a single session cannot execute
+    # concurrently — gather raises `InvalidRequestError: This session is
+    # provisioning a new connection; concurrent operations are not permitted`.
+    # A single session also serializes on one DB connection, so gather offered
+    # no real parallelism here anyway. (True fan-out would require a per-query
+    # session via async_session(); not worth it for five fast aggregates.)
+    signals_result = await session.execute(signals_stmt)
+    snapshot = await get_latest_regime(session)
+    outcomes_result = await session.execute(outcomes_stmt)
+    target_hit_result = await session.execute(target_hit_stmt)
+    stop_saved_result = await session.execute(stop_saved_stmt)
     row = signals_result.one()
     outcome_row = outcomes_result.one()
     last_target_hit = _build_hero_outcome(target_hit_result.first())
@@ -181,7 +181,7 @@ async def get_stats(session: AsyncSession = Depends(get_db_session)) -> Dashboar
     )
 
 
-def _build_hero_outcome(row: tuple | None) -> HeroOutcome | None:
+def _build_hero_outcome(row: Row[tuple[SignalOutcome, Signal]] | None) -> HeroOutcome | None:
     """Map a `(SignalOutcome, Signal)` row to a `HeroOutcome` DTO, or None.
 
     Pulled into a helper because both hero slots use the identical mapping;

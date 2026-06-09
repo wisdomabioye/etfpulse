@@ -47,6 +47,8 @@ tx discarded).
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
@@ -56,6 +58,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from etfpulse.adapters.sodex._http import SodexError, SodexHttpError
+from etfpulse.adapters.sodex.perps_client import SodexPerpsClient
 from etfpulse.adapters.sodex.schemas import (
     OrderSide as SodexOrderSide,
 )
@@ -68,10 +72,16 @@ from etfpulse.adapters.sodex.schemas import (
 from etfpulse.adapters.sodex.schemas import (
     TimeInForce as SodexTimeInForce,
 )
+from etfpulse.adapters.sodex.spot_client import SodexSpotClient
 from etfpulse.api.auth import get_current_user
 from etfpulse.api.deps import get_db_session, get_sodex_clients
 from etfpulse.api.schemas.execution import (
     VALID_VENUES,
+    AccountSummaryResponse,
+    BalanceOut,
+    ExecutionLimitsResponse,
+    FeeOut,
+    MarkPriceOut,
     OrderOut,
     PaginatedOrders,
     PositionOut,
@@ -102,10 +112,11 @@ from etfpulse.pipeline.execution.pipeline import (
     submit_cancel,
     submit_new,
 )
-from etfpulse.pipeline.execution.risk import RiskRequest
+from etfpulse.pipeline.execution.risk import RiskRequest, compute_usage
 from etfpulse.pipeline.execution.symbols import SymbolNotResolved
 from etfpulse.pipeline.prices import Asset as PriceAsset
 from etfpulse.pipeline.prices import get_spot_price_with_source
+from etfpulse.pipeline.symbols_refresh import extract_asset_from_symbol_name
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/execution", tags=["execution"])
@@ -141,6 +152,37 @@ async def post_prepare(
         )
 
     risk_req = _to_risk_request(body)
+
+    # Market orders carry no price on the wire (SoDEX market payload omits it),
+    # but the risk gate needs a reference to size notional for the cap checks.
+    # Resolve a spot reference the same way close-position does and thread it
+    # onto the gate request. The builder serialises `price` for LIMIT only, so
+    # this reference is used purely for risk sizing + the DB record and never
+    # reaches the signed payload.
+    #
+    # ALWAYS override for market orders — we must NOT trust a client-supplied
+    # `requested_price` on a market order: since it never reaches the wire, a
+    # hostile client could understate it to size notional below the caps while
+    # the venue fills at true market. The oracle price is the only trustworthy
+    # reference, so it wins unconditionally for market orders.
+    if risk_req.order_type == SodexOrderType.MARKET.value:
+        asset_up = body.asset.upper()
+        if asset_up not in {"BTC", "ETH"}:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"price oracle does not support asset={asset_up}",
+            )
+        price_result = await get_spot_price_with_source(cast(PriceAsset, asset_up))
+        if price_result is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    f"spot price unavailable for asset={asset_up} — cannot size "
+                    "market order. Retry shortly."
+                ),
+            )
+        ref_price, _source = price_result
+        risk_req = replace(risk_req, requested_price=ref_price)
 
     try:
         result: PrepareResult = await prepare_new(
@@ -650,6 +692,170 @@ async def list_symbols(
             )
             for r in rows
         ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Limits + usage (P0) — DB-only, no SoDEX calls
+# ---------------------------------------------------------------------------
+
+
+@router.get("/limits", response_model=ExecutionLimitsResponse)
+async def get_limits(
+    session: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    asset: str | None = Query(default=None, max_length=10),
+) -> ExecutionLimitsResponse:
+    """Risk caps + the user's current usage against them.
+
+    Lets the FE show limits + headroom (and warn pre-submit) instead of
+    surfacing them only via a 403 risk-DENY. DB-only — reuses the gate's
+    own `compute_usage` so the numbers match enforcement exactly.
+
+    `asset` (canonical base, e.g. ``BTC``) scopes the per-symbol figure;
+    omit it for the daily + open-order numbers alone. Normalised to
+    uppercase so ``btc`` and ``BTC`` agree with the stored asset.
+    """
+    normalized_asset = asset.upper() if asset else None
+    usage = await compute_usage(session, user_id=user.id, asset=normalized_asset)
+    return ExecutionLimitsResponse(
+        max_open_orders=settings.execution_max_open_orders_per_user,
+        open_orders_used=usage.open_orders,
+        daily_notional_cap=settings.execution_daily_notional_usd_cap,
+        daily_notional_used=usage.daily_notional,
+        per_symbol_cap=settings.execution_per_symbol_notional_usd_cap,
+        per_symbol_used=usage.per_symbol_notional,
+        asset=normalized_asset,
+        max_leverage=settings.execution_max_leverage,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Account summary (P1/P2) — SoDEX reads: balances + fee + mark prices
+# ---------------------------------------------------------------------------
+#
+# Per-call failure handling mirrors `wallet.py:get_sodex_bootstrap`:
+# SodexHttpError(404) → empty/None (no account / no data on the gateway);
+# any other SodexError (rate-limit, 5xx, envelope, parse) propagates so the
+# route returns 503 and the FE degrades to a "summary unavailable" notice.
+
+
+async def _safe_spot_balances(client: SodexSpotClient, address: str) -> list[BalanceOut]:
+    """Spot balances → `[BalanceOut]`; 404 → empty (no SoDEX account)."""
+    try:
+        result = await client.get_balances(address)
+    except SodexHttpError as exc:
+        if exc.status_code == 404:
+            return []
+        raise
+    out: list[BalanceOut] = []
+    for b in result.balances:
+        total = Decimal(b.total)
+        locked = Decimal(b.locked)
+        out.append(
+            BalanceOut(asset=b.asset, total=total, locked=locked, available=total - locked)
+        )
+    return out
+
+
+async def _safe_fee(client: SodexSpotClient, address: str) -> FeeOut | None:
+    """Maker/taker fee rates; 404 → None (no account / no tier yet)."""
+    try:
+        fee = await client.get_fee_rate(address)
+    except SodexHttpError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+    return FeeOut(maker_rate=Decimal(fee.maker_fee_rate), taker_rate=Decimal(fee.taker_fee_rate))
+
+
+async def _safe_mark_prices(client: SodexPerpsClient) -> list[MarkPriceOut]:
+    """Perps mark prices (market data, no address); 404 → empty."""
+    try:
+        marks = await client.get_mark_prices()
+    except SodexHttpError as exc:
+        if exc.status_code == 404:
+            return []
+        raise
+    out: list[MarkPriceOut] = []
+    for m in marks:
+        try:
+            base = extract_asset_from_symbol_name(m.symbol)
+        except ValueError:
+            # Malformed venue symbol — skip rather than poison the batch.
+            continue
+        out.append(
+            MarkPriceOut(
+                symbol=m.symbol,
+                asset=base,
+                mark_price=Decimal(m.mark_price),
+                funding_rate=Decimal(m.funding_rate),
+                next_funding_time=m.next_funding_time,
+            )
+        )
+    return out
+
+
+@router.get("/account-summary", response_model=AccountSummaryResponse)
+async def get_account_summary(
+    user: User = Depends(get_current_user),
+    clients: tuple[SodexSpotClient, SodexPerpsClient] = Depends(get_sodex_clients),
+) -> AccountSummaryResponse:
+    """Aggregated SoDEX read state for the Execute page: spot balances, fee
+    tier, and perps mark prices (live uPnL + funding).
+
+    Read-only; wallet must be bound (`get_current_user`). The three reads run
+    in parallel; a 404 on any degrades that field to empty/None, while a real
+    SoDEX failure (rate-limit/5xx) surfaces as 503 so the FE shows a
+    "summary unavailable" notice rather than a half-empty card.
+
+    NOTE: for paper-trade users these reflect the REAL wallet on SoDEX — paper
+    orders are simulated in our DB and never touch this. The FE labels that.
+    """
+    spot, perps = clients
+    address = user.wallet_address
+    assert address is not None  # get_current_user gates on bound wallet
+    try:
+        spot_balances, fee, mark_prices = await asyncio.gather(
+            _safe_spot_balances(spot, address),
+            _safe_fee(spot, address),
+            _safe_mark_prices(perps),
+        )
+    except SodexError as exc:
+        log.warning(
+            "account_summary_failed",
+            user_id=user.id,
+            wallet=address,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="account_summary_unavailable",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        # Defense-in-depth: this aggregates THREE external SoDEX reads. A
+        # non-SodexError escape (e.g. a response-shape ValidationError or a
+        # Decimal parse on an unexpected value) must NOT 500 the page — the FE
+        # treats 503 as "summary unavailable" and degrades gracefully. Log the
+        # full traceback at error level so the root cause is debuggable without
+        # crashing the request.
+        log.error(
+            "account_summary_unexpected_error",
+            user_id=user.id,
+            wallet=address,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="account_summary_unavailable",
+        ) from exc
+    return AccountSummaryResponse(
+        spot_balances=spot_balances,
+        fee=fee,
+        mark_prices=mark_prices,
     )
 
 

@@ -208,6 +208,56 @@ _NOTIONAL_COUNTED_STATUSES: frozenset[str] = frozenset(
     if s not in {OrderStatus.REJECTED, OrderStatus.EXPIRED, OrderStatus.CANCELLED}
 )
 
+# Rolling window for the notional caps. Single source of truth — both the
+# risk gate (`check_order`) AND the read-only usage snapshot (`compute_usage`,
+# surfaced via GET /api/execution/limits) measure over this exact window, so
+# what the UI shows and what the gate enforces can never drift.
+NOTIONAL_WINDOW = timedelta(hours=24)
+
+
+@dataclass(frozen=True, slots=True)
+class UsageSnapshot:
+    """Point-in-time view of a user's exposure against the risk caps.
+
+    `per_symbol_notional` is None when no asset was requested (the daily +
+    open-order numbers are asset-independent). All notionals are gross,
+    both-sides, leverage-excluded — the same basis the gate enforces.
+    """
+
+    open_orders: int
+    daily_notional: Decimal
+    per_symbol_notional: Decimal | None
+
+
+async def compute_usage(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    asset: str | None,
+) -> UsageSnapshot:
+    """Compute a user's current exposure against the caps over `NOTIONAL_WINDOW`.
+
+    Read-only. Reuses the SAME `_count_open_orders` + `_sum_notional` helpers
+    and window the gate uses, so the surfaced numbers match enforcement
+    exactly. `asset` (canonical base, e.g. "BTC") scopes the per-symbol
+    figure; pass None to skip it.
+    """
+    window_start = datetime.now(UTC) - NOTIONAL_WINDOW
+    open_orders = await _count_open_orders(session, user_id=user_id)
+    daily_notional = await _sum_notional(
+        session, user_id=user_id, window_start=window_start, asset=None
+    )
+    per_symbol_notional = (
+        await _sum_notional(session, user_id=user_id, window_start=window_start, asset=asset)
+        if asset is not None
+        else None
+    )
+    return UsageSnapshot(
+        open_orders=open_orders,
+        daily_notional=daily_notional,
+        per_symbol_notional=per_symbol_notional,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -547,9 +597,10 @@ async def check_order(
     if not is_reduce_only and request.requested_price is not None:
         new_notional = request.requested_size * request.requested_price
 
-        # 24h rolling window.
+        # 24h rolling window — shared with `compute_usage` (the /limits
+        # readout) via NOTIONAL_WINDOW so the gate + UI can't drift.
         now = datetime.now(UTC)
-        window_start = now - timedelta(hours=24)
+        window_start = now - NOTIONAL_WINDOW
 
         daily_notional_existing = await _sum_notional(
             session,

@@ -32,6 +32,7 @@ vi.mock('../auth/useAuth', () => ({
 
 vi.mock('../api/queries', () => ({
   useSignal: () => mockUseSignal(),
+  useSpotPrices: () => ({ data: { btc: 65000, eth: 3000 }, isLoading: false, isError: false }),
 }));
 
 // Stub the wagmi-touching hooks to neutral returns so OrderForm can
@@ -78,6 +79,8 @@ vi.mock('../hooks/useExecution', async () => {
     useSubmitNew: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
     usePrepareCancel: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useSubmitCancel: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useExecutionLimits: () => ({ data: undefined, isLoading: false, isError: false }),
+    useAccountSummary: () => ({ data: undefined, isLoading: false, isError: false }),
     useRequestLive: () => ({ mutate: vi.fn(), isPending: false, data: undefined }),
     useSodexBootstrap: () => ({ data: undefined, isLoading: false, isError: false }),
     useSetApiKey: () => ({

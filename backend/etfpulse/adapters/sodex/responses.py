@@ -41,7 +41,7 @@ no signing primitives. Verified by the existing grep test.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Shared model config — applied to every DTO.
@@ -247,17 +247,24 @@ class PerpsMarkPrice(BaseModel):
 
 
 class BalanceEntry(BaseModel):
-    """One row in `data.balances`. SoDEX returns these as compact
-    objects with short keys — verbatim from V.3 capture.
-    `i`=instrument ID, `a`=asset name, `t`=total, `l`=locked.
-    Spot uses these keys in both `/state.B` and `/balances.balances`."""
+    """One row in a balances array. SoDEX returns TWO key conventions:
+    `/accounts/{addr}/balances` uses LONG keys (`id`, `coin`, `total`,
+    `locked` — confirmed against a funded testnet wallet), while the
+    compact `/state.B` shape uses SHORT keys (`i`, `a`, `t`, `l`). The
+    V.3 capture's balances array was EMPTY (unfunded burner), so the
+    short-key assumption was never exercised — the funded-wallet 500 in
+    `account-summary` surfaced the long-key reality.
+
+    `AliasChoices` accepts BOTH forms per field so a single model serves
+    both endpoints. `asset` carries the venue coin name verbatim (e.g.
+    `vUSDC`); the route maps it to the display symbol downstream."""
 
     model_config = _RESPONSE_MODEL_CONFIG
 
-    instrument_id: int = Field(alias="i")
-    asset: str = Field(alias="a")
-    total: str = Field(alias="t")
-    locked: str = Field(alias="l")
+    instrument_id: int = Field(validation_alias=AliasChoices("i", "id"))
+    asset: str = Field(validation_alias=AliasChoices("a", "coin"))
+    total: str = Field(validation_alias=AliasChoices("t", "total"))
+    locked: str = Field(validation_alias=AliasChoices("l", "locked"))
 
 
 class AccountBalances(BaseModel):

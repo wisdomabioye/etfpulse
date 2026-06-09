@@ -22,6 +22,7 @@ import {
 import { toSodexTypedSignature } from '../../lib/sodex-sig';
 import { Button, Callout, Card } from '../ui';
 import { ErrorBanner } from './ErrorBanner';
+import { OrderCostPreview } from './OrderCostPreview';
 import { OrderEntryFields } from './OrderEntryFields';
 import { OrderRiskBlock } from './OrderRiskBlock';
 import { formatError } from './execErrors';
@@ -133,18 +134,6 @@ function OrderForm({ me, signalId, signal }: OrderFormProps) {
   const slActive = isPerps && !!stopLoss;
   const tpActive = isPerps && !!takeProfit;
   const signCount = 1 + (slActive ? 1 : 0) + (tpActive ? 1 : 0);
-
-  // Live risk readout for the attachment block.
-  const nPrice = Number(price);
-  const nStop = Number(stopLoss);
-  const nSize = Number(size);
-  const nLev = Number(leverage) || 1;
-  const riskReady = isPerps && stopLoss && nPrice > 0 && nStop > 0 && nSize > 0;
-  const maxLoss = riskReady ? Math.abs((nPrice - nStop) * nSize) * nLev : null;
-  const rr =
-    riskReady && takeProfit && Number(takeProfit) > 0
-      ? Math.abs(Number(takeProfit) - nPrice) / (Math.abs(nPrice - nStop) || 1)
-      : null;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -260,10 +249,21 @@ function OrderForm({ me, signalId, signal }: OrderFormProps) {
             setTakeProfit={setTakeProfit}
             reduceOnly={reduceOnly}
             setReduceOnly={setReduceOnly}
-            maxLoss={maxLoss}
-            rr={rr}
+            price={price}
+            size={size}
+            leverage={leverage}
           />
         )}
+
+        {/* P2 — cost + fee + funding + cap headroom (pre-empts the cap 403). */}
+        <OrderCostPreview
+          asset={asset}
+          isPerps={isPerps}
+          orderType={orderType}
+          reduceOnly={isPerps && reduceOnly}
+          size={size}
+          price={price}
+        />
 
         {/* honest sign-count */}
         <Callout tone="warn">

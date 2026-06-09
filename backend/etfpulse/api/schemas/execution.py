@@ -342,3 +342,70 @@ class SymbolsResponse(BaseModel):
 
 
 VALID_VENUES: frozenset[str] = frozenset(item.value for item in Venue)
+
+
+# ---------------------------------------------------------------------------
+# Limits + usage (P0) — GET /api/execution/limits
+# ---------------------------------------------------------------------------
+
+
+class ExecutionLimitsResponse(BaseModel):
+    """Risk caps + the user's current usage against them.
+
+    All notional figures are gross, both-sides, leverage-excluded over the
+    rolling 24h window (the exact basis the risk gate enforces — see
+    `pipeline.execution.risk.compute_usage`). `per_symbol_*` is populated only
+    when an `asset` was queried. Decimals serialize as JSON strings (same
+    convention as `OrderOut`)."""
+
+    max_open_orders: int
+    open_orders_used: int
+    daily_notional_cap: Decimal
+    daily_notional_used: Decimal
+    per_symbol_cap: Decimal
+    per_symbol_used: Decimal | None
+    asset: str | None
+    max_leverage: int
+
+
+# ---------------------------------------------------------------------------
+# Account summary (P1/P2) — GET /api/execution/account-summary
+# ---------------------------------------------------------------------------
+
+
+class BalanceOut(BaseModel):
+    """One spot balance row. `available = total - locked`."""
+
+    asset: str
+    total: Decimal
+    locked: Decimal
+    available: Decimal
+
+
+class FeeOut(BaseModel):
+    """Maker/taker fee rates (fractions, e.g. 0.0005 = 5 bps)."""
+
+    maker_rate: Decimal
+    taker_rate: Decimal
+
+
+class MarkPriceOut(BaseModel):
+    """Perps mark price + funding for one symbol. `asset` is the canonical
+    base (e.g. "BTC") extracted from `symbol` for client-side joins."""
+
+    symbol: str
+    asset: str
+    mark_price: Decimal
+    funding_rate: Decimal
+    next_funding_time: int
+
+
+class AccountSummaryResponse(BaseModel):
+    """Aggregated SoDEX read state for the Execute page: spot balances, fee
+    tier, and perps mark prices (for live uPnL + funding). Any field can be
+    empty/None independently — a venue with no account 404s to empty rather
+    than failing the whole summary."""
+
+    spot_balances: list[BalanceOut]
+    fee: FeeOut | None
+    mark_prices: list[MarkPriceOut]

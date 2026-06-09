@@ -294,3 +294,59 @@ export function fetchPositions(): Promise<PositionsResponse> {
 export function fetchSymbols(venue?: Venue): Promise<SymbolsResponse> {
   return apiGet<SymbolsResponse>('/api/execution/symbols', venue ? { venue } : undefined);
 }
+
+// ---------------------------------------------------------------------------
+// Limits + usage (P0) — mirrors `ExecutionLimitsResponse`. All notionals are
+// decimal strings; gross / both-sides / leverage-excluded over a 24h window.
+// ---------------------------------------------------------------------------
+
+export interface ExecutionLimits {
+  max_open_orders: number;
+  open_orders_used: number;
+  daily_notional_cap: string;
+  daily_notional_used: string;
+  per_symbol_cap: string;
+  /** Null when no `asset` was queried. */
+  per_symbol_used: string | null;
+  asset: string | null;
+  max_leverage: number;
+}
+
+export function fetchExecutionLimits(asset?: string): Promise<ExecutionLimits> {
+  return apiGet<ExecutionLimits>('/api/execution/limits', asset ? { asset } : undefined);
+}
+
+// ---------------------------------------------------------------------------
+// Account summary (P1/P2) — mirrors `AccountSummaryResponse`. Decimals are
+// strings; `asset` on a mark is the canonical base ("BTC") for client joins.
+// ---------------------------------------------------------------------------
+
+export interface Balance {
+  asset: string;
+  total: string;
+  locked: string;
+  available: string;
+}
+
+export interface Fee {
+  maker_rate: string;
+  taker_rate: string;
+}
+
+export interface MarkPrice {
+  symbol: string;
+  asset: string;
+  mark_price: string;
+  funding_rate: string;
+  next_funding_time: number;
+}
+
+export interface AccountSummary {
+  spot_balances: Balance[];
+  fee: Fee | null;
+  mark_prices: MarkPrice[];
+}
+
+export function fetchAccountSummary(): Promise<AccountSummary> {
+  return apiGet<AccountSummary>('/api/execution/account-summary');
+}

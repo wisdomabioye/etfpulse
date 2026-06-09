@@ -24,6 +24,8 @@ import {
   type SetApiKeyRequest,
   type SubmitResponse,
   type Venue,
+  fetchAccountSummary,
+  fetchExecutionLimits,
   fetchOrders,
   fetchPositions,
   fetchSodexBootstrap,
@@ -50,6 +52,8 @@ const KEY_SYMBOLS = ['execution', 'symbols'] as const;
 // `address` slot lets us refetch independently per wallet if the
 // page ever supports wallet switching mid-session.
 const KEY_SODEX_BOOTSTRAP = ['wallet', 'sodex-bootstrap'] as const;
+const KEY_LIMITS = ['execution', 'limits'] as const;
+const KEY_ACCOUNT_SUMMARY = ['execution', 'account-summary'] as const;
 
 // ---------------------------------------------------------------------------
 // Reads
@@ -112,6 +116,45 @@ export function useSymbols(venue?: Venue) {
   });
 }
 
+/**
+ * P0 — risk caps + the user's usage against them. DB-only on the backend
+ * (cheap), so a short staleTime keeps the order-form headroom readout live as
+ * orders land. `asset` (when set) adds the per-symbol figure for that asset.
+ */
+export function useExecutionLimits(asset?: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: [...KEY_LIMITS, asset ?? null],
+    queryFn: () => fetchExecutionLimits(asset),
+    staleTime: 10_000,
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+/**
+ * P1/P2 — aggregated SoDEX read state (balances + fee + perps mark prices).
+ * `retry: false` because a SoDEX outage surfaces as 503 and the FE degrades
+ * to a "summary unavailable" notice rather than spinning on retries.
+ * `enabled` gates on a bound wallet (caller passes `!!walletAddress`).
+ *
+ * `refetchInterval: 30s` keeps perps marks (→ live uPnL on PositionsPanel +
+ * the market-order cost preview) and balances fresh. Without it the marks
+ * would freeze after first load while spot uPnL ticked via `useSpotPrices`
+ * (60s) — an inconsistent, half-live readout. 30s ≈ the SoDEX mark cadence
+ * and stays well under any rate limit (3 reads/30s). `inBackground: false`
+ * so hidden tabs don't burn SoDEX calls.
+ */
+export function useAccountSummary(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: KEY_ACCOUNT_SUMMARY,
+    queryFn: fetchAccountSummary,
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    retry: false,
+    enabled: opts?.enabled ?? true,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
@@ -157,9 +200,13 @@ export function useSubmitNew() {
     onSettled: () => {
       // Order status + position state can both move on submit. Invalidate
       // both. `onSettled` (not `onSuccess`) so a partial failure that
-      // still mutated DB state still refreshes the UI.
+      // still mutated DB state still refreshes the UI. A new/closed order
+      // also shifts usage (limits) + balance (account summary), so refresh
+      // those too — keeps the headroom + balance readouts in sync.
       qc.invalidateQueries({ queryKey: KEY_ORDERS });
       qc.invalidateQueries({ queryKey: KEY_POSITIONS });
+      qc.invalidateQueries({ queryKey: KEY_LIMITS });
+      qc.invalidateQueries({ queryKey: KEY_ACCOUNT_SUMMARY });
     },
   });
 }
@@ -177,6 +224,8 @@ export function useSubmitCancel() {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: KEY_ORDERS });
       qc.invalidateQueries({ queryKey: KEY_POSITIONS });
+      qc.invalidateQueries({ queryKey: KEY_LIMITS });
+      qc.invalidateQueries({ queryKey: KEY_ACCOUNT_SUMMARY });
     },
   });
 }

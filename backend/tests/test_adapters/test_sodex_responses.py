@@ -168,6 +168,27 @@ class TestAccountDTOs:
         assert entry.total == "1000"
         assert entry.locked == "0"
 
+    def test_balance_entry_long_keys_funded_wallet(self):
+        """Regression: the LIVE `/accounts/{addr}/balances` endpoint returns
+        LONG keys (`id, coin, total, locked`) for a funded wallet — the V.2
+        capture's balances array was EMPTY so this shape was never exercised,
+        and `account-summary` 500'd with a ValidationError ('i'/'a' missing).
+        `AliasChoices` now accepts the long form too."""
+        data = {
+            "blockHeight": 12345,
+            "blockTime": 1700000000,
+            "balances": [
+                {"id": 0, "coin": "vUSDC", "total": "89.4517", "locked": "0"},
+            ],
+        }
+        parsed = AccountBalances.model_validate(data)
+        assert len(parsed.balances) == 1
+        entry = parsed.balances[0]
+        assert entry.instrument_id == 0
+        assert entry.asset == "vUSDC"
+        assert entry.total == "89.4517"
+        assert entry.locked == "0"
+
     def test_spot_state_null_orders(self):
         """V.3 capture: `O: null` when no open orders. The DTO must
         accept `None` and not default-to-empty-list silently."""
