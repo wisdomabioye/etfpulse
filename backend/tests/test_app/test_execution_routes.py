@@ -182,9 +182,7 @@ async def test_prepare_market_order_resolves_spot_reference(
     async def _fake_spot(_asset):
         return (Decimal("65000"), "sosovalue")
 
-    monkeypatch.setattr(
-        "etfpulse.api.routes.execution.get_spot_price_with_source", _fake_spot
-    )
+    monkeypatch.setattr("etfpulse.api.routes.execution.get_spot_price_with_source", _fake_spot)
     body = _spot_prepare_body(order_type="market", time_in_force="ioc", requested_price=None)
     r = await client.post("/api/execution/prepare", json=body, headers=_auth(user))
     assert r.status_code == 200, r.text
@@ -203,9 +201,7 @@ async def test_prepare_market_order_503_when_oracle_unavailable(
     async def _no_price(_asset):
         return None
 
-    monkeypatch.setattr(
-        "etfpulse.api.routes.execution.get_spot_price_with_source", _no_price
-    )
+    monkeypatch.setattr("etfpulse.api.routes.execution.get_spot_price_with_source", _no_price)
     body = _spot_prepare_body(order_type="market", time_in_force="ioc", requested_price=None)
     r = await client.post("/api/execution/prepare", json=body, headers=_auth(user))
     assert r.status_code == 503
@@ -227,9 +223,7 @@ async def test_prepare_market_order_ignores_client_price_for_sizing(
     async def _fake_spot(_asset):
         return (Decimal("65000"), "sosovalue")
 
-    monkeypatch.setattr(
-        "etfpulse.api.routes.execution.get_spot_price_with_source", _fake_spot
-    )
+    monkeypatch.setattr("etfpulse.api.routes.execution.get_spot_price_with_source", _fake_spot)
     body = _spot_prepare_body(
         order_type="market",
         time_in_force="ioc",

@@ -60,8 +60,7 @@ def _balances(*rows: tuple[str, str, str]) -> AccountBalances:
         {
             "data": None,
             "balances": [
-                {"i": i, "a": a, "t": t, "l": lk}
-                for i, (a, t, lk) in enumerate(rows, start=1)
+                {"i": i, "a": a, "t": t, "l": lk} for i, (a, t, lk) in enumerate(rows, start=1)
             ],
             "blockHeight": 1,
             "blockTime": 1,
@@ -255,8 +254,10 @@ async def test_account_summary_happy(app, db_session):
     u = await _user(db_session)
     _install_clients(
         app,
-        spot=_FakeSpot(balances=_balances(("USDC", "1000", "100"), ("BTC", "0.5", "0")),
-                       fee=_fee("0.0002", "0.0005")),
+        spot=_FakeSpot(
+            balances=_balances(("USDC", "1000", "100"), ("BTC", "0.5", "0")),
+            fee=_fee("0.0002", "0.0005"),
+        ),
         perps=_FakePerps(marks=[_mark("BTC-USD", "65000", "0.0001"), _mark("ETH-USD", "3000")]),
     )
     async with await _client(app) as c:

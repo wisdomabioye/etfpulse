@@ -752,9 +752,7 @@ async def _safe_spot_balances(client: SodexSpotClient, address: str) -> list[Bal
     for b in result.balances:
         total = Decimal(b.total)
         locked = Decimal(b.locked)
-        out.append(
-            BalanceOut(asset=b.asset, total=total, locked=locked, available=total - locked)
-        )
+        out.append(BalanceOut(asset=b.asset, total=total, locked=locked, available=total - locked))
     return out
 
 
